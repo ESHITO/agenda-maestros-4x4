@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type User } from '$lib/api';
-	import { prefs, prefsFromUser, TIMEZONES, WEEK_DAYS } from '$lib/prefs';
+	import { prefs, prefsFromUser, timezoneItems, WEEK_DAYS } from '$lib/prefs';
 	import { currentUser } from '$lib/stores';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -210,7 +210,7 @@
 				<div class="space-y-1.5">
 					<Label for="timezone">Zona horaria</Label>
 					<Combobox
-						items={TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
+						items={timezoneItems(timezone)}
 						bind:value={timezone}
 						placeholder="Seleccionar zona horaria…"
 						searchPlaceholder="Buscar zonas horarias…"

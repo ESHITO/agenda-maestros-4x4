@@ -64,7 +64,8 @@ export function fmtTime(iso: string, p: UserPrefs = get(prefs)): string {
 
 export const WEEK_DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
-export const TIMEZONES = [
+// Shown only when the browser can't list its zones (Intl.supportedValuesOf is missing).
+const FALLBACK_TIMEZONES = [
 	'Pacific/Auckland',
 	'Australia/Sydney',
 	'Australia/Melbourne',
@@ -81,3 +82,43 @@ export const TIMEZONES = [
 	'America/Los_Angeles',
 	'UTC'
 ];
+
+// Every zone the browser knows. Members book from many countries (Lima, Ciudad de
+// México, Madrid, Buenos Aires…); a short hand-picked list left most of them unable
+// to pick their own zone, and hid the one they already had.
+export const TIMEZONES: string[] = (() => {
+	try {
+		const all = Intl.supportedValuesOf('timeZone');
+		return all.includes('UTC') ? all : [...all, 'UTC'];
+	} catch {
+		return FALLBACK_TIMEZONES;
+	}
+})();
+
+const labelCache = new Map<string, string>();
+
+// "America/Mexico_City" → "America/Mexico City · GMT-6", so a search for "mexico city"
+// or "lima" finds it and the offset tells two nearby zones apart.
+export function timezoneLabel(tz: string): string {
+	const cached = labelCache.get(tz);
+	if (cached) return cached;
+	const name = tz.replaceAll('_', ' ');
+	let label = name;
+	try {
+		const offset = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' })
+			.formatToParts(new Date())
+			.find((p) => p.type === 'timeZoneName')?.value;
+		if (offset) label = `${name} · ${offset}`;
+	} catch {
+		// Unknown to this browser: the plain name is still searchable.
+	}
+	labelCache.set(tz, label);
+	return label;
+}
+
+// Picker items, keeping the saved zone even when this browser doesn't list it
+// (an alias such as Asia/Calcutta), so the field never shows empty.
+export function timezoneItems(current = ''): { value: string; label: string }[] {
+	const zones = current && !TIMEZONES.includes(current) ? [current, ...TIMEZONES] : TIMEZONES;
+	return zones.map((tz) => ({ value: tz, label: timezoneLabel(tz) }));
+}
