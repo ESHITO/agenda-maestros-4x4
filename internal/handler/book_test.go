@@ -156,7 +156,12 @@ func TestBookPage_locationLabels(t *testing.T) {
 		tc := tc
 		t.Run(tc.locType+"_"+tc.locValue, func(t *testing.T) {
 			h, apiKey, _ := setupWorkspace(t)
-			slug := "loc-" + tc.locType
+			// CreateEventType now slugifies (as rename always did), and slugify maps
+			// '_' to '-'. Location types carry underscores (google_meet, in_person,
+			// custom_video), so building the slug straight from locType stored
+			// "loc-google-meet-val" while this test then fetched
+			// /book/loc-google_meet-val — a 404 that looked like a broken page.
+			slug := "loc-" + strings.ReplaceAll(tc.locType, "_", "-")
 			if tc.locValue != "" {
 				slug += "-val"
 			}

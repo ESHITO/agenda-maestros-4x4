@@ -1,5 +1,7 @@
 // booking-logic.js — the PURE date/slot/format logic shared by book.html and manage.html, so a
 // change is made once instead of twice. No DOM.
+// Also the phone-question helpers (phoneDetectCountry, phoneCombine, phoneFilter, phoneSort)
+// that book.html's country picker uses.
 // Served inlined into the book/manage Go templates, and require()-able by the node tests
 // (booking-logic.test.js). Same UMD pattern as room-logic.js — no build step, stays
 // framework-free.
@@ -7,8 +9,8 @@
 // NOT loaded by embed.js. The widget is served as its own standalone file
 // (internal/handler/embed_handler.go serves the embedded bytes unmodified), so `BookingLogic`
 // is undefined inside it and it carries its own copies of the few helpers it needs — see the
-// comments on its dowLabels and fmt. Anything added here that all three surfaces need has to be
-// mirrored there deliberately.
+// comments on its dowLabels, fmt and phone* copies. Anything added here that all three
+// surfaces need has to be mirrored there deliberately.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.BookingLogic = factory();
@@ -129,6 +131,204 @@
     });
   }
 
+  // ---- Phone questions (the "phone" question type) ----------------------------------------
+  // A country picker plus the national number, sent as ONE answer string "+<dial> <digits>"
+  // that the webhook automations receive unchanged. The data ([ISO, dial] pairs from
+  // libphonenumber and an IANA zone -> ISO map, in phone-data.json) comes from the server; the
+  // display names come from Intl.DisplayNames in the browser. Everything here is pure.
+  //
+  // embed.js does not load this file (see the top): it keeps deliberate copies of these four
+  // functions. Each one is self-contained (its helpers live inside it), so the copy is the
+  // whole function, verbatim. Change one here, change its copy there.
+
+  // phoneDetectCountry — the country the picker starts on, or '' for none. There is no fixed
+  // default: visitors and mentors are in many countries, and a wrong preselected code sends a
+  // wrong number to the webhook more quietly than an empty picker does. The signals, strongest
+  // first, each taken only if it names a country in `known` (the Set of ISO codes the picker
+  // offers; an array works too; a guess outside it would have no dial code):
+  //   1. hint      — the server's guess from the visitor's IP (Cloudflare's CF-IPCountry);
+  //   2. timeZone  — the BROWSER's IANA zone looked up in tz2cc ("America/Lima" -> "PE"). Pass
+  //                  the real browser zone, not the one the visitor picked for the calendar;
+  //   3. languages — navigator.languages: the region of the first entry whose region is known
+  //                  ("es-PE" -> "PE", "pt-BR" -> "BR"). A bare "es" names no country.
+  function phoneDetectCountry(opts) {
+    var o = opts || {};
+    function isKnown(iso) {
+      var known = o.known;
+      if (!iso || !known) return false;
+      if (typeof known.has === 'function') return known.has(iso);
+      return Array.isArray(known) && known.indexOf(iso) !== -1;
+    }
+    // "es-PE" -> "PE", "zh-Hant-TW" -> "TW" (script skipped), "en_US" -> "US" (some Android
+    // WebViews use '_'); "es-419" (a UN M.49 area, not a country) and "de" -> ''.
+    function regionOf(tag) {
+      var parts = String(tag || '').split(/[-_]/);
+      for (var i = 1; i < parts.length; i++) {
+        if (/^[A-Za-z]{2}$/.test(parts[i])) return parts[i].toUpperCase();
+        // An extlang (3 letters) or a script (4) may come before the region; anything else
+        // (a numeric area, a variant, an extension's singleton) means there is no region.
+        if (!/^[A-Za-z]{3,4}$/.test(parts[i])) break;
+      }
+      return '';
+    }
+
+    var hint = String(o.hint || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(hint) && isKnown(hint)) return hint;
+
+    var tz2cc = o.tz2cc;
+    if (tz2cc && o.timeZone && Object.prototype.hasOwnProperty.call(tz2cc, o.timeZone)) {
+      var byZone = String(tz2cc[o.timeZone] || '').toUpperCase();
+      if (isKnown(byZone)) return byZone;
+    }
+
+    var langs = typeof o.languages === 'string' ? [o.languages] : (o.languages || []);
+    for (var i = 0; i < langs.length; i++) {
+      var region = regionOf(langs[i]);
+      if (isKnown(region)) return region;
+    }
+    return '';
+  }
+
+  // phoneCombine — the ONE string a phone answer travels as: "+<dial> <digits>".
+  //   phoneCombine("51", "987 654-321") -> "+51 987654321"
+  // The visitor's separators are dropped; no digits at all -> '' (not answered, like an empty
+  // field). Digits from Arabic, Persian and full-width keyboards count as digits: the server
+  // (validPhone) only counts 0-9, so without this they would vanish, and the answer with them.
+  //
+  // A number typed with a leading '+' carries its own country code, and that code wins over
+  // the picker, which is only a default:
+  //   "+51 987 654 321" with Peru picked -> "+51 987654321"  (the code is not doubled)
+  //   "+34 612 34 56 78" with Peru picked -> "+34 612345678" (a pasted Spanish number; the
+  //                                          literal "+51 34612..." does not exist)
+  // Without a '+' the digits are national and need the picked code: with no dial, '' (never
+  // "+ 987..." nor bare digits). The caller tells "not answered" from "no country picked" by
+  // whether the field has digits.
+  //
+  // Deliberately NOT handled, because they need per-country rules: a national trunk prefix
+  // (UK "07700 900123" comes out "+44 07700900123"; WhatsApp wants "+44 7700900123") and
+  // international dialling prefixes such as "00".
+  function phoneCombine(dial, raw) {
+    // Country calling codes form a prefix code (none is the start of another); the one- and
+    // two-digit ones are this fixed list, and every other code has three digits. The node
+    // tests hold it against every code in phone-data.json.
+    var SHORT_CODE = /^(?:1|7|2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/;
+    function ascii(s) {
+      return s.replace(/[\u0660-\u0669\u06f0-\u06f9\uff10-\uff19\uff0b]/g, function (ch) {
+        var c = ch.charCodeAt(0);
+        if (c === 0xff0b) return '+';
+        return String(c <= 0x0669 ? c - 0x0660 : c <= 0x06f9 ? c - 0x06f0 : c - 0xff10);
+      });
+    }
+    var text = ascii(String(raw == null ? '' : raw));
+    var digits = text.replace(/\D/g, '');
+    if (!digits) return '';
+    var code = ascii(String(dial == null ? '' : dial)).replace(/\D/g, '');
+    if (/^\s*\+/.test(text)) {
+      if (!code || digits.indexOf(code) !== 0) {
+        var m = SHORT_CODE.exec(digits);
+        code = m ? m[0] : digits.slice(0, 3);
+      }
+      digits = digits.slice(code.length);
+      return digits ? '+' + code + ' ' + digits : '';
+    }
+    return code ? '+' + code + ' ' + digits : '';
+  }
+
+  // phoneFilter — the entries of `list` ([iso, dial] pairs) matching the picker's search box.
+  //   Letters: the localized name nameOf(iso), ignoring case and accents ("peru" finds
+  //   "Perú"), or the exact ISO code ("pe").
+  //   Digits, with an optional '+' and spaces, dashes, dots or parentheses: the calling code.
+  //   "+34" and "34" find Spain, "+5" narrows to the 5x codes as it is typed, and a whole
+  //   pasted number ("+1 809 555 1234") finds the code it starts with.
+  // Order: exact matches first (the ISO, the whole name, the whole code), then prefix matches
+  // (the name or one of its words starts with the query; the code starts with it), then the
+  // rest, keeping `list`'s own order inside each group, so a pinned-then-alphabetical list
+  // stays that way. An empty query returns all of `list` (a copy). A nameOf that throws or
+  // returns nothing falls back to the ISO code, so a browser without Intl.DisplayNames still
+  // gets a working filter.
+  function phoneFilter(list, query, nameOf) {
+    function fold(s) {
+      s = String(s == null ? '' : s).toLowerCase();
+      if (s.normalize) s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return s.replace(/[\u2018\u2019\u02bc\u00b4`]/g, "'").replace(/\s+/g, ' ').trim();
+    }
+    function nameFor(iso) {
+      try {
+        var n = nameOf ? nameOf(iso) : '';
+        return n ? String(n) : String(iso);
+      } catch (e) {
+        return String(iso);
+      }
+    }
+    var items = (list || []).slice();
+    var q = fold(query);
+    var groups = [[], [], []];
+    if (/^\+?[\d\s().-]*$/.test(q)) {
+      var qd = q.replace(/\D/g, '');
+      if (!qd) return items;
+      items.forEach(function (c) {
+        var dial = String(c[1]);
+        if (dial === qd) groups[0].push(c);
+        else if (dial.indexOf(qd) === 0) groups[1].push(c);
+        else if (qd.indexOf(dial) === 0) groups[2].push(c);
+      });
+    } else {
+      var iso = q.toUpperCase();
+      items.forEach(function (c) {
+        var name = fold(nameFor(c[0]));
+        if (String(c[0]).toUpperCase() === iso || name === q) { groups[0].push(c); return; }
+        for (var at = name.indexOf(q); at !== -1; at = name.indexOf(q, at + 1)) {
+          if (at === 0 || /[\s'(,./-]/.test(name.charAt(at - 1))) { groups[1].push(c); return; }
+        }
+        if (name.indexOf(q) !== -1) groups[2].push(c);
+      });
+    }
+    return groups[0].concat(groups[1], groups[2]);
+  }
+
+  // phoneSort — the picker's order: the `pinned` ISO codes first, in the order given (the
+  // detected country, say), then the rest alphabetically by localized name for `locale`. It
+  // uses an Intl.Collator, which orders exactly like localeCompare(locale) but is built once
+  // instead of per comparison, and looks each name up once. `list` is not modified. An empty
+  // or unusable locale falls back to the browser default instead of throwing (Intl throws a
+  // RangeError on '', and the widget's locale can be '').
+  function phoneSort(list, nameOf, locale, pinned) {
+    function nameFor(iso) {
+      try {
+        var n = nameOf ? nameOf(iso) : '';
+        return n ? String(n) : String(iso);
+      } catch (e) {
+        return String(iso);
+      }
+    }
+    var plain = function (a, b) { return a < b ? -1 : a > b ? 1 : 0; };
+    var locales = [].concat(locale == null ? [] : locale).filter(function (l) { return !!l; });
+    var compare = plain;
+    try {
+      compare = new Intl.Collator(locales.length ? locales : undefined).compare;
+    } catch (e) {
+      try { compare = new Intl.Collator().compare; } catch (e2) { compare = plain; }
+    }
+    var byIso = {};
+    (list || []).forEach(function (c) { byIso[String(c[0]).toUpperCase()] = c; });
+    var head = [];
+    var taken = {};
+    [].concat(pinned == null ? [] : pinned).forEach(function (p) {
+      var key = String(p).toUpperCase();
+      if (Object.prototype.hasOwnProperty.call(byIso, key) && !taken[key]) {
+        taken[key] = true;
+        head.push(byIso[key]);
+      }
+    });
+    var rest = [];
+    (list || []).forEach(function (c) {
+      var key = String(c[0]).toUpperCase();
+      if (!taken[key]) rest.push({ entry: c, name: nameFor(c[0]), iso: key });
+    });
+    rest.sort(function (a, b) { return compare(a.name, b.name) || plain(a.iso, b.iso); });
+    return head.concat(rest.map(function (r) { return r.entry; }));
+  }
+
   // NOTE: there is deliberately no host-label helper here. Each surface builds its own
   // (hostsLabel in book.go for the server-rendered page, in book.html's script for the
   // post-slot-pick rewrite, and in embed.js), because the label needs the resolved locale's
@@ -151,6 +351,10 @@
     startOfMonth: startOfMonth,
     endOfMonth: endOfMonth,
     addMonths: addMonths,
-    daysInMonth: daysInMonth
+    daysInMonth: daysInMonth,
+    phoneDetectCountry: phoneDetectCountry,
+    phoneCombine: phoneCombine,
+    phoneFilter: phoneFilter,
+    phoneSort: phoneSort
   };
 });

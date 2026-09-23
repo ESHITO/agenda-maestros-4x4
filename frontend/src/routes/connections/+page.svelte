@@ -33,7 +33,7 @@
 			// Clipboard access is blocked outside a secure context, and on a self-hosted
 			// instance served over plain http that is the normal case - so say what to do
 			// rather than just failing.
-			toast.error('Could not copy. Select the URL and copy it manually.');
+			toast.error('No se pudo copiar. Selecciona la URL y cópiala manualmente.');
 		}
 	}
 
@@ -75,21 +75,21 @@
 
 <ConfirmDialog
 	bind:open={revokeOpen}
-	title="Disconnect app?"
+	title="¿Desconectar la app?"
 	description={revokeTarget
-		? `Disconnect "${revokeTarget.name}"? It will immediately lose access to your scheduling tools and must reconnect to regain it.`
+		? `¿Desconectar "${revokeTarget.name}"? Perderá el acceso a tus herramientas de agenda de inmediato y deberá volver a conectarse para recuperarlo.`
 		: ''}
-	confirmText="Disconnect"
+	confirmText="Desconectar"
 	destructive
 	onConfirm={doRevoke}
 />
 
-<svelte:head><title>Connected apps — Calnode</title></svelte:head>
+<svelte:head><title>Aplicaciones conectadas — Calnode</title></svelte:head>
 
 <div class="mb-8">
-	<h1 class="text-2xl font-semibold tracking-tight">Connected apps</h1>
+	<h1 class="text-2xl font-semibold tracking-tight">Aplicaciones conectadas</h1>
 	<p class="mt-1 text-sm text-muted-foreground">
-		AI agents and other apps you've connected to your scheduling tools (MCP) via sign-in.
+		Agentes de IA y otras aplicaciones que has conectado a tus herramientas de agenda (MCP) mediante inicio de sesión.
 	</p>
 </div>
 
@@ -98,39 +98,39 @@
 <!-- Shown whether or not anything is connected: the URL is what you need to add the SECOND
      app too, and it used to vanish the moment the first one appeared. -->
 <div class="mb-6 rounded-lg border bg-card p-5">
-	<h2 class="text-sm font-semibold">Connect an app</h2>
+	<h2 class="text-sm font-semibold">Conectar una app</h2>
 	<p class="mt-1 text-sm text-muted-foreground">
-		Add this URL as a custom connector in any MCP-capable app, then sign in when it asks.
-		The app appears below once you approve it.
+		Agrega esta URL como un conector personalizado en cualquier app compatible con MCP y luego inicia sesión cuando te lo pida.
+		La app aparecerá abajo una vez que la apruebes.
 	</p>
 
 	<div class="mt-3 flex items-center gap-2">
 		<Input
 			readonly
 			value={mcpUrl}
-			aria-label="MCP connector URL"
+			aria-label="URL del conector MCP"
 			onclick={(e) => e.currentTarget.select()}
 			class="min-w-0 flex-1 bg-muted/40 font-mono"
 		/>
 		<Button variant="outline" onclick={copyMcpUrl} disabled={!mcpUrl}>
-			{copied ? 'Copied' : 'Copy'}
+			{copied ? 'Copiado' : 'Copiar'}
 		</Button>
 	</div>
 
 	<p class="mt-3 text-xs text-muted-foreground">
-		In Claude: <span class="font-medium">Settings → Connectors → Add custom connector</span>,
-		paste the URL, then sign in with your Calnode account to authorize it. Access is scoped to
-		your own role, and you can revoke it here at any time.
+		En Claude: <span class="font-medium">Configuración → Conectores → Agregar conector personalizado</span>,
+		pega la URL y luego inicia sesión con tu cuenta de Calnode para autorizarlo. El acceso está limitado a
+		tu propio rol, y puedes revocarlo aquí en cualquier momento.
 	</p>
 </div>
 
 {#if loading}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else if items.length === 0}
 	<div class="rounded-lg border border-dashed bg-card p-12 text-center">
-		<p class="text-sm font-medium">No connected apps</p>
+		<p class="text-sm font-medium">No hay aplicaciones conectadas</p>
 		<p class="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-			Use the URL above to add Calnode to an MCP-capable app. Once you approve it, it shows up here.
+			Usa la URL de arriba para agregar Calnode a una app compatible con MCP. Una vez que la apruebes, aparecerá aquí.
 		</p>
 	</div>
 {:else}
@@ -138,9 +138,9 @@
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b">
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">App</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Connected</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Last used</th>
+					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Aplicación</th>
+					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Conectada</th>
+					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Último uso</th>
 					<th class="px-4 pb-3 pt-3"></th>
 				</tr>
 			</thead>
@@ -151,7 +151,7 @@
 							<td class="px-4 py-3 font-medium">{c.client_name}</td>
 							<td class="px-4 py-3 text-muted-foreground">{fmtDate(c.created_at)}</td>
 							<td class="px-4 py-3 text-muted-foreground">
-								{#if c.last_used_at}{fmtDate(c.last_used_at)}{:else}Never{/if}
+								{#if c.last_used_at}{fmtDate(c.last_used_at)}{:else}Nunca{/if}
 							</td>
 							<td class="px-4 py-3 text-right">
 								<Tooltip.Root>
@@ -161,7 +161,7 @@
 									>
 										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 									</Tooltip.Trigger>
-									<Tooltip.Content>Disconnect</Tooltip.Content>
+									<Tooltip.Content>Desconectar</Tooltip.Content>
 								</Tooltip.Root>
 							</td>
 						</tr>

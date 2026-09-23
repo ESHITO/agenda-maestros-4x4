@@ -134,13 +134,16 @@ client SDK**, not Svelte.
 ## Languages (i18n) - data-driven, adding one touches no code
 
 Public surfaces (book.html, manage.html, embed.js, the four emails, calendar invite
-title/description) are translated. **NOT translated: the admin SPA, the LiveKit room**
-(`livekit-room.html`/`.js`, ~45 hardcoded strings - it has its own asset pipeline and shares
-no string plumbing with the Go templates), and admin-authored content (event names,
-descriptions, questions, custom email copy). Locale is resolved per request from
+title/description) and the LiveKit room are translated - the room gets its `room_*` keys
+through the same resolver and a per-locale slice of the table (`livekit_room.go`), with
+`RoomLogic.translate` falling back to English. **NOT translated:** admin-authored content
+(event names, descriptions, questions, custom email copy). **This fork's admin SPA is
+hardcoded Spanish** (Agenda Maestros 4x4), not run through i18n. Locale is resolved per request from
 `Accept-Language` + a `?lang=` override + the operator's fallback setting
 (`internal/handler/i18n.go`), and the booker's locale is stored on the booking so later
-reminders match. Ships `en es fr fr-CA de it pt nl sv`. Full detail: ARCHITECTURE §23.
+reminders match. **`FORCE_LOCALE`** (this fork sets `es`) short-circuits that resolver for
+every public surface and hides the footer switcher - the audience is Spanish-speaking but
+abroad, often on borrowed computers set to other languages. Ships `en es fr fr-CA de it pt nl sv`. Full detail: ARCHITECTURE §23.
 
 **Adding a locale = adding `internal/i18n/locales/<code>.json`.** Nothing else. `init()`
 globs the directory; the switcher, the fallback dropdown and the public API payload all read

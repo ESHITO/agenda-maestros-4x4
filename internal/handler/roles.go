@@ -8,10 +8,15 @@ import (
 
 // SetUserRole handles PATCH /v1/users/{id}/role — owner only.
 //
-// Body: {"role": "admin" | "member"}. Promotes or demotes a user between the
-// member and admin tiers. Per PRD §8.10 only the owner may grant or revoke
-// admin. The owner's own role cannot be changed here (use transfer-ownership),
-// and you cannot change your own role.
+// Body: {"role": "admin" | "support" | "member"}. Moves a user between the
+// member, support and admin tiers. Per PRD §8.10 only the owner may grant or
+// revoke admin. The owner's own role cannot be changed here (use
+// transfer-ownership), and you cannot change your own role.
+//
+// The tiers are mutually exclusive: is_admin and is_support are BOTH written on
+// every change, so a demoted support user cannot keep is_support = 1 (which
+// would leave them still seeing and cancelling every booking in the workspace
+// while the API reports them as a plain member).
 func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 	actor, ok := userFromContext(r.Context())
 	if !ok || !actor.IsOwner {
@@ -32,8 +37,8 @@ func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.Role != "admin" && req.Role != "member" {
-		h.writeError(w, http.StatusBadRequest, "role must be 'admin' or 'member'")
+	if req.Role != "admin" && req.Role != "support" && req.Role != "member" {
+		h.writeError(w, http.StatusBadRequest, "role must be 'admin', 'support' or 'member'")
 		return
 	}
 
@@ -54,12 +59,17 @@ func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAdmin := 0
-	if req.Role == "admin" {
+	// Both flags are always written, never one conditionally: admin -> (1,0),
+	// support -> (0,1), member -> (0,0). That is what keeps the tiers exclusive.
+	isAdmin, isSupport := 0, 0
+	switch req.Role {
+	case "admin":
 		isAdmin = 1
+	case "support":
+		isSupport = 1
 	}
 	if _, err := h.db.ExecContext(r.Context(),
-		`UPDATE users SET is_admin = ? WHERE id = ?`, isAdmin, targetID); err != nil {
+		`UPDATE users SET is_admin = ?, is_support = ? WHERE id = ?`, isAdmin, isSupport, targetID); err != nil {
 		h.logger.ErrorContext(r.Context(), "set role: update", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -104,6 +114,9 @@ func (h *Handler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Demote the current owner to admin, promote the target to owner+admin.
+	// is_support is cleared on the promotion: the tiers are exclusive, and
+	// handing the workspace to someone who is support today must not leave the
+	// most powerful account carrying a second, lower-tier flag.
 	if _, err := tx.ExecContext(r.Context(),
 		`UPDATE users SET is_owner = 0 WHERE id = ?`, actor.ID); err != nil {
 		h.logger.ErrorContext(r.Context(), "transfer ownership: demote", "error", err)
@@ -111,7 +124,7 @@ func (h *Handler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(),
-		`UPDATE users SET is_owner = 1, is_admin = 1 WHERE id = ?`, targetID); err != nil {
+		`UPDATE users SET is_owner = 1, is_admin = 1, is_support = 0 WHERE id = ?`, targetID); err != nil {
 		h.logger.ErrorContext(r.Context(), "transfer ownership: promote", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return

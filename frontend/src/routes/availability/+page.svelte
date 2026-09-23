@@ -9,7 +9,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { DatePicker } from '$lib/components/ui/date-picker';
 
-	const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+	const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 	const TIME_SLOTS: string[] = [];
 	for (let h = 0; h < 24; h++) {
@@ -89,7 +89,7 @@
 	async function updateBlock(block: DayBlock) {
 		if (!block.id) return;
 		if (block.start_time >= block.end_time) {
-			block.error = 'End must be after start';
+			block.error = 'El fin debe ser posterior al inicio';
 			return;
 		}
 		block.error = '';
@@ -126,9 +126,9 @@
 
 	type OverrideReason = 'day_off' | 'out_of_office' | 'custom_hours';
 	const REASON_LABELS: Record<OverrideReason, string> = {
-		day_off: 'Day off',
-		out_of_office: 'Out of office',
-		custom_hours: 'Custom hours'
+		day_off: 'Día libre',
+		out_of_office: 'Fuera de oficina',
+		custom_hours: 'Horario personalizado'
 	};
 
 	let ovForm = $state({ date: '', end_date: '', reason: 'day_off' as OverrideReason, start_time: '09:00', end_time: '17:00' });
@@ -190,15 +190,15 @@
 
 	async function addOverride() {
 		ovAddError = '';
-		if (!ovForm.date) { ovAddError = 'Date is required.'; return; }
+		if (!ovForm.date) { ovAddError = 'La fecha es obligatoria.'; return; }
 		if (ovForm.reason === 'custom_hours' && (!ovForm.start_time || !ovForm.end_time)) {
-			ovAddError = 'Start and end time are required for custom hours.'; return;
+			ovAddError = 'La hora de inicio y fin son obligatorias para el horario personalizado.'; return;
 		}
 		if (ovForm.reason === 'custom_hours' && ovForm.start_time >= ovForm.end_time) {
-			ovAddError = 'End time must be after start time.'; return;
+			ovAddError = 'La hora de fin debe ser posterior a la hora de inicio.'; return;
 		}
 		if (ovForm.end_date && ovForm.end_date < ovForm.date) {
-			ovAddError = 'End date must be on or after the start date.'; return;
+			ovAddError = 'La fecha de fin debe ser igual o posterior a la fecha de inicio.'; return;
 		}
 		addingOv = true;
 		try {
@@ -254,9 +254,9 @@
 	});
 
 	const REASON_OPTIONS: { value: OverrideReason; label: string }[] = [
-		{ value: 'day_off', label: 'Day off' },
-		{ value: 'out_of_office', label: 'Out of office' },
-		{ value: 'custom_hours', label: 'Custom hours' },
+		{ value: 'day_off', label: 'Día libre' },
+		{ value: 'out_of_office', label: 'Fuera de oficina' },
+		{ value: 'custom_hours', label: 'Horario personalizado' },
 	];
 
 	// Time-of-day options for the start/end selects, formatted per the user's prefs.
@@ -266,37 +266,37 @@
 
 <ConfirmDialog
 	bind:open={deleteOvOpen}
-	title="Remove date override?"
-	description="Your default weekly hours will apply to this date again."
-	confirmText="Remove"
+	title="¿Eliminar esta excepción de fecha?"
+	description="Tu horario semanal por defecto volverá a aplicarse en esta fecha."
+	confirmText="Eliminar"
 	destructive
 	onConfirm={doDeleteOverride}
 />
 
 <ConfirmDialog
 	bind:open={deleteGroupOpen}
-	title="Remove this out-of-office span?"
-	description="All days in this range will become bookable again."
-	confirmText="Remove"
+	title="¿Eliminar este rango de fuera de oficina?"
+	description="Todos los días de este rango volverán a estar disponibles para reservar."
+	confirmText="Eliminar"
 	destructive
 	onConfirm={doDeleteGroup}
 />
 
-<svelte:head><title>Availability — Calnode</title></svelte:head>
+<svelte:head><title>Disponibilidad — Calnode</title></svelte:head>
 
 <div class="mb-8">
-	<h1 class="text-2xl font-semibold tracking-tight">Availability</h1>
-	<p class="mt-1 text-sm text-muted-foreground">Set your weekly hours and block off specific dates.</p>
+	<h1 class="text-2xl font-semibold tracking-tight">Disponibilidad</h1>
+	<p class="mt-1 text-sm text-muted-foreground">Configura tu horario semanal y bloquea fechas específicas.</p>
 </div>
 
 <!-- Weekly Hours -->
 <div class="mb-8">
-	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Weekly Hours</h2>
+	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Horario semanal</h2>
 
 	{#if rulesError}<p class="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{rulesError}</p>{/if}
 
 	{#if rulesLoading}
-		<p class="py-4 text-sm text-muted-foreground">Loading…</p>
+		<p class="py-4 text-sm text-muted-foreground">Cargando…</p>
 	{:else}
 		<div class="rounded-lg border bg-card">
 			<Tooltip.Provider>
@@ -315,12 +315,12 @@
 
 							{#if day.blocks.length === 0}
 								<div class="flex items-center gap-3 py-0.5">
-									<span class="text-sm text-muted-foreground/50">No hours set</span>
+									<span class="text-sm text-muted-foreground/50">Sin horario configurado</span>
 									<button
 										onclick={() => addBlock(day)}
 										class="text-sm text-primary hover:underline"
 									>
-										+ Add hours
+										+ Agregar horario
 									</button>
 								</div>
 							{:else}
@@ -350,7 +350,7 @@
 											</Select.Content>
 										</Select.Root>
 										{#if block.saving}
-											<span class="text-xs text-muted-foreground">saving…</span>
+											<span class="text-xs text-muted-foreground">guardando…</span>
 										{:else if block.error}
 											<span class="text-xs text-destructive">{block.error}</span>
 										{/if}
@@ -362,7 +362,7 @@
 											>
 												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 											</Tooltip.Trigger>
-											<Tooltip.Content>Remove</Tooltip.Content>
+											<Tooltip.Content>Eliminar</Tooltip.Content>
 										</Tooltip.Root>
 									</div>
 								{/each}
@@ -371,7 +371,7 @@
 									class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 								>
 									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-									Add block
+									Agregar bloque
 								</button>
 							{/if}
 						</div>
@@ -384,21 +384,21 @@
 
 <!-- Date Overrides -->
 <div>
-	<h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Date Overrides</h2>
-	<p class="mb-3 text-sm text-muted-foreground">Block out a specific date, or set custom hours for it.</p>
+	<h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Excepciones de fecha</h2>
+	<p class="mb-3 text-sm text-muted-foreground">Bloquea una fecha específica o configura un horario personalizado para ella.</p>
 
 	<div class="rounded-lg border bg-card">
 		{#if overridesError}<p class="px-4 pt-4 text-sm text-destructive">{overridesError}</p>{/if}
 
 		{#if overridesLoading}
-			<p class="px-4 py-4 text-sm text-muted-foreground">Loading…</p>
+			<p class="px-4 py-4 text-sm text-muted-foreground">Cargando…</p>
 		{:else if overrides.length > 0}
 			<table class="w-full text-sm">
 				<thead>
 					<tr class="border-b">
-						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Date</th>
-						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Type</th>
-						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Duration</th>
+						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Fecha</th>
+						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Tipo</th>
+						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Duración</th>
 						<th class="px-4 pb-3 pt-3"></th>
 					</tr>
 				</thead>
@@ -409,12 +409,12 @@
 								<td class="px-4 py-3 font-medium">{fmtDate(entry.start, $prefs)} – {fmtDate(entry.end, $prefs)}</td>
 								<td class="px-4 py-3">
 									{#if entry.reason === 'out_of_office'}
-										<Badge class="bg-amber-50 text-amber-700 border-amber-200">Out of office</Badge>
+										<Badge class="bg-amber-50 text-amber-700 border-amber-200">Fuera de oficina</Badge>
 									{:else}
-										<Badge variant="secondary">Day off</Badge>
+										<Badge variant="secondary">Día libre</Badge>
 									{/if}
 								</td>
-								<td class="px-4 py-3 text-muted-foreground">{entry.days} days</td>
+								<td class="px-4 py-3 text-muted-foreground">{entry.days} días</td>
 								<td class="px-4 py-3">
 									<Tooltip.Provider>
 										<div class="flex items-center justify-end gap-1">
@@ -422,7 +422,7 @@
 												<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} onclick={() => deleteGroup(entry.group_id)}>
 													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 												</Tooltip.Trigger>
-												<Tooltip.Content>Delete span</Tooltip.Content>
+												<Tooltip.Content>Eliminar rango</Tooltip.Content>
 											</Tooltip.Root>
 										</div>
 									</Tooltip.Provider>
@@ -434,17 +434,17 @@
 								<td class="px-4 py-3 font-medium">{fmtDate(ov.date, $prefs)}</td>
 								<td class="px-4 py-3">
 									{#if ov.reason === 'custom_hours'}
-										<Badge class="bg-blue-50 text-blue-700 border-blue-200">Custom hours</Badge>
+										<Badge class="bg-blue-50 text-blue-700 border-blue-200">Horario personalizado</Badge>
 									{:else if ov.reason === 'out_of_office'}
-										<Badge class="bg-amber-50 text-amber-700 border-amber-200">Out of office</Badge>
+										<Badge class="bg-amber-50 text-amber-700 border-amber-200">Fuera de oficina</Badge>
 									{:else}
-										<Badge variant="secondary">Day off</Badge>
+										<Badge variant="secondary">Día libre</Badge>
 									{/if}
 								</td>
 								<td class="px-4 py-3 text-muted-foreground">
 									{ov.is_available && ov.start_time && ov.end_time
 										? `${fmtTime(ov.start_time)} – ${fmtTime(ov.end_time)}`
-										: '1 day'}
+										: '1 día'}
 								</td>
 								<td class="px-4 py-3">
 									<Tooltip.Provider>
@@ -456,7 +456,7 @@
 												>
 													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 												</Tooltip.Trigger>
-												<Tooltip.Content>Delete</Tooltip.Content>
+												<Tooltip.Content>Eliminar</Tooltip.Content>
 											</Tooltip.Root>
 										</div>
 									</Tooltip.Provider>
@@ -467,7 +467,7 @@
 				</tbody>
 			</table>
 		{:else}
-			<p class="px-4 py-4 text-sm text-muted-foreground">No overrides yet.</p>
+			<p class="px-4 py-4 text-sm text-muted-foreground">Aún no hay excepciones.</p>
 		{/if}
 
 		<!-- Add override form -->
@@ -475,17 +475,17 @@
 			{#if ovAddError}<p class="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{ovAddError}</p>{/if}
 			<div class="flex flex-wrap items-end gap-3">
 				<div class="space-y-1.5">
-					<label for="ov-date" class="text-sm font-medium">Date</label>
-					<DatePicker bind:value={ovForm.date} placeholder="Pick a date" />
+					<label for="ov-date" class="text-sm font-medium">Fecha</label>
+					<DatePicker bind:value={ovForm.date} placeholder="Elige una fecha" />
 				</div>
 				{#if ovForm.reason !== 'custom_hours'}
 					<div class="space-y-1.5">
-						<label for="ov-end-date" class="text-sm font-medium">To <span class="font-normal text-muted-foreground">(optional)</span></label>
-						<DatePicker bind:value={ovForm.end_date} placeholder="Same day" />
+						<label for="ov-end-date" class="text-sm font-medium">Hasta <span class="font-normal text-muted-foreground">(opcional)</span></label>
+						<DatePicker bind:value={ovForm.end_date} placeholder="Mismo día" />
 					</div>
 				{/if}
 				<div class="space-y-1.5">
-					<label for="ov-type" class="text-sm font-medium">Type</label>
+					<label for="ov-type" class="text-sm font-medium">Tipo</label>
 					<Select.Root type="single" value={ovForm.reason} onValueChange={(v) => { if (v) ovForm.reason = v as OverrideReason; }}>
 						<Select.Trigger id="ov-type" class="w-fit">{REASON_LABELS[ovForm.reason]}</Select.Trigger>
 						<Select.Content>
@@ -497,7 +497,7 @@
 				</div>
 				{#if ovForm.reason === 'custom_hours'}
 					<div class="space-y-1.5">
-						<label for="ov-start" class="text-sm font-medium">From</label>
+						<label for="ov-start" class="text-sm font-medium">Desde</label>
 						<Select.Root type="single" bind:value={ovForm.start_time}>
 							<Select.Trigger id="ov-start" class="w-fit">{timeLabel(ovForm.start_time)}</Select.Trigger>
 							<Select.Content>
@@ -506,7 +506,7 @@
 						</Select.Root>
 					</div>
 					<div class="space-y-1.5">
-						<label for="ov-end" class="text-sm font-medium">To</label>
+						<label for="ov-end" class="text-sm font-medium">Hasta</label>
 						<Select.Root type="single" bind:value={ovForm.end_time}>
 							<Select.Trigger id="ov-end" class="w-fit">{timeLabel(ovForm.end_time)}</Select.Trigger>
 							<Select.Content>
@@ -516,7 +516,7 @@
 					</div>
 				{/if}
 				<Button onclick={addOverride} disabled={addingOv}>
-					{addingOv ? 'Adding…' : 'Add override'}
+					{addingOv ? 'Agregando…' : 'Agregar excepción'}
 				</Button>
 			</div>
 		</div>

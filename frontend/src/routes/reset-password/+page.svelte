@@ -14,18 +14,18 @@
 	onMount(() => {
 		token = $page.url.searchParams.get('token') ?? '';
 		if (!token) {
-			error = 'This reset link is missing its token. Request a new one below.';
+			error = 'A este enlace de restablecimiento le falta el token. Solicita uno nuevo abajo.';
 		}
 	});
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
 		if (password.length < 8) {
-			error = 'Password must be at least 8 characters.';
+			error = 'La contraseña debe tener al menos 8 caracteres.';
 			return;
 		}
 		if (password !== confirm) {
-			error = 'The two passwords do not match.';
+			error = 'Las dos contraseñas no coinciden.';
 			return;
 		}
 		error = '';
@@ -41,36 +41,36 @@
 				window.location.href = '/admin';
 			} else {
 				const data = await res.json().catch(() => ({}));
-				error = data.error || 'Could not reset your password. The link may have expired.';
+				error = data.error || 'No se pudo restablecer tu contraseña. El enlace pudo haber caducado.';
 			}
 		} catch {
-			error = 'Could not reset your password. Please try again.';
+			error = 'No se pudo restablecer tu contraseña. Inténtalo de nuevo.';
 		} finally {
 			submitting = false;
 		}
 	}
 </script>
 
-<svelte:head><title>Set a new password — Calnode</title></svelte:head>
+<svelte:head><title>Establecer una nueva contraseña — Calnode</title></svelte:head>
 
 <div class="flex min-h-screen items-center justify-center bg-muted/30 p-6">
 	<div class="w-full max-w-sm">
 		<div class="mb-8 text-center">
-			<h1 class="text-xl font-semibold tracking-tight">Set a new password</h1>
-			<p class="mt-2 text-sm text-muted-foreground">Choose a password of at least 8 characters.</p>
+			<h1 class="text-xl font-semibold tracking-tight">Establece una nueva contraseña</h1>
+			<p class="mt-2 text-sm text-muted-foreground">Elige una contraseña de al menos 8 caracteres.</p>
 		</div>
 
 		{#if error && !token}
 			<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>
 			<p class="mt-4 text-center text-sm">
 				<a href="/admin/forgot-password" class="text-muted-foreground hover:underline"
-					>Request a new reset link</a
+					>Solicitar un nuevo enlace de restablecimiento</a
 				>
 			</p>
 		{:else}
 			<form onsubmit={submit} class="space-y-4">
 				<div class="space-y-1.5">
-					<Label for="password">New password</Label>
+					<Label for="password">Nueva contraseña</Label>
 					<Input
 						id="password"
 						type="password"
@@ -80,7 +80,7 @@
 					/>
 				</div>
 				<div class="space-y-1.5">
-					<Label for="confirm">Confirm new password</Label>
+					<Label for="confirm">Confirmar nueva contraseña</Label>
 					<Input
 						id="confirm"
 						type="password"
@@ -93,7 +93,7 @@
 					<div class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>
 				{/if}
 				<Button type="submit" class="h-11 w-full" disabled={submitting || !token}>
-					{submitting ? 'Setting…' : 'Set new password'}
+					{submitting ? 'Estableciendo…' : 'Establecer nueva contraseña'}
 				</Button>
 			</form>
 		{/if}

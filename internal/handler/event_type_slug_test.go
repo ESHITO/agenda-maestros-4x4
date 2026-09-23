@@ -134,3 +134,44 @@ func TestPatchEventType_renameRejectsCollisionAndEmpty(t *testing.T) {
 		t.Errorf("slug = %v, want intro-call (slugified)", got)
 	}
 }
+
+// A pasted URL used to be stored verbatim as the slug, because create was the one path
+// that skipped slugify (rename already had it). Its slashes then broke every route built
+// from the slug — /admin/event-types/{slug} and /book/{slug} both 404 — which left the
+// row impossible to open, edit or delete from the UI. Reported from the field: an
+// operator pasted a WhatsApp link into the slug field and lost the event type.
+func TestCreateEventType_slugifiesAPastedURL(t *testing.T) {
+	h, apiKey, _ := setupWorkspace(t)
+
+	req := authReq(http.MethodPost, "/v1/event-types",
+		`{"slug":"https://web.whatsapp.com/","name":"Sesión","duration_minutes":45}`, apiKey)
+	rec := httptest.NewRecorder()
+	h.RequireAuth(h.CreateEventType)(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d - %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	got, _ := body["slug"].(string)
+	if strings.ContainsAny(got, "/:.") {
+		t.Fatalf("slug %q still carries URL punctuation; routes built from it would 404", got)
+	}
+	if got == "" {
+		t.Fatal("slug came back empty")
+	}
+}
+
+// Punctuation-only leaves nothing to route to, so it is rejected instead of silently
+// renamed to something the operator never chose.
+func TestCreateEventType_rejectsSlugWithNothingUsable(t *testing.T) {
+	h, apiKey, _ := setupWorkspace(t)
+
+	req := authReq(http.MethodPost, "/v1/event-types",
+		`{"slug":"///","name":"Sesión","duration_minutes":45}`, apiKey)
+	rec := httptest.NewRecorder()
+	h.RequireAuth(h.CreateEventType)(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+	}
+}

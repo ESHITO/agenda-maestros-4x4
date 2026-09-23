@@ -275,6 +275,135 @@
   transition: border-color .12s;
 }
 .field select:focus { border-color: #111827; }
+
+/* Phone question (type "phone"): a Calendly-style picker. ONE bordered row holds the
+ * country button (flag, caret, "+51") and the national number; the button opens a panel
+ * with a search box and the country list. The panel sits in normal flow under the row,
+ * not as a floating popover: .card clips its overflow, and the widget's .wrap is a size
+ * container (which also captures position:fixed), so anything absolute or fixed would be
+ * cut off or misplaced - worst on phones, where most visitors are. The
+ * <input type="hidden"> that carries the combined answer needs no rules. Both form
+ * surfaces (book.html and embed.js) emit these class names verbatim - this sheet is the
+ * only thing the two share. Flags are the SVGs served at /assets/flags/<iso>.svg. */
+.phone-row {
+  display: flex;
+  align-items: stretch;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color .12s, box-shadow .12s;
+}
+.phone-row:focus-within,
+.phone-picker.is-open .phone-row { border-color: #111827; box-shadow: 0 0 0 3px rgba(17,24,39,.06); }
+.phone-cc-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+  flex: 0 0 auto;
+  padding: 0 .625rem 0 .75rem;
+  background: none;
+  border: 0;
+  border-right: 1.5px solid #e5e7eb;
+  border-radius: 6.5px 0 0 6.5px;
+  font: inherit;
+  font-size: .875rem;
+  color: #111827;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.phone-cc-btn[hidden] { display: none; }
+.phone-cc-btn:hover { background: #f9fafb; }
+.phone-cc-btn:focus { outline: none; }
+.phone-cc-btn:focus-visible { outline: 2px solid #111827; outline-offset: -3px; }
+.phone-caret { flex-shrink: 0; color: #6b7280; transition: transform .12s; }
+.phone-cc-btn[aria-expanded="true"] .phone-caret { transform: rotate(180deg); }
+/* The globe stands in when no country is chosen yet, or it has no flag (AC, TA). */
+.phone-globe { flex-shrink: 0; color: #9ca3af; }
+.phone-cc-btn.has-flag .phone-globe { display: none; }
+.phone-cc-code { font-variant-numeric: tabular-nums; }
+/* The chosen country's name, for screen readers: the button shows only flag + code. */
+.phone-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.phone-flag {
+  display: block;
+  flex-shrink: 0;
+  width: 20px;
+  height: 15px;
+  border-radius: 2px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.08); /* white-edged flags need an outline */
+}
+.phone-flag[hidden] { display: none; }
+.phone-flag-none { background: #f3f4f6; box-shadow: none; }
+/* The row draws the border and focus ring, so the number field drops its own.
+ * .phone-row .phone-num (0,2,0) beats .field input (0,1,1), and the :focus rule needs
+ * (0,3,0) to beat .field input:focus (0,2,1). min-width:0 lets the field shrink instead
+ * of pushing the row wider than the card at 360px. */
+.phone-row .phone-num {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  border: 0;
+  border-radius: 0 6.5px 6.5px 0;
+  background: transparent;
+}
+.phone-row .phone-num:focus { border: 0; box-shadow: none; }
+.phone-panel {
+  display: flex;
+  flex-direction: column;
+  gap: .375rem;
+  margin-top: .375rem;
+  padding: .5rem;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(17,24,39,.08);
+}
+.phone-panel[hidden] { display: none; }
+.phone-panel .phone-search { width: 100%; min-width: 0; }
+/* position:relative makes the options' offsetTop relative to the list, which the
+ * keyboard scrolling relies on. */
+.phone-list {
+  position: relative;
+  list-style: none;
+  max-height: min(50vh, 20rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.phone-list[hidden] { display: none; }
+.phone-opt {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+  padding: .5rem;
+  border-radius: 6px;
+  font-size: .875rem;
+  color: #374151;
+  cursor: pointer;
+}
+.phone-opt.is-active { background: #f3f4f6; }
+.phone-opt[aria-selected="true"] { color: #111827; font-weight: 600; }
+/* The detected country, listed first, set apart from the alphabetical rest. */
+.phone-opt.is-pinned { position: relative; margin-bottom: .375rem; }
+.phone-opt.is-pinned::after {
+  content: ''; position: absolute; left: .5rem; right: .5rem; bottom: -.25rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+.phone-opt-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-opt-dial { flex-shrink: 0; color: #6b7280; font-variant-numeric: tabular-nums; }
+.phone-empty { padding: .5rem; font-size: .8125rem; color: #9ca3af; }
+/* Phones: the list may take half the screen, and the search box gets 16px text, the
+ * size below which Safari on iPhone zooms the page into a focused field. */
+@media (max-width: 700px) {
+  .phone-list { max-height: 50vh; }
+}
+@media (max-width: 700px), (pointer: coarse) {
+  .phone-panel .phone-search { font-size: 16px; }
+}
+
 .field-checkbox { display: flex; align-items: center; gap: .5rem; margin-top: .25rem; }
 .field-checkbox input[type="checkbox"] { width: 15px; height: 15px; flex-shrink: 0; margin: 0; cursor: pointer; }
 .field-checkbox label { font-size: .875rem; color: #374151; margin: 0; cursor: pointer; }

@@ -11,8 +11,8 @@
 	let {
 		items,
 		value = $bindable(''),
-		placeholder = 'Select…',
-		searchPlaceholder = 'Search…',
+		placeholder = 'Seleccionar…',
+		searchPlaceholder = 'Buscar…',
 		class: className,
 	}: {
 		items: Item[];
@@ -64,7 +64,7 @@
 		</div>
 		<div class="max-h-72 overflow-y-auto p-1">
 			{#if filtered.length === 0}
-				<p class="px-2 py-3 text-center text-sm text-muted-foreground">No results.</p>
+				<p class="px-2 py-3 text-center text-sm text-muted-foreground">Sin resultados.</p>
 			{:else}
 				{#each filtered as item (item.value)}
 					<button

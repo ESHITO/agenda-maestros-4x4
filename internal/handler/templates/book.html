@@ -12,6 +12,11 @@
      json.Marshal (HTML-escapes <,>,& by default), same pattern as .DataLayerFields/.QuestionsJSON
      below — never raw/attacker-controlled data. */}}
 <script>window.__CALNODE_I18N = {{.I18NJSON}};</script>  <!-- nosemgrep: generic.html-templates.security.var-in-script-tag.var-in-script-tag -->
+{{/* SAFE (same rule): .PhoneDataJSON is json.Marshal output (phonePageJSON in phone_countries.go);
+     its only per-request value, visitorCountry, admits nothing but two A-Z letters. Only set when
+     the event type has a "phone" question; the if-guard is required, an empty value would leave
+     "window.__CALNODE_PHONE = ;" and break this script. */}}
+{{if .PhoneDataJSON}}<script>window.__CALNODE_PHONE = {{.PhoneDataJSON}};</script>{{end}}  <!-- nosemgrep: generic.html-templates.security.var-in-script-tag.var-in-script-tag -->
 {{if .DataLayerEnabled}}
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -233,6 +238,38 @@ body {
             <option value="">{{call $.T "choose_option"}}</option>
             {{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}
           </select>
+          {{else if eq .QType "phone"}}
+          <!-- Country picker + national number, collapsed into ONE stored string
+               ("+51 987654321") by the "Phone questions" block of the page script below.
+               The answer collector reads the FIRST input/select/textarea inside this
+               .field wrapper, so the hidden input carrying that string must stay ahead of
+               everything else in it - the picker's search box included. The visible
+               controls take -cc/-num/-panel/-search/-list id suffixes so none of them
+               shadows the "ans-<id>" name, and the search box has no name at all.
+               Countries, flags and the detected default come from window.__CALNODE_PHONE;
+               country names from Intl.DisplayNames in the browser, never by hand. There is
+               no default country here: the script picks one, or leaves the button saying
+               "Country". embed.js builds the same classes itself. The panel is in normal
+               flow on purpose (see booking.css). -->
+          <label id="lbl-ans-{{.ID}}" for="ans-{{.ID}}-num">{{.Label}}{{if .Required}} <span class="required-star">*</span>{{end}}</label>
+          <input id="ans-{{.ID}}" name="ans-{{.ID}}" type="hidden" value="" data-phone-hidden>
+          <div class="phone-picker" data-phone-picker>
+            <div class="phone-row">
+              <button type="button" class="phone-cc-btn" id="ans-{{.ID}}-cc" aria-haspopup="listbox" aria-expanded="false" aria-controls="ans-{{.ID}}-list" aria-describedby="lbl-ans-{{.ID}}" data-phone-cc>
+                <img class="phone-flag" alt="" width="20" height="15" hidden data-phone-flag>
+                <svg class="phone-globe" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                <svg class="phone-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                <span class="phone-sr" data-phone-cc-name></span>
+                <span class="phone-cc-code" data-phone-cc-code>{{call $.T "phone_country_label"}}</span>
+              </button>
+              <input class="phone-num" id="ans-{{.ID}}-num" type="tel" inputmode="tel" autocomplete="tel-national" maxlength="20" placeholder="{{call $.T "phone_number_label"}}"{{if .Required}} required{{end}} data-phone-num>  <!-- nosemgrep: generic.html-templates.security.unquoted-attribute-var.unquoted-attribute-var -->
+            </div>
+            <div class="phone-panel" id="ans-{{.ID}}-panel" hidden data-phone-panel>
+              <input class="phone-search" id="ans-{{.ID}}-search" type="text" role="combobox" aria-expanded="true" aria-controls="ans-{{.ID}}-list" aria-autocomplete="list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" placeholder="{{call $.T "phone_country_search"}}" aria-label="{{call $.T "phone_country_search"}}" data-phone-search>
+              <ul class="phone-list" id="ans-{{.ID}}-list" role="listbox" aria-label="{{call $.T "phone_country_label"}}" data-phone-list></ul>
+              <p class="phone-empty" role="status" hidden data-phone-empty>{{call $.T "phone_no_results"}}</p>
+            </div>
+          </div>
           {{else}}
           <label for="ans-{{.ID}}">{{.Label}}{{if .Required}} <span class="required-star">*</span>{{end}}</label>
           <textarea id="ans-{{.ID}}" name="ans-{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>  <!-- nosemgrep: generic.html-templates.security.unquoted-attribute-var.unquoted-attribute-var -->
@@ -656,6 +693,339 @@ body {
 
   $('back-btn').addEventListener('click', () => showView('slots-view'));
   $('cal-back-btn').addEventListener('click', () => setStep('cal'));
+
+  // ── Phone questions ───────────────────────────────────────────────────────
+  // A "phone" question shows a country picker and a number field but stores ONE string,
+  // "+<dial> <digits>" (BookingLogic.phoneCombine), in the hidden input the collector
+  // below reads, so the webhook payload keeps its shape. It stays EMPTY until there is a
+  // country AND digits: "+51" alone, or bare digits with no country, would satisfy the
+  // required check and hand the WhatsApp automation a number it cannot use.
+  //
+  // Each picker's state is an ISO code, never a dial code: "1" alone is shared by 25
+  // countries (US, CA, DO, PR...), and choosing by code made them indistinguishable.
+  // There is NO fixed default country. BookingLogic.phoneDetectCountry tries the
+  // server's CF-IPCountry hint, then the browser's own time zone (not TZ, which the
+  // visitor can change with the selector), then the region of navigator.languages; when
+  // none of that says anything, nothing is chosen and the button reads "Country".
+  //
+  // Questions are server-rendered above this script, so they already exist here.
+  const PHONE_NO_FLAG = new Set(['AC', 'TA']); // no SVG in assets/flags: never request them
+  const phoneChecks = [];                      // one validator per phone question, run on submit
+  // Any digit phoneCombine accepts: ASCII, Arabic-Indic, Persian and full-width.
+  const PHONE_ANY_DIGIT = new RegExp('[0-9\\u0660-\\u0669\\u06F0-\\u06F9\\uFF10-\\uFF19]');
+  const phoneIsIntl = raw => /^\s*\+/.test(raw);
+  const phoneDigits = raw => String(raw || '').replace(/\D/g, '');
+  const phoneFlagURL = iso => '/assets/flags/' + iso.toLowerCase() + '.svg';
+
+  // Everything the pickers share, computed once per page. Throws if the data or the
+  // shared functions are missing; the caller then degrades to phoneFallback.
+  function phoneShared(data) {
+    const countries = data.countries.filter(c =>
+      Array.isArray(c) && /^[A-Z]{2}$/.test(c[0]) && /^[0-9]{1,4}$/.test(c[1]));
+    if (!countries.length) throw new Error('no countries');
+    const dialOf = {}, byDial = {}, zones = {};
+    countries.forEach(([iso, dial]) => { dialOf[iso] = dial; (byDial[dial] = byDial[dial] || []).push(iso); });
+    const known = new Set(Object.keys(dialOf));
+    // Names come from the browser, in the page's resolved LOCALE, never from a hand-made
+    // table. Intl.DisplayNames is missing in old Safari/WebViews and returns the code
+    // itself for rare ones (AC, TA): the ISO code is the last resort either way.
+    let names = null;
+    try { names = new Intl.DisplayNames([LOCALE, 'en'], { type: 'region' }); } catch (_) { names = null; }
+    const nameCache = {};
+    const nameOf = iso => {
+      if (!nameCache[iso]) {
+        let n = '';
+        try { n = names ? names.of(iso) : ''; } catch (_) { n = ''; }
+        nameCache[iso] = n || iso;
+      }
+      return nameCache[iso];
+    };
+    let detected = '';
+    try {
+      detected = BookingLogic.phoneDetectCountry({
+        hint: data.visitorCountry || '',
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+        languages: (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || ''],
+        tz2cc: data.tz2cc || {},
+        known,
+      }) || '';
+    } catch (_) { detected = ''; }
+    if (!known.has(detected)) detected = '';
+    // How many time zones each country owns: only used to pick which flag to show when a
+    // typed "+<code>" is shared (US over the other 24 "+1" countries). The stored value is
+    // the same whichever of them is shown.
+    Object.keys(data.tz2cc || {}).forEach(z => { const cc = data.tz2cc[z]; zones[cc] = (zones[cc] || 0) + 1; });
+    let sorted = null; // built on first open: nobody pays for sorting 245 names who never opens it
+    const sortedList = () => sorted || (sorted = BookingLogic.phoneSort(countries.slice(), nameOf, LOCALE, detected));
+    return { dialOf, byDial, zones, nameOf, detected, sortedList };
+  }
+
+  // The country to show for a dial code the visitor typed, or '' if the data has none.
+  // For a shared code: the current choice if it has it, then the detected country, then
+  // the one with the most time zones.
+  function phoneCountryFor(S, code, current) {
+    const cands = S.byDial[code];
+    if (!cands) return '';
+    if (cands.includes(current)) return current;
+    if (cands.includes(S.detected)) return S.detected;
+    return cands.reduce((best, iso) => ((S.zones[iso] || 0) > (S.zones[best] || 0) ? iso : best), cands[0]);
+  }
+
+  function phonePicker(field, picker, hidden, num, S) {
+    const btn    = picker.querySelector('[data-phone-cc]');
+    const flag   = picker.querySelector('[data-phone-flag]');
+    const nameEl = picker.querySelector('[data-phone-cc-name]');
+    const codeEl = picker.querySelector('[data-phone-cc-code]');
+    const panel  = picker.querySelector('[data-phone-panel]');
+    const search = picker.querySelector('[data-phone-search]');
+    const list   = picker.querySelector('[data-phone-list]');
+    const empty  = picker.querySelector('[data-phone-empty]');
+    if (!btn || !flag || !nameEl || !codeEl || !panel || !search || !list || !empty) throw new Error('phone markup');
+
+    let iso = S.detected;
+    let nodes = null;     // iso -> <li>, created on first open (243 flags are not loaded up front)
+    let shown = [];       // the [iso, dial] pairs currently listed, in order
+    let active = -1, activeLi = null;
+
+    function sync() {
+      hidden.value = iso ? BookingLogic.phoneCombine(S.dialOf[iso], num.value) : '';
+    }
+
+    function renderButton() {
+      const hasFlag = !!iso && !PHONE_NO_FLAG.has(iso);
+      flag.hidden = !hasFlag;
+      if (hasFlag) flag.src = phoneFlagURL(iso); else flag.removeAttribute('src');
+      btn.classList.toggle('has-flag', hasFlag);
+      nameEl.textContent = iso ? S.nameOf(iso) : '';
+      codeEl.textContent = iso ? '+' + S.dialOf[iso] : t('phone_country_label');
+      btn.title = iso ? S.nameOf(iso) + ' +' + S.dialOf[iso] : '';
+    }
+    flag.addEventListener('error', () => { flag.hidden = true; btn.classList.remove('has-flag'); });
+
+    function setIso(code) {
+      if (nodes && nodes[iso]) nodes[iso].setAttribute('aria-selected', 'false');
+      iso = code;
+      if (nodes && nodes[iso]) nodes[iso].setAttribute('aria-selected', 'true');
+      renderButton();
+      sync();
+    }
+
+    function buildList() {
+      nodes = {};
+      S.sortedList().forEach(([code, dial]) => {
+        const li = document.createElement('li');
+        li.className = 'phone-opt' + (code === S.detected ? ' is-pinned' : '');
+        li.id = list.id + '-' + code;
+        li.setAttribute('role', 'option');
+        li.setAttribute('aria-selected', code === iso ? 'true' : 'false');
+        li.dataset.iso = code;
+        let mark;
+        if (PHONE_NO_FLAG.has(code)) {
+          mark = document.createElement('span');
+          mark.className = 'phone-flag phone-flag-none';
+          mark.setAttribute('aria-hidden', 'true');
+        } else {
+          mark = document.createElement('img');
+          mark.className = 'phone-flag';
+          mark.alt = '';
+          mark.width = 20; mark.height = 15;
+          mark.loading = 'lazy';          // before src, or it does not apply
+          mark.decoding = 'async';
+          mark.addEventListener('error', () => { mark.style.visibility = 'hidden'; }, { once: true });
+          mark.src = phoneFlagURL(code);
+        }
+        const name = document.createElement('span');
+        name.className = 'phone-opt-name';
+        name.textContent = S.nameOf(code);
+        const dc = document.createElement('span');
+        dc.className = 'phone-opt-dial';
+        dc.textContent = '+' + dial;
+        li.appendChild(mark); li.appendChild(name); li.appendChild(dc);
+        nodes[code] = li;
+      });
+    }
+
+    function scrollToLi(li) {
+      const top = li.offsetTop, bottom = top + li.offsetHeight;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+    }
+    function setActive(i, scroll) {
+      if (activeLi) activeLi.classList.remove('is-active');
+      active = (i >= 0 && i < shown.length) ? i : -1;
+      activeLi = active >= 0 ? nodes[shown[active][0]] : null;
+      if (activeLi) {
+        activeLi.classList.add('is-active');
+        search.setAttribute('aria-activedescendant', activeLi.id);
+        if (scroll !== false) scrollToLi(activeLi);
+      } else {
+        search.removeAttribute('aria-activedescendant');
+      }
+    }
+    // Existing nodes are re-appended in the filter's order: no flag is re-requested per
+    // keystroke, and the search text only ever reaches textContent.
+    function renderList() {
+      const q = search.value;
+      shown = q.trim() ? BookingLogic.phoneFilter(S.sortedList(), q, S.nameOf) : S.sortedList();
+      const frag = document.createDocumentFragment();
+      shown.forEach(([code]) => { if (nodes[code]) frag.appendChild(nodes[code]); });
+      list.textContent = '';
+      list.appendChild(frag);
+      list.hidden = shown.length === 0;
+      empty.hidden = shown.length > 0;
+    }
+
+    function onOutside(e) { if (!picker.contains(e.target)) close(false); }
+    function open() {
+      if (!panel.hidden) return;
+      if (!nodes) buildList();
+      search.value = '';
+      renderList();
+      panel.hidden = false;
+      picker.classList.add('is-open');
+      btn.setAttribute('aria-expanded', 'true');
+      const i = shown.findIndex(([code]) => code === iso);
+      setActive(i >= 0 ? i : 0);
+      search.focus();
+      document.addEventListener('pointerdown', onOutside, true);
+    }
+    function close(focusBtn) {
+      if (panel.hidden) return;
+      panel.hidden = true;
+      picker.classList.remove('is-open');
+      btn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onOutside, true);
+      if (focusBtn) btn.focus();
+    }
+    function choose(code) {
+      setIso(code);
+      close(false);
+      num.focus();
+    }
+
+    btn.addEventListener('click', () => { if (panel.hidden) open(); else close(true); });
+    btn.addEventListener('keydown', e => {
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && panel.hidden) { e.preventDefault(); open(); }
+      // stopPropagation: Escape also closes the chat drawer from a document listener.
+      else if (e.key === 'Escape' && !panel.hidden) { e.preventDefault(); e.stopPropagation(); close(true); }
+    });
+    search.addEventListener('input', () => { renderList(); list.scrollTop = 0; setActive(shown.length ? 0 : -1); });
+    search.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (shown.length) setActive(Math.min(active + 1, shown.length - 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); if (shown.length) setActive(Math.max(active - 1, 0)); }
+      // Always swallowed: in a <form>, Enter in a text box is an implicit submit, which
+      // would run the booking handler with a half-filled form.
+      else if (e.key === 'Enter') { e.preventDefault(); if (activeLi) choose(activeLi.dataset.iso); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+      // The panel vanishes, so land where the visitor was heading: forward to the number,
+      // back to the country button.
+      else if (e.key === 'Tab') { e.preventDefault(); close(false); (e.shiftKey ? btn : num).focus(); }
+    });
+    list.addEventListener('click', e => {
+      const li = e.target.closest('.phone-opt');
+      if (li) choose(li.dataset.iso);
+    });
+    list.addEventListener('mousemove', e => {
+      const li = e.target.closest('.phone-opt');
+      if (li && li !== activeLi) setActive(shown.findIndex(([code]) => code === li.dataset.iso), false);
+    });
+
+    // A number typed or pasted in international form ("+34 612...") carries its own code,
+    // which phoneCombine already stores in place of the picked one; this moves the picker
+    // to match, so the flag on screen is the country the webhook gets. With an empty dial
+    // phoneCombine answers only for "+" input, and only once a digit follows a complete
+    // code, hence the probe "0": the flag follows as soon as the code is typed.
+    const onNumber = () => {
+      const own = BookingLogic.phoneCombine('', num.value + '0');
+      if (own) {
+        const found = phoneCountryFor(S, own.slice(1, own.indexOf(' ')), iso);
+        if (found && found !== iso) setIso(found);
+      }
+      sync();
+    };
+    num.addEventListener('input', onNumber);
+    // 'change' as well as 'input': a value can land without an 'input' (browser or
+    // password-manager autofill, which autocomplete="tel-national" invites), and 'change'
+    // still fires on the blur or Enter before the submit, so the stored string never lags
+    // behind the number on screen.
+    num.addEventListener('change', onNumber);
+
+    phoneChecks.push(() => {
+      onNumber(); // not just sync(): the flag must match a "+<code>" that landed without an event (embed.js does the same)
+      if (!PHONE_ANY_DIGIT.test(num.value)) return field.dataset.required === 'true' ? num : null;
+      if (!iso) return btn;
+      const m = /^\+(\d+) (\d+)$/.exec(hidden.value);
+      // No number after the code, or a typed "+<code>" the data does not know (so the
+      // picker could not follow it): either way not the chosen country's number.
+      if (!m || m[1] !== S.dialOf[iso]) return num;
+      // At least 6 national digits (the server's validPhone floor counts the code too),
+      // and no more than E.164's 15 in total.
+      if (m[2].length < 6 || m[1].length + m[2].length > 15) return num;
+      return null;
+    });
+
+    renderButton();
+    onNumber(); // a reload or back-navigation restores the number before any event fires
+  }
+
+  // Degraded mode, only if the country data or the shared functions are missing: no
+  // picker, and the number is accepted only in international form, stored as "+<digits>".
+  // Without the dial-code table there is no knowing where the code ends, so this is the
+  // one case where the value carries no space.
+  function phoneFallback(field, picker, hidden, num) {
+    const btn = picker.querySelector('[data-phone-cc]');
+    if (btn) btn.hidden = true;
+    num.setAttribute('autocomplete', 'tel');
+    num.placeholder = '+';
+    const sync = () => {
+      const digits = phoneDigits(num.value);
+      hidden.value = phoneIsIntl(num.value) && digits ? '+' + digits : '';
+    };
+    num.addEventListener('input', sync);
+    num.addEventListener('change', sync);
+    sync();
+    phoneChecks.push(() => {
+      const digits = phoneDigits(num.value);
+      if (!digits) return field.dataset.required === 'true' ? num : null;
+      return phoneIsIntl(num.value) && digits.length >= 8 && digits.length <= 15 ? null : num;
+    });
+  }
+
+  (function initPhoneQuestions() {
+    const pickers = document.querySelectorAll('[data-qid] [data-phone-picker]');
+    if (!pickers.length) return;
+    const data = window.__CALNODE_PHONE;
+    const BL = window.BookingLogic || {};
+    let S = null;
+    if (data && Array.isArray(data.countries) &&
+        ['phoneDetectCountry', 'phoneCombine', 'phoneFilter', 'phoneSort'].every(f => typeof BL[f] === 'function')) {
+      try { S = phoneShared(data); } catch (_) { S = null; }
+    }
+    pickers.forEach(picker => {
+      const field  = picker.closest('[data-qid]');
+      const hidden = field.querySelector('[data-phone-hidden]');
+      const num    = picker.querySelector('[data-phone-num]');
+      if (!hidden || !num) return;
+      if (S) {
+        try { phonePicker(field, picker, hidden, num, S); return; } catch (_) { /* degrade below */ }
+      }
+      phoneFallback(field, picker, hidden, num);
+    });
+    // Capture phase, so this runs before the booking handler below whatever the order of
+    // registration, and stops it when a phone answer is not usable: country AND number,
+    // for required questions and for optional ones the visitor started filling in.
+    $('booking-form').addEventListener('submit', e => {
+      for (const check of phoneChecks) {
+        const bad = check();
+        if (!bad) continue;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        $('form-error').textContent = t('required_fields_error');
+        bad.focus();
+        return;
+      }
+    }, true);
+  })();
 
   // ── Booking form ──────────────────────────────────────────────────────────
   $('booking-form').addEventListener('submit', async e => {

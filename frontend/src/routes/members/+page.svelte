@@ -29,7 +29,7 @@
 	let confirmOpen = $state(false);
 	let confirmTitle = $state('');
 	let confirmDescription = $state('');
-	let confirmActionText = $state('Confirm');
+	let confirmActionText = $state('Confirmar');
 	let pendingAction: (() => void) | null = null;
 
 	function openConfirm(opts: { title: string; description: string; confirmText: string; action: () => void }) {
@@ -59,17 +59,21 @@
 
 	async function load() {
 		try {
-			const [membersRes, invitesRes] = await Promise.all([
-				api.get<TeamMember[]>(showArchived ? '/v1/users?include_archived=true' : '/v1/users'),
-				api.get<Invite[]>('/v1/invites')
-			]);
-			members = membersRes;
-			invites = invitesRes;
+			members = await api.get<TeamMember[]>(showArchived ? '/v1/users?include_archived=true' : '/v1/users');
 		} catch (e: any) {
 			error = e.message;
-		} finally {
-			loading = false;
 		}
+		// Invites are admin-only (ListInvites in invites.go), but /v1/users now answers
+		// support too. Fetched together in one Promise.all, the 403 on this call rejected
+		// the pair and left a support user staring at an error banner over an empty
+		// directory — the one thing the page exists to show them. Its own failure now
+		// costs only the invites section, which support cannot act on anyway.
+		try {
+			invites = await api.get<Invite[]>('/v1/invites');
+		} catch {
+			invites = [];
+		}
+		loading = false;
 	}
 
 	onMount(load);
@@ -82,7 +86,7 @@
 	async function sendInvite() {
 		inviteError = '';
 		inviteResult = null;
-		if (!inviteEmail.trim()) { inviteError = 'Email is required.'; return; }
+		if (!inviteEmail.trim()) { inviteError = 'El correo electrónico es obligatorio.'; return; }
 		inviting = true;
 		try {
 			const res = await api.post<{
@@ -101,9 +105,9 @@
 
 	function revokeInvite(id: string) {
 		openConfirm({
-			title: 'Revoke invite?',
-			description: 'The link will stop working immediately.',
-			confirmText: 'Revoke',
+			title: '¿Revocar invitación?',
+			description: 'El enlace dejará de funcionar de inmediato.',
+			confirmText: 'Revocar',
 			action: async () => {
 				try { await api.del(`/v1/invites/${id}`); await load(); }
 				catch (e: any) { error = e.message; }
@@ -120,38 +124,45 @@
 			);
 			await load();
 			if (res.email_sent) {
-				toast.success(`Invite re-sent to ${res.email}`);
+				toast.success(`Invitación reenviada a ${res.email}`);
 			} else {
 				// No SMTP configured — surface the fresh link so the admin can send it manually.
 				showInvite = true;
 				inviteResult = {
 					invite_url: res.invite_url, email: res.email, email_sent: false,
-					note: 'Email is not configured — copy this link and send it manually.'
+					note: 'El correo no está configurado — copia este enlace y envíalo manualmente.'
 				};
-				toast.success(`New link generated for ${res.email}`);
+				toast.success(`Nuevo enlace generado para ${res.email}`);
 			}
 		} catch (e: any) {
-			toast.error(e.message || 'Could not resend invite');
+			toast.error(e.message || 'No se pudo reenviar la invitación');
 		}
 	}
 
 	// --- Role management (owner only) ---
-	async function setRole(m: TeamMember, role: 'admin' | 'member') {
+	type AssignableRole = 'admin' | 'support' | 'member';
+	const roleNames: Record<AssignableRole, string> = {
+		admin: 'administrador',
+		support: 'soporte',
+		member: 'miembro'
+	};
+
+	async function setRole(m: TeamMember, role: AssignableRole) {
 		try {
 			await api.patch(`/v1/users/${m.id}/role`, { role });
-			toast.success(`${m.name} is now ${role === 'admin' ? 'an admin' : 'a member'}`);
+			toast.success(`${m.name} ahora es ${roleNames[role]}`);
 			await load();
-		} catch (e: any) { toast.error(e.message || 'Could not change role'); }
+		} catch (e: any) { toast.error(e.message || 'No se pudo cambiar el rol'); }
 	}
 
 	function confirmTransfer(m: TeamMember) {
 		openConfirm({
-			title: `Transfer ownership to ${m.name}?`,
-			description: 'You will become an admin and they become the workspace owner. Only the owner can do this.',
-			confirmText: 'Transfer ownership',
+			title: `¿Transferir la propiedad a ${m.name}?`,
+			description: 'Pasarás a ser administrador y esta persona será la propietaria del espacio de trabajo. Solo el propietario puede hacer esto.',
+			confirmText: 'Transferir propiedad',
 			action: async () => {
-				try { await api.post(`/v1/users/${m.id}/transfer-ownership`); toast.success(`${m.name} is now the owner`); await load(); }
-				catch (e: any) { toast.error(e.message || 'Could not transfer ownership'); }
+				try { await api.post(`/v1/users/${m.id}/transfer-ownership`); toast.success(`${m.name} ahora es el propietario`); await load(); }
+				catch (e: any) { toast.error(e.message || 'No se pudo transferir la propiedad'); }
 			}
 		});
 	}
@@ -169,9 +180,9 @@
 				resolveOpen = true;
 			} else {
 				openConfirm({
-					title: `Archive ${m.name}?`,
-					description: 'They lose access immediately and their event types are deactivated. Their record and history are kept — you can restore them later.',
-					confirmText: 'Archive',
+					title: `¿Archivar a ${m.name}?`,
+					description: 'Perderá el acceso de inmediato y sus tipos de atención se desactivarán. Su registro e historial se conservan — podrás restaurarlo más adelante.',
+					confirmText: 'Archivar',
 					action: () => doArchive(m.id)
 				});
 			}
@@ -179,13 +190,13 @@
 	}
 
 	async function doArchive(id: string) {
-		try { await api.post(`/v1/users/${id}/archive`); toast.success('Member archived'); await load(); }
-		catch (e: any) { toast.error(e.message || 'Could not archive member'); }
+		try { await api.post(`/v1/users/${id}/archive`); toast.success('Miembro archivado'); await load(); }
+		catch (e: any) { toast.error(e.message || 'No se pudo archivar al miembro'); }
 	}
 
 	async function restoreMember(m: TeamMember) {
-		try { await api.post(`/v1/users/${m.id}/restore`); toast.success(`${m.name} restored`); await load(); }
-		catch (e: any) { toast.error(e.message || 'Could not restore member'); }
+		try { await api.post(`/v1/users/${m.id}/restore`); toast.success(`${m.name} restaurado`); await load(); }
+		catch (e: any) { toast.error(e.message || 'No se pudo restaurar al miembro'); }
 	}
 
 	// --- Resolve-meetings dialog actions ---
@@ -238,7 +249,7 @@
 
 	async function submitReset(userId: string) {
 		resetError = ''; resetOk = false;
-		if (!resetPassword) { resetError = 'Password is required.'; return; }
+		if (!resetPassword) { resetError = 'La contraseña es obligatoria.'; return; }
 		resetting = true;
 		try {
 			await api.post(`/v1/users/${userId}/password`, { password: resetPassword });
@@ -255,7 +266,10 @@
 	}
 
 	function roleLabel(m: TeamMember) {
-		return m.role === 'owner' ? 'Owner' : m.role === 'admin' ? 'Admin' : 'Member';
+		return m.role === 'owner' ? 'Propietario'
+			: m.role === 'admin' ? 'Administrador'
+			: m.role === 'support' ? 'Soporte'
+			: 'Miembro';
 	}
 	function roleVariant(m: TeamMember): 'default' | 'secondary' | 'outline' {
 		return m.role === 'owner' ? 'default' : m.role === 'admin' ? 'secondary' : 'outline';
@@ -265,7 +279,7 @@
 		const badges: string[] = [];
 		if (m.provider === 'google') badges.push('Google');
 		else if (m.provider === 'microsoft') badges.push('Microsoft');
-		if (m.email_login) badges.push('Email');
+		if (m.email_login) badges.push('Correo');
 		return badges;
 	}
 
@@ -294,10 +308,10 @@
 <Dialog.Root bind:open={resolveOpen}>
 	<Dialog.Content class="max-w-2xl">
 		<Dialog.Header>
-			<Dialog.Title>Resolve {resolveMember?.name}'s upcoming meetings</Dialog.Title>
+			<Dialog.Title>Resolver las próximas reuniones de {resolveMember?.name}</Dialog.Title>
 			<Dialog.Description>
-				{resolveBookings.length} upcoming meeting{resolveBookings.length === 1 ? '' : 's'} remaining.
-				Reassign each to another member or cancel it. When all are resolved, the member is archived automatically.
+				Quedan {resolveBookings.length} reunión{resolveBookings.length === 1 ? '' : 'es'} próxima{resolveBookings.length === 1 ? '' : 's'} por resolver.
+				Reasigna cada una a otro miembro o cancélala. Cuando todas estén resueltas, el miembro se archivará automáticamente.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -311,7 +325,7 @@
 					<div class="mb-2">
 						<p class="text-sm font-medium">{b.event_type_name}</p>
 						<p class="text-xs text-muted-foreground">
-							{fmtDateTime(b.start_at)} · {b.attendee_name || b.attendee_email || 'attendee'}
+							{fmtDateTime(b.start_at)} · {b.attendee_name || b.attendee_email || 'asistente'}
 						</p>
 					</div>
 					<div class="flex flex-wrap items-center gap-2">
@@ -322,7 +336,7 @@
 							disabled={resolveBusy || reassignTargets.length === 0}
 						>
 							<Select.Trigger class="w-fit min-w-40">
-								{reassignTargets.find((t) => t.id === resolveChoice[b.id])?.name ?? 'Reassign to…'}
+								{reassignTargets.find((t) => t.id === resolveChoice[b.id])?.name ?? 'Reasignar a…'}
 							</Select.Trigger>
 							<Select.Content>
 								{#each reassignTargets as t}
@@ -331,61 +345,61 @@
 							</Select.Content>
 						</Select.Root>
 						<Button size="sm" variant="outline" class="h-8" disabled={resolveBusy || !resolveChoice[b.id]} onclick={() => reassignOne(b.id)}>
-							Reassign
+							Reasignar
 						</Button>
 						<Button size="sm" variant="ghost" class="h-8 text-destructive hover:text-destructive" disabled={resolveBusy} onclick={() => cancelOne(b.id)}>
-							Cancel meeting
+							Cancelar reunión
 						</Button>
 					</div>
 				</div>
 			{/each}
 			{#if reassignTargets.length === 0}
-				<p class="text-xs text-muted-foreground">No other active members to reassign to — meetings can only be cancelled.</p>
+				<p class="text-xs text-muted-foreground">No hay otros miembros activos para reasignar — las reuniones solo pueden cancelarse.</p>
 			{/if}
 		</div>
 
 		<Dialog.Footer class="mt-2 gap-2 sm:justify-between">
 			<Button variant="ghost" class="text-destructive hover:text-destructive" disabled={resolveBusy} onclick={cancelAllRemaining}>
-				Cancel all remaining
+				Cancelar todas las pendientes
 			</Button>
 			<Button variant="outline" disabled={resolveBusy} onclick={() => { resolveOpen = false; resolveMember = null; }}>
-				Done later
+				Terminar después
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
 
-<svelte:head><title>Members — Calnode</title></svelte:head>
+<svelte:head><title>Miembros — Calnode</title></svelte:head>
 
 <div class="mb-8 flex items-center justify-between">
 	<div>
-		<h1 class="text-2xl font-semibold tracking-tight">Members</h1>
-		<p class="mt-1 text-sm text-muted-foreground">Manage workspace members, roles, and invites.</p>
+		<h1 class="text-2xl font-semibold tracking-tight">Miembros</h1>
+		<p class="mt-1 text-sm text-muted-foreground">Administra los miembros, roles e invitaciones del espacio de trabajo.</p>
 	</div>
 	{#if $currentUser?.is_admin}
 		<Button onclick={() => { showInvite = !showInvite; inviteError = ''; inviteResult = null; }}>
-			{showInvite ? 'Cancel' : 'Invite member'}
+			{showInvite ? 'Cancelar' : 'Invitar miembro'}
 		</Button>
 	{/if}
 </div>
 
 {#if showInvite}
 	<div class="mb-6 rounded-lg border bg-card p-6">
-		<h2 class="mb-4 text-sm font-semibold">Invite a member</h2>
+		<h2 class="mb-4 text-sm font-semibold">Invitar a un miembro</h2>
 
 		{#if inviteResult}
 			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
-				<p class="mb-1 text-sm font-semibold text-amber-900">Invite link generated</p>
+				<p class="mb-1 text-sm font-semibold text-amber-900">Enlace de invitación generado</p>
 				<p class="mb-3 text-xs text-amber-800">{inviteResult.note}</p>
 				{#if inviteResult.email_sent}
-					<p class="mb-3 text-xs text-amber-700">An invite email has been sent to {inviteResult.email}.</p>
+					<p class="mb-3 text-xs text-amber-700">Se ha enviado un correo de invitación a {inviteResult.email}.</p>
 				{:else}
-					<p class="mb-3 text-xs text-amber-700">SMTP is not configured — share this link directly with {inviteResult.email}.</p>
+					<p class="mb-3 text-xs text-amber-700">SMTP no está configurado — comparte este enlace directamente con {inviteResult.email}.</p>
 				{/if}
 				<div class="flex items-center gap-2">
 					<code class="flex-1 overflow-x-auto rounded border bg-white px-2 py-1.5 text-xs font-mono text-gray-800">{inviteResult.invite_url}</code>
 					<Button variant="outline" size="sm" onclick={() => copyInviteUrl(inviteResult!.invite_url)}>
-						{copied ? 'Copied!' : 'Copy'}
+						{copied ? '¡Copiado!' : 'Copiar'}
 					</Button>
 				</div>
 			</div>
@@ -394,13 +408,13 @@
 		{#if inviteError}<p class="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{inviteError}</p>{/if}
 
 		<div class="mb-4 space-y-1.5">
-			<Label for="inv-email">Email address</Label>
-			<Input id="inv-email" type="email" bind:value={inviteEmail} placeholder="teammate@example.com"
+			<Label for="inv-email">Correo electrónico</Label>
+			<Input id="inv-email" type="email" bind:value={inviteEmail} placeholder="miembro@ejemplo.com"
 				onkeydown={(e) => e.key === 'Enter' && sendInvite()} />
 		</div>
 
 		<Button onclick={sendInvite} disabled={inviting}>
-			{inviting ? 'Generating…' : 'Generate invite link'}
+			{inviting ? 'Generando…' : 'Generar enlace de invitación'}
 		</Button>
 	</div>
 {/if}
@@ -408,31 +422,31 @@
 {#if error}<p class="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>{/if}
 
 {#if loading}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else}
 	<div class="mb-8">
 		<div class="mb-3 flex items-center justify-between">
-			<h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Members</h2>
+			<h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Miembros</h2>
 			{#if $currentUser?.is_admin}
 				<button class="text-xs text-muted-foreground hover:text-foreground" onclick={toggleArchived}>
-					{showArchived ? 'Hide archived' : 'Show archived'}
+					{showArchived ? 'Ocultar archivados' : 'Mostrar archivados'}
 				</button>
 			{/if}
 		</div>
 		{#if members.length === 0}
 			<div class="rounded-lg border border-dashed bg-card p-8 text-center">
-				<p class="text-sm text-muted-foreground">No members yet.</p>
+				<p class="text-sm text-muted-foreground">Aún no hay miembros.</p>
 			</div>
 		{:else}
 			<div class="rounded-lg border bg-card overflow-hidden">
 				<table class="w-full text-sm">
 					<thead>
 						<tr class="border-b">
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Name</th>
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Role</th>
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Teams</th>
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Auth</th>
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Joined</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Nombre</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Rol</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Equipos</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Autenticación</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Se unió</th>
 							{#if $currentUser?.is_admin}<th class="px-4 pb-3 pt-3"></th>{/if}
 						</tr>
 					</thead>
@@ -451,7 +465,7 @@
 										<div class="min-w-0">
 											<p class="font-medium">
 												{m.name}
-												{#if m.id === $currentUser?.id}<span class="text-xs text-muted-foreground">(you)</span>{/if}
+												{#if m.id === $currentUser?.id}<span class="text-xs text-muted-foreground">(tú)</span>{/if}
 											</p>
 											<p class="text-xs text-muted-foreground">{m.email}</p>
 										</div>
@@ -460,7 +474,7 @@
 								<td class="px-4 py-3">
 									<div class="flex items-center gap-1.5">
 										<Badge variant={roleVariant(m)}>{roleLabel(m)}</Badge>
-										{#if m.archived}<Badge variant="outline" class="text-xs text-muted-foreground">Archived</Badge>{/if}
+										{#if m.archived}<Badge variant="outline" class="text-xs text-muted-foreground">Archivado</Badge>{/if}
 									</div>
 								</td>
 								<td class="px-4 py-3">
@@ -485,41 +499,50 @@
 										<div class="flex flex-wrap items-center justify-end gap-1">
 											{#if m.archived}
 												{#if m.archived_by_name}
-													<span class="text-xs text-muted-foreground">Archived by {m.archived_by_name}</span>
+													<span class="text-xs text-muted-foreground">Archivado por {m.archived_by_name}</span>
 												{/if}
 												<!-- Owner can restore anyone; an admin only members they archived. -->
 												{#if $currentUser.is_owner || m.archived_by === $currentUser.id}
-													<Button size="sm" variant="outline" class="h-7 text-xs" onclick={() => restoreMember(m)}>Restore</Button>
+													<Button size="sm" variant="outline" class="h-7 text-xs" onclick={() => restoreMember(m)}>Restaurar</Button>
 												{/if}
 											{:else if m.id !== $currentUser.id}
 												{#if resetTarget === m.id}
 													<div class="flex items-center gap-1.5">
 														{#if resetOk}
-															<span class="text-xs text-green-600 font-medium">Password updated</span>
+															<span class="text-xs text-green-600 font-medium">Contraseña actualizada</span>
 														{:else}
-															<Input type="password" bind:value={resetPassword} placeholder="New password"
+															<Input type="password" bind:value={resetPassword} placeholder="Nueva contraseña"
 																class="h-7 w-36 text-xs" onkeydown={(e) => e.key === 'Enter' && submitReset(m.id)} />
 															{#if resetError}<span class="text-xs text-destructive">{resetError}</span>{/if}
 															<Button size="sm" variant="outline" class="h-7 text-xs" onclick={() => submitReset(m.id)} disabled={resetting}>
-																{resetting ? '…' : 'Set'}
+																{resetting ? '…' : 'Guardar'}
 															</Button>
-															<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={cancelReset}>Cancel</Button>
+															<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={cancelReset}>Cancelar</Button>
 														{/if}
 													</div>
 												{:else}
 													{#if $currentUser.is_owner && !m.is_owner}
-														{#if m.is_admin}
-															<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => setRole(m, 'member')}>Make member</Button>
-														{:else}
-															<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => setRole(m, 'admin')}>Make admin</Button>
-														{/if}
-														<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => confirmTransfer(m)}>Transfer ownership</Button>
+														<!-- Tres roles ya no caben en dos botones espejo: el selector muestra
+														     el rol vigente y permite elegir otro. -->
+														<Select.Root
+															type="single"
+															value={m.role}
+															onValueChange={(v) => { if (v && v !== m.role) setRole(m, v as AssignableRole); }}
+														>
+															<Select.Trigger class="h-7 w-fit min-w-28 text-xs">{roleLabel(m)}</Select.Trigger>
+															<Select.Content>
+																<Select.Item value="member" label="Miembro">Miembro</Select.Item>
+																<Select.Item value="support" label="Soporte">Soporte</Select.Item>
+																<Select.Item value="admin" label="Administrador">Administrador</Select.Item>
+															</Select.Content>
+														</Select.Root>
+														<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => confirmTransfer(m)}>Transferir propiedad</Button>
 													{/if}
 													<!-- Reset password + Archive only on members this viewer may manage:
 													     never the owner; another admin only if the viewer is the owner. -->
 													{#if !m.is_owner && (!m.is_admin || $currentUser.is_owner)}
-														<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => startReset(m.id)}>Reset password</Button>
-														<Button size="sm" variant="ghost" class="h-7 text-xs text-destructive hover:text-destructive" onclick={() => startArchive(m)}>Archive</Button>
+														<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => startReset(m.id)}>Restablecer contraseña</Button>
+														<Button size="sm" variant="ghost" class="h-7 text-xs text-destructive hover:text-destructive" onclick={() => startArchive(m)}>Archivar</Button>
 													{/if}
 												{/if}
 											{/if}
@@ -531,19 +554,26 @@
 					</tbody>
 				</table>
 			</div>
+			{#if $currentUser?.is_admin}
+				<p class="mt-2 text-xs text-muted-foreground">
+					Soporte puede ver todas las reservas del equipo y cancelarlas o reprogramarlas para ayudar a un
+					miembro, además de consultar esta lista. No tiene acceso a la configuración, las integraciones ni
+					la gestión de usuarios (invitar, archivar, roles o equipos).
+				</p>
+			{/if}
 		{/if}
 	</div>
 
 	<!-- Pending invites -->
 	{#if $currentUser?.is_admin && invites.length > 0}
 		<div>
-			<h2 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">Pending Invites</h2>
+			<h2 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">Invitaciones pendientes</h2>
 			<div class="rounded-lg border bg-card overflow-hidden">
 				<table class="w-full text-sm">
 					<thead>
 						<tr class="border-b">
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Email</th>
-							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Expires</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Correo electrónico</th>
+							<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Vence</th>
 							<th class="px-4 pb-3 pt-3"></th>
 						</tr>
 					</thead>
@@ -553,14 +583,14 @@
 								<td class="px-4 py-3">{inv.email}</td>
 								<td class="px-4 py-3 text-muted-foreground">
 									{fmtDate(inv.expires_at)}
-									<span class="ml-1 text-xs">({daysLeft(inv.expires_at)}d left)</span>
+									<span class="ml-1 text-xs">({daysLeft(inv.expires_at)}d restantes)</span>
 								</td>
 								<td class="px-4 py-3 text-right whitespace-nowrap">
 									<Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => resendInvite(inv.id)}>
-										Resend
+										Reenviar
 									</Button>
 									<Button size="sm" variant="ghost" class="h-7 text-xs text-destructive hover:text-destructive" onclick={() => revokeInvite(inv.id)}>
-										Revoke
+										Revocar
 									</Button>
 								</td>
 							</tr>
@@ -569,7 +599,7 @@
 				</table>
 			</div>
 			<p class="mt-2 text-xs text-muted-foreground">
-				Resend mints a fresh link, resets the 7-day expiry, and re-emails it — the previous link stops working.
+				Reenviar genera un enlace nuevo, reinicia el vencimiento de 7 días y lo vuelve a enviar por correo — el enlace anterior deja de funcionar.
 			</p>
 		</div>
 	{/if}

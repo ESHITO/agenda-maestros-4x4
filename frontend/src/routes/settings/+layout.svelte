@@ -7,27 +7,27 @@
 	let { children }: { children: Snippet } = $props();
 
 	const navItems = [
-		{ section: 'Your account', href: `${base}/settings/profile`, label: 'Profile' },
-		{ section: 'Your account', href: `${base}/settings/notifications`, label: 'Notifications' },
-		{ section: 'Workspace', href: `${base}/settings/branding`, label: 'Branding', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/email`, label: 'Email', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/google`, label: 'Google OAuth', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/zoom`, label: 'Zoom', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/video`, label: 'Video', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/storage`, label: 'Storage', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/payments`, label: 'Payments', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/ai`, label: 'AI', adminOnly: true },
-		{ section: 'Workspace', href: `${base}/settings/tracking`, label: 'Tracking', adminOnly: true },
+		{ section: 'Tu cuenta', href: `${base}/settings/profile`, label: 'Perfil' },
+		{ section: 'Tu cuenta', href: `${base}/settings/notifications`, label: 'Notificaciones' },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/branding`, label: 'Marca', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/email`, label: 'Correo', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/google`, label: 'Google OAuth', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/zoom`, label: 'Zoom', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/video`, label: 'Video', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/storage`, label: 'Almacenamiento', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/payments`, label: 'Pagos', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/ai`, label: 'IA', adminOnly: true },
+		{ section: 'Espacio de trabajo', href: `${base}/settings/tracking`, label: 'Seguimiento', adminOnly: true },
 	];
 
 	const visibleNavItems = $derived(navItems.filter((item) => !item.adminOnly || $currentUser?.is_admin));
 </script>
 
-<svelte:head><title>Settings — Calnode</title></svelte:head>
+<svelte:head><title>Configuración — Calnode</title></svelte:head>
 
 <div class="mb-8">
-	<h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
-	<p class="mt-1 text-sm text-muted-foreground">Manage your profile, preferences, and integrations.</p>
+	<h1 class="text-2xl font-semibold tracking-tight">Configuración</h1>
+	<p class="mt-1 text-sm text-muted-foreground">Administra tu perfil, tus preferencias y tus integraciones.</p>
 </div>
 
 <div class="flex gap-8">

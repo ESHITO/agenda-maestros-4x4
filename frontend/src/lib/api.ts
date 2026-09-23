@@ -10,7 +10,8 @@ export type User = {
 	avatar_url?: string;
 	is_admin: boolean;
 	is_owner: boolean;
-	role: 'owner' | 'admin' | 'member';
+	is_support: boolean;
+	role: 'owner' | 'admin' | 'support' | 'member';
 	notify_confirmation: boolean;
 	notify_cancellation: boolean;
 	notify_reschedule: boolean;
@@ -233,7 +234,8 @@ export type TeamMember = {
 	timezone: string;
 	is_admin: boolean;
 	is_owner: boolean;
-	role: 'owner' | 'admin' | 'member';
+	is_support: boolean;
+	role: 'owner' | 'admin' | 'support' | 'member';
 	email_login: boolean;
 	provider?: string;
 	avatar_url?: string;

@@ -53,7 +53,7 @@
 		smtpStartTLS = email.smtp_starttls;
 		emailFrom = email.email_from;
 		emailFromName = email.email_from_name || 'Calnode';
-	}, 'Could not load email settings'));
+	}, 'No se pudo cargar la configuración de correo'));
 
 	async function save() {
 		await savingFlag.run(async () => {
@@ -70,8 +70,8 @@
 			smtpPass = '';
 			resendApiKey = '';
 			clearResendKey = false;
-			toast.success('Email settings saved');
-		}, 'Could not save email settings');
+			toast.success('Configuración de correo guardada');
+		}, 'No se pudo guardar la configuración de correo');
 	}
 
 	async function test() {
@@ -80,39 +80,39 @@
 				await api.post('/v1/settings/email/test');
 			} catch (e: any) {
 				if (e.message?.startsWith('Email is not configured')) {
-					throw new Error('Save your settings first, then try again.');
+					throw new Error('Guarda tu configuración primero y vuelve a intentarlo.');
 				}
 				throw e;
 			}
-			toast.success(`Test email sent to ${userEmail}`);
-		}, 'Could not send test email');
+			toast.success(`Correo de prueba enviado a ${userEmail}`);
+		}, 'No se pudo enviar el correo de prueba');
 	}
 </script>
 
 <svelte:window onkeydown={saveOnCmdS(save, () => !savingFlag.active)} />
 
 {#if !$currentUser?.is_admin}
-	<p class="text-sm text-muted-foreground">Admin access required.</p>
+	<p class="text-sm text-muted-foreground">Se requiere acceso de administrador.</p>
 {:else}
 
 {#if loadingFlag.active}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else}
 	<div class="max-w-lg">
 		<div class="rounded-lg border bg-card p-6">
 			<div class="mb-4 flex items-start justify-between gap-2">
 				<div>
-					<h2 class="text-sm font-semibold">Email</h2>
-					<p class="mt-0.5 text-xs text-muted-foreground">How Calnode sends booking emails.</p>
+					<h2 class="text-sm font-semibold">Correo electrónico</h2>
+					<p class="mt-0.5 text-xs text-muted-foreground">Cómo Calnode envía los correos de las reservas.</p>
 				</div>
 				{#if emailSettings !== null}
 					<span class="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium {emailSettings.enabled ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}">
 						<span class="h-1.5 w-1.5 rounded-full {emailSettings.enabled ? 'bg-green-500' : 'bg-amber-400'}"></span>
 						{emailSettings.transport === 'resend_api'
-							? 'Sending via Resend API'
+							? 'Enviando mediante la API de Resend'
 							: emailSettings.transport === 'smtp'
-								? 'Sending via SMTP'
-								: 'Not configured'}
+								? 'Enviando por SMTP'
+								: 'No configurado'}
 					</span>
 				{/if}
 			</div>
@@ -121,93 +121,95 @@
 				<div class="space-y-2 rounded-md border p-3">
 					<div class="flex items-center justify-between gap-4">
 						<div>
-							<p class="text-xs font-medium">Resend API key</p>
+							<p class="text-xs font-medium">Clave de API de Resend</p>
 							<p class="text-xs text-muted-foreground">
-								Sends over HTTPS instead of SMTP. Use this if your host blocks SMTP.
+								Envía por HTTPS en lugar de SMTP. Usa esta opción si tu proveedor de alojamiento bloquea SMTP.
 							</p>
 						</div>
 					</div>
 					<Input id="resend-key" type="password"
-						placeholder={emailSettings?.resend_api_key_set ? '•••••••• (stored)' : 're_...'}
+						placeholder={emailSettings?.resend_api_key_set ? '•••••••• (guardada)' : 're_...'}
 						bind:value={resendApiKey}
 						disabled={clearResendKey} />
 					{#if emailSettings?.resend_api_key_set && !resendApiKey && !clearResendKey}
 						<div class="flex items-center justify-between gap-2">
-							<p class="text-xs text-muted-foreground">Stored — leave blank to keep it.</p>
+							<p class="text-xs text-muted-foreground">Guardada — déjala en blanco para conservarla.</p>
 							<Button variant="ghost" size="sm" class="h-6 px-2 text-xs"
-								onclick={() => (clearResendKey = true)}>Remove key</Button>
+								onclick={() => (clearResendKey = true)}>Quitar clave</Button>
 						</div>
 					{:else if clearResendKey}
 						<div class="flex items-center justify-between gap-2">
-							<p class="text-xs text-amber-700">Will be removed on save; SMTP will be used instead.</p>
+							<p class="text-xs text-amber-700">Se eliminará al guardar; se usará SMTP en su lugar.</p>
 							<Button variant="ghost" size="sm" class="h-6 px-2 text-xs"
-								onclick={() => (clearResendKey = false)}>Undo</Button>
+								onclick={() => (clearResendKey = false)}>Deshacer</Button>
 						</div>
 					{/if}
 					<p class="text-xs text-muted-foreground">
-						Many hosts (including Railway below Pro) block outbound SMTP entirely, which
-						looks identical to a wrong password. An API key avoids that path.
+						Muchos proveedores de hosting (incluido Railway por debajo del plan Pro) bloquean
+						por completo el SMTP saliente, lo cual se ve idéntico a una contraseña incorrecta.
+						Una clave de API evita ese problema.
 					</p>
 				</div>
 
 				<div class="space-y-4" class:opacity-60={usingResend}>
 					{#if usingResend}
 						<p class="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Mail is being sent through the Resend API, so these SMTP settings are not in
-							use. They are kept so you can switch back by removing the key above.
+							El correo se está enviando mediante la API de Resend, así que esta configuración
+							de SMTP no está en uso. Se conserva para que puedas volver a ella quitando la
+							clave de arriba.
 						</p>
 					{/if}
 				<div class="grid grid-cols-3 gap-3">
 					<div class="col-span-2 space-y-1.5">
-						<Label for="smtp-host">SMTP host</Label>
+						<Label for="smtp-host">Servidor SMTP</Label>
 						<Input id="smtp-host" type="text" placeholder="smtp.gmail.com" bind:value={smtpHost} />
 					</div>
 					<div class="space-y-1.5">
-						<Label for="smtp-port">Port</Label>
+						<Label for="smtp-port">Puerto</Label>
 						<Input id="smtp-port" type="text" placeholder="587" bind:value={smtpPort} />
 					</div>
 				</div>
 
 				<div class="grid grid-cols-2 gap-3">
 					<div class="space-y-1.5">
-						<Label for="smtp-user">Username</Label>
+						<Label for="smtp-user">Usuario</Label>
 						<Input id="smtp-user" type="text" placeholder="you@example.com" bind:value={smtpUser} />
 					</div>
 					<div class="space-y-1.5">
-						<Label for="smtp-pass">Password</Label>
+						<Label for="smtp-pass">Contraseña</Label>
 						<Input id="smtp-pass" type="password"
-							placeholder={emailSettings?.smtp_pass_set ? '•••••••• (stored)' : 'Enter password'}
+							placeholder={emailSettings?.smtp_pass_set ? '•••••••• (guardada)' : 'Ingresa la contraseña'}
 							bind:value={smtpPass} />
 						{#if emailSettings?.smtp_pass_set && !smtpPass}
-							<p class="text-xs text-muted-foreground">Stored — leave blank to keep it.</p>
+							<p class="text-xs text-muted-foreground">Guardada — déjala en blanco para conservarla.</p>
 						{/if}
 					</div>
 				</div>
 
 				<div class="grid grid-cols-2 gap-3">
 					<div class="space-y-1.5">
-						<Label for="email-from">From address</Label>
+						<Label for="email-from">Dirección de remitente</Label>
 						<Input id="email-from" type="email" placeholder="bookings@example.com" bind:value={emailFrom} />
 					</div>
 					<div class="space-y-1.5">
-						<Label for="email-from-name">From name</Label>
+						<Label for="email-from-name">Nombre del remitente</Label>
 						<Input id="email-from-name" type="text" placeholder="Calnode" bind:value={emailFromName} />
 					</div>
 				</div>
 
 				<div class="space-y-2 rounded-md border p-3">
-					<p class="text-xs font-medium text-muted-foreground">TLS / encryption</p>
+					<p class="text-xs font-medium text-muted-foreground">TLS / cifrado</p>
 					<div class="flex items-center justify-between gap-4">
 						<div>
 							<Label for="smtp-starttls" class="cursor-pointer font-normal">STARTTLS</Label>
-							<p class="text-xs text-muted-foreground">Recommended for port 587</p>
+							<p class="text-xs text-muted-foreground">Recomendado para el puerto 587</p>
 						</div>
 						<Switch id="smtp-starttls" bind:checked={smtpStartTLS} />
 					</div>
 					<div class="flex items-center justify-between gap-4">
 						<div>
-							<Label for="smtp-tls" class="cursor-pointer font-normal">Implicit TLS</Label>
-							<p class="text-xs text-muted-foreground">For port 465 (SSL)</p>
+							<Label for="smtp-tls" class="cursor-pointer font-normal">TLS implícito</Label>
+							<p class="text-xs text-muted-foreground">Para el puerto 465 (SSL)</p>
 						</div>
 						<Switch id="smtp-tls" bind:checked={smtpTLS} />
 					</div>
@@ -217,10 +219,10 @@
 
 			<div class="mt-5 flex flex-wrap items-center gap-3">
 				<Button onclick={save} disabled={savingFlag.active}>
-					{savingFlag.active ? 'Saving…' : 'Save'}
+					{savingFlag.active ? 'Guardando…' : 'Guardar'}
 				</Button>
 				<Button variant="outline" onclick={test} disabled={testingFlag.active || !emailSettings?.enabled}>
-					{testingFlag.active ? 'Sending…' : 'Send test email'}
+					{testingFlag.active ? 'Enviando…' : 'Enviar correo de prueba'}
 				</Button>
 			</div>
 		</div>

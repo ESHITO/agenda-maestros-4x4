@@ -60,18 +60,18 @@
 	}
 </script>
 
-<svelte:head><title>Dashboard — Calnode</title></svelte:head>
+<svelte:head><title>Panel — Calnode</title></svelte:head>
 
 {#if loading}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else if allDone}
 	<div class="mb-8">
-		<h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
-		<p class="mt-1 text-sm text-muted-foreground">Your booking page is live and ready to share.</p>
+		<h1 class="text-2xl font-semibold tracking-tight">Panel</h1>
+		<p class="mt-1 text-sm text-muted-foreground">Tu página de reservas está activa y lista para compartir.</p>
 	</div>
 	{#if bookingUrl}
 		<div class="rounded-lg border bg-card px-5 py-4">
-			<p class="text-sm font-medium mb-2">Your booking link</p>
+			<p class="text-sm font-medium mb-2">Tu enlace de reserva</p>
 			<div class="flex items-center gap-2">
 				<a
 					href={bookingUrl}
@@ -86,15 +86,15 @@
 					class="shrink-0 rounded px-2 py-0.5 text-xs border bg-background hover:bg-muted transition-colors
 						{copyFailed ? 'border-destructive text-destructive' : ''}"
 				>
-					{copied ? 'Copied!' : copyFailed ? 'Failed' : 'Copy'}
+					{copied ? '¡Copiado!' : copyFailed ? 'Error' : 'Copiar'}
 				</button>
 			</div>
 		</div>
 	{/if}
 {:else}
 	<div class="mb-8">
-		<h1 class="text-2xl font-semibold tracking-tight">Getting started</h1>
-		<p class="mt-1 text-sm text-muted-foreground">Complete these steps and you'll be ready to take bookings.</p>
+		<h1 class="text-2xl font-semibold tracking-tight">Primeros pasos</h1>
+		<p class="mt-1 text-sm text-muted-foreground">Completa estos pasos y estarás listo para recibir reservas.</p>
 	</div>
 
 	<!-- Checklist -->
@@ -115,10 +115,10 @@
 			</div>
 			<div class="flex-1 min-w-0">
 				<p class="text-sm font-medium {calendarConnected ? 'text-muted-foreground line-through' : ''}">
-					Connect your calendar
+					Conecta tu calendario
 				</p>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					{calendarConfigured ? 'Calnode checks your calendar to prevent double-bookings.' : 'Google Calendar setup required — see the Calendar page for details.'}
+					{calendarConfigured ? 'Calnode revisa tu calendario para evitar reservas duplicadas.' : 'Se requiere configurar Google Calendar — consulta la página de Calendario para más detalles.'}
 				</p>
 			</div>
 			<svg class="mt-0.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -142,10 +142,10 @@
 			</div>
 			<div class="flex-1 min-w-0">
 				<p class="text-sm font-medium {hasAvailability ? 'text-muted-foreground line-through' : ''}">
-					Set your availability
+					Define tu disponibilidad
 				</p>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					Define the hours when people can book time with you.
+					Define los horarios en los que las personas pueden reservar tiempo contigo.
 				</p>
 			</div>
 			<svg class="mt-0.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -168,10 +168,10 @@
 			</div>
 			<div class="flex-1 min-w-0">
 				<p class="text-sm font-medium {hasEventType ? 'text-muted-foreground line-through' : ''}">
-					Create your first event type
+					Crea tu primer tipo de atención
 				</p>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					An event type defines the duration, location, and availability for a booking.
+					Un tipo de atención define la duración, la ubicación y la disponibilidad de una reserva.
 				</p>
 			</div>
 			<svg class="mt-0.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -190,9 +190,9 @@
 				{/if}
 			</div>
 			<div class="flex-1 min-w-0">
-				<p class="text-sm font-medium">Share your booking link</p>
+				<p class="text-sm font-medium">Comparte tu enlace de reserva</p>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					{hasEventType ? 'Your page is live. Share it and start taking bookings.' : "Available once you've created an event type."}
+					{hasEventType ? 'Tu página está activa. Compártela y empieza a recibir reservas.' : 'Disponible una vez que hayas creado un tipo de atención.'}
 				</p>
 				{#if hasEventType && bookingUrl}
 					<div class="mt-2 flex items-center gap-2">
@@ -209,7 +209,7 @@
 							class="shrink-0 rounded px-2 py-0.5 text-xs border bg-background hover:bg-muted transition-colors
 								{copyFailed ? 'border-destructive text-destructive' : ''}"
 						>
-							{copied ? 'Copied!' : copyFailed ? 'Failed' : 'Copy'}
+							{copied ? '¡Copiado!' : copyFailed ? 'Error' : 'Copiar'}
 						</button>
 					</div>
 				{/if}

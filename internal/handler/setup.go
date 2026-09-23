@@ -121,6 +121,7 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 		"date_format":    user.DateFormat,
 		"is_admin":       user.IsAdmin,
 		"is_owner":       user.IsOwner,
+		"is_support":     user.IsSupport,
 		"role":           user.Role(),
 		// Notification preferences
 		"notify_confirmation":    user.NotifyConfirmation,
@@ -292,6 +293,7 @@ func (h *Handler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		"date_format":    current.DateFormat,
 		"is_admin":       user.IsAdmin,
 		"is_owner":       user.IsOwner,
+		"is_support":     user.IsSupport,
 		"role":           user.Role(),
 		// Notification preferences
 		"notify_confirmation":    current.NotifyConfirmation,

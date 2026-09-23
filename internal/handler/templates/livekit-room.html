@@ -1,9 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{.Locale}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Video meeting — Calnode</title>
+  <title>{{call .T "room_page_title"}}{{if .BusinessName}} — {{.BusinessName}}{{end}}</title>
+  {{/* SAFE (generic.html-templates.security.var-in-script-tag): .I18NJSON is server-built via
+       json.Marshal (HTML-escapes <,>,& by default) from this locale's room_* strings — never
+       raw/attacker-controlled data. Same pattern as book.html. It must stay here in <head>,
+       ahead of /assets/livekit-room.js: the room script reads it the moment it loads. */}}
+  <script>window.__CALNODE_I18N = {{.I18NJSON}};</script>  <!-- nosemgrep: generic.html-templates.security.var-in-script-tag.var-in-script-tag -->
   <style>
     :root { --bg:#0b0d12; --panel:#151921; --panel2:#1d222c; --line:#2a313d; --text:#e7eaf0; --muted:#9aa3b2; --accent:#6366f1; --danger:#ef4444; --good:#22c55e; }
     * { box-sizing:border-box; }
@@ -149,25 +154,25 @@
     <!-- Prejoin -->
     <section id="lk-prejoin">
       {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.BusinessName}}">{{end}}
-      <h1>Ready to join?</h1>
-      <p class="sub">Check your camera and mic, then join the meeting.</p>
+      <h1>{{call .T "room_prejoin_title"}}</h1>
+      <p class="sub">{{call .T "room_prejoin_subtitle"}}</p>
       <div class="preview-wrap">
         <video id="lk-preview" autoplay playsinline muted></video>
-        <div id="lk-preview-off" class="preview-off hidden">Camera off</div>
+        <div id="lk-preview-off" class="preview-off hidden">{{call .T "room_preview_camera_off"}}</div>
       </div>
       <div class="toggles">
-        <button id="lk-pre-cam" class="toggle">Camera on</button>
-        <button id="lk-pre-mic" class="toggle">Mic on</button>
+        <button id="lk-pre-cam" class="toggle">{{call .T "room_toggle_camera_on"}}</button>
+        <button id="lk-pre-mic" class="toggle">{{call .T "room_toggle_mic_on"}}</button>
       </div>
       <div class="row">
-        <div><label for="lk-cam">Camera</label><select id="lk-cam"></select></div>
-        <div><label for="lk-mic">Microphone</label><select id="lk-mic"></select></div>
+        <div><label for="lk-cam">{{call .T "room_camera"}}</label><select id="lk-cam"></select></div>
+        <div><label for="lk-mic">{{call .T "room_microphone"}}</label><select id="lk-mic"></select></div>
       </div>
       <div style="margin-top:14px">
-        <label for="lk-name">Your name</label>
-        <input id="lk-name" type="text" maxlength="60" placeholder="Enter your name" autocomplete="name">
+        <label for="lk-name">{{call .T "room_name_label"}}</label>
+        <input id="lk-name" type="text" maxlength="60" placeholder="{{call .T "room_name_placeholder"}}" autocomplete="name">
       </div>
-      <button id="lk-join" class="join-btn">Join meeting</button>
+      <button id="lk-join" class="join-btn">{{call .T "room_join_button"}}</button>
     </section>
 
     <!-- Room -->
@@ -179,74 +184,74 @@
           <div id="lk-grid"></div>
         </div>
         <aside id="lk-chat" class="hidden">
-          <div class="chat-head"><span>Chat</span><button id="lk-chat-close" aria-label="Close chat">&times;</button></div>
-          <div id="lk-chat-msgs"><p id="lk-chat-empty">Messages are visible only during this call — they're never stored and vanish when it ends.</p></div>
+          <div class="chat-head"><span>{{call .T "room_chat"}}</span><button id="lk-chat-close" aria-label="{{call .T "room_chat_close_aria"}}">&times;</button></div>
+          <div id="lk-chat-msgs"><p id="lk-chat-empty">{{call .T "room_chat_empty"}}</p></div>
           <form id="lk-chat-form" autocomplete="off">
-            <input id="lk-chat-input" type="text" maxlength="500" placeholder="Type a message…">
-            <button id="lk-chat-send" type="submit">Send</button>
+            <input id="lk-chat-input" type="text" maxlength="500" placeholder="{{call .T "room_chat_placeholder"}}">
+            <button id="lk-chat-send" type="submit">{{call .T "room_chat_send"}}</button>
           </form>
         </aside>
       </div>
       <div id="lk-bar">
-        <button id="lk-mic-btn" class="ctrl" title="Microphone" aria-label="Toggle microphone"></button>
-        <button id="lk-cam-btn" class="ctrl" title="Camera" aria-label="Toggle camera"></button>
-        <button id="lk-screen" class="ctrl" title="Share screen" aria-label="Share screen"></button>
-        <button id="lk-layout-btn" class="ctrl" title="Switch layout (grid / speaker)" aria-label="Switch layout"></button>
-        <button id="lk-chat-btn" class="ctrl" title="Chat" aria-label="Toggle chat"></button>
+        <button id="lk-mic-btn" class="ctrl" title="{{call .T "room_microphone"}}" aria-label="{{call .T "room_mic_toggle_aria"}}"></button>
+        <button id="lk-cam-btn" class="ctrl" title="{{call .T "room_camera"}}" aria-label="{{call .T "room_cam_toggle_aria"}}"></button>
+        <button id="lk-screen" class="ctrl" title="{{call .T "room_share_screen"}}" aria-label="{{call .T "room_share_screen"}}"></button>
+        <button id="lk-layout-btn" class="ctrl" title="{{call .T "room_layout_title"}}" aria-label="{{call .T "room_layout_aria"}}"></button>
+        <button id="lk-chat-btn" class="ctrl" title="{{call .T "room_chat"}}" aria-label="{{call .T "room_chat_toggle_aria"}}"></button>
         <span id="lk-host-menu-wrap" class="hm-wrap hidden">
-          <button id="lk-host-menu-btn" class="ctrl" title="Host controls" aria-label="Host controls"></button>
+          <button id="lk-host-menu-btn" class="ctrl" title="{{call .T "room_host_controls"}}" aria-label="{{call .T "room_host_controls"}}"></button>
           <div id="lk-host-menu" class="host-menu hidden">
             <button id="lk-hm-share" class="hm-item"></button>
             <div id="lk-hm-makehost" class="hm-section">
-              <div class="hm-label">Make someone host</div>
+              <div class="hm-label">{{call .T "room_host_menu_make_host"}}</div>
               <div id="lk-hm-participants"></div>
             </div>
-            <button id="lk-hm-reclaim" class="hm-item hm-section">Take host back</button>
+            <button id="lk-hm-reclaim" class="hm-item hm-section">{{call .T "room_host_menu_reclaim"}}</button>
           </div>
         </span>
-        <button id="lk-record-btn" class="ctrl hidden" title="Record meeting" aria-label="Record meeting"></button>
-        <button id="lk-leave" class="ctrl leave" title="Leave">Leave</button>
+        <button id="lk-record-btn" class="ctrl hidden" title="{{call .T "room_record_start"}}" aria-label="{{call .T "room_record_start"}}"></button>
+        <button id="lk-leave" class="ctrl leave" title="{{call .T "room_leave"}}">{{call .T "room_leave"}}</button>
       </div>
     </section>
 
     <!-- Left / error -->
     <section id="lk-left" class="center-msg hidden">
       {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.BusinessName}}">{{end}}
-      <h1>You left the meeting</h1>
-      <p>You can rejoin if it's still in progress.</p>
-      <button onclick="location.reload()">Rejoin</button>
+      <h1>{{call .T "room_left_title"}}</h1>
+      <p>{{call .T "room_left_text"}}</p>
+      <button onclick="location.reload()">{{call .T "room_rejoin"}}</button>
     </section>
     <section id="lk-error" class="center-msg hidden">
       {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.BusinessName}}">{{end}}
-      <h1>Can't join this meeting</h1>
-      <p id="lk-error-msg">This meeting link is invalid or has expired.</p>
+      <h1>{{call .T "room_error_title"}}</h1>
+      <p id="lk-error-msg">{{call .T "room_error_link_invalid"}}</p>
     </section>
 
     <div id="lk-status" class="hidden"></div>
-    <div id="lk-rec-banner" class="rec-banner hidden"><span class="rec-dot"></span>Recording</div>
+    <div id="lk-rec-banner" class="rec-banner hidden"><span class="rec-dot"></span>{{call .T "room_recording_banner"}}</div>
 
     <!-- Recording consent — notice + consent-or-leave (shown to attendees when recording starts) -->
     <div id="lk-consent-modal" class="modal-overlay hidden">
       <div class="modal">
-        <h2>This meeting is being recorded</h2>
-        <p style="margin:0 0 6px;color:var(--muted);font-size:.9rem;">By continuing you consent to being recorded. If you don't consent, you can leave the meeting.</p>
-        <button id="lk-consent-continue" class="modal-btn">Continue</button>
-        <button id="lk-consent-leave" class="modal-btn ghost">Leave</button>
+        <h2>{{call .T "room_consent_title"}}</h2>
+        <p style="margin:0 0 6px;color:var(--muted);font-size:.9rem;">{{call .T "room_consent_text"}}</p>
+        <button id="lk-consent-continue" class="modal-btn">{{call .T "room_consent_continue"}}</button>
+        <button id="lk-consent-leave" class="modal-btn ghost">{{call .T "room_consent_leave"}}</button>
       </div>
     </div>
 
     <!-- Host-only leave modal -->
     <div id="lk-leave-modal" class="modal-overlay hidden">
       <div class="modal">
-        <h2>Leave meeting?</h2>
-        <button id="lk-end-all" class="modal-btn danger">End meeting for everyone</button>
+        <h2>{{call .T "room_leave_modal_title"}}</h2>
+        <button id="lk-end-all" class="modal-btn danger">{{call .T "room_end_for_everyone"}}</button>
         <div id="lk-reassign-wrap" class="hidden">
-          <label for="lk-reassign-sel">Or leave and pass host to</label>
+          <label for="lk-reassign-sel">{{call .T "room_reassign_label"}}</label>
           <select id="lk-reassign-sel"></select>
-          <button id="lk-reassign-leave" class="modal-btn">Leave &amp; pass host</button>
+          <button id="lk-reassign-leave" class="modal-btn">{{call .T "room_leave_and_pass_host"}}</button>
         </div>
-        <button id="lk-just-leave" class="modal-btn ghost">Just leave</button>
-        <button id="lk-leave-cancel" class="modal-btn ghost">Cancel</button>
+        <button id="lk-just-leave" class="modal-btn ghost">{{call .T "room_just_leave"}}</button>
+        <button id="lk-leave-cancel" class="modal-btn ghost">{{call .T "room_cancel"}}</button>
       </div>
     </div>
   </div>

@@ -2,12 +2,21 @@
  *
  * Flow: read the opaque room token (?t) from the URL → prejoin (name + camera/mic preview +
  * device pick) → POST /v1/livekit/token to exchange it for a real LiveKit access token →
- * connect, publish, and render a participant grid with mic/cam/screen-share/leave controls.
- * Scope is the solid core: no chat/recording (added later). */
+ * connect, publish, and render a participant grid with mic/cam/screen-share/leave controls,
+ * plus ephemeral chat, recording (with the consent notice) and the host menu.
+ *
+ * Text: every string this file shows goes through t('room_...'), which reads the table the
+ * server injected (window.__CALNODE_I18N, the visitor's locale — see RoomLogic.translate). */
 (function () {
   'use strict';
   var LK = window.LivekitClient;
   var $ = function (id) { return document.getElementById(id); };
+  var I18N = window.__CALNODE_I18N || {};
+  var LOCALE = document.documentElement.lang || 'en';
+  // t(key, ...args): translated text, %s / %[n]s filled from args. Falls back to the English
+  // in RoomLogic.EN, never to the raw key. NB: don't name a local variable `t` in a function
+  // that calls t() — `var` hoisting would shadow it for the whole function.
+  function t(key) { return RoomLogic.translate(I18N, key, Array.prototype.slice.call(arguments, 1)); }
 
   var ICON = {
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>',
@@ -55,7 +64,7 @@
     sel.innerHTML = '';
     devs.forEach(function (d, i) {
       var o = document.createElement('option');
-      o.value = d.deviceId; o.textContent = cleanLabel(d.label) || ('Device ' + (i + 1));
+      o.value = d.deviceId; o.textContent = cleanLabel(d.label) || t('room_device_fallback', String(i + 1));
       sel.appendChild(o);
     });
   }
@@ -74,7 +83,9 @@
 
   async function startPreview() {
     stopPreview();
-    if (!camOn) { $('lk-preview-off').classList.remove('hidden'); return; }
+    // Set the overlay text in BOTH branches: after a failure it read "Camera unavailable", and a
+    // later switch-off must say "Camera off" again, not keep the stale failure text.
+    if (!camOn) { $('lk-preview-off').textContent = t('room_preview_camera_off'); $('lk-preview-off').classList.remove('hidden'); return; }
     $('lk-preview-off').classList.add('hidden');
     try {
       var opts = {};
@@ -83,25 +94,27 @@
       previewTrack.attach($('lk-preview'));
       await listDevices(); // labels now available
     } catch (e) {
-      camOn = false; syncToggle($('lk-pre-cam'), camOn, 'Camera');
-      $('lk-preview-off').textContent = 'Camera unavailable';
+      camOn = false; syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off');
+      $('lk-preview-off').textContent = t('room_camera_unavailable');
       $('lk-preview-off').classList.remove('hidden');
     }
   }
   function stopPreview() {
     if (previewTrack) { previewTrack.detach(); previewTrack.stop(); previewTrack = null; }
   }
-  function syncToggle(btn, on, label) {
-    btn.textContent = label + (on ? ' on' : ' off');
+  // Two whole-sentence keys, not label + ' on'/' off': word order and gender differ by language
+  // ("Cámara activada", "Micrófono desactivado").
+  function syncToggle(btn, on, onKey, offKey) {
+    btn.textContent = t(on ? onKey : offKey);
     btn.classList.toggle('off', !on);
   }
 
   function initPrejoin() {
-    if (!roomToken) { fail('This meeting link is missing its access token.'); return; }
-    syncToggle($('lk-pre-cam'), camOn, 'Camera');
-    syncToggle($('lk-pre-mic'), micOn, 'Mic');
-    $('lk-pre-cam').onclick = function () { camOn = !camOn; syncToggle($('lk-pre-cam'), camOn, 'Camera'); startPreview(); };
-    $('lk-pre-mic').onclick = function () { micOn = !micOn; syncToggle($('lk-pre-mic'), micOn, 'Mic'); };
+    if (!roomToken) { fail(t('room_error_missing_token')); return; }
+    syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off');
+    syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off');
+    $('lk-pre-cam').onclick = function () { camOn = !camOn; syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off'); startPreview(); };
+    $('lk-pre-mic').onclick = function () { micOn = !micOn; syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off'); };
     $('lk-cam').onchange = startPreview;
     $('lk-join').onclick = join;
     try { $('lk-name').value = localStorage.getItem('calnode_name') || ''; } catch (e) {}
@@ -111,7 +124,7 @@
   // ----- Room -----
   var room = null;
   var tiles = {}; // identity -> { el, video, camoff }
-  var myName = 'Guest';
+  var myName = t('room_guest'); // placeholder only: join() requires a name and overwrites it
   var layoutMode = 'grid';   // 'grid' | 'speaker'
   var pinnedId = null;       // identity manually pinned to the stage (speaker mode)
   var activeSpeakerId = null;
@@ -142,7 +155,8 @@
     if (rb) {
       rb.classList.toggle('hidden', !ui.recordVisible);
       rb.classList.toggle('recording', recording);
-      rb.title = recording ? 'Stop recording' : 'Record meeting';
+      var recLabel = t(recording ? 'room_record_stop' : 'room_record_start');
+      rb.title = recLabel; rb.setAttribute('aria-label', recLabel); // screen readers track the state too
     }
     var sc = $('lk-screen');
     if (sc) sc.classList.toggle('hidden', !ui.screenVisible);
@@ -166,7 +180,15 @@
     if (!m || !m.classList.contains('hidden')) return; // already up
     if (!consentAnnounced) {
       consentAnnounced = true;
-      try { window.speechSynthesis.speak(new SpeechSynthesisUtterance('This meeting is being recorded.')); } catch (e) {}
+      // Browser speech (Web Speech API), not an audio file: speak the translated sentence and say
+      // which language it is, or the browser may read it with a voice for another language.
+      // A device with no voice for the locale falls back to another voice; the written modal
+      // below stays the notice of record.
+      try {
+        var notice = new SpeechSynthesisUtterance(t('room_consent_spoken'));
+        notice.lang = LOCALE;
+        window.speechSynthesis.speak(notice);
+      } catch (e) {}
     }
     m.classList.remove('hidden');
   }
@@ -177,18 +199,18 @@
     var ui = RoomLogic.hostUi(snapshot());
     var share = $('lk-hm-share');
     share.classList.toggle('hidden', !ui.hostActions);
-    share.textContent = (allowShare ? '✓ Guests can share screen' : 'Allow guests to share screen');
+    share.textContent = (allowShare ? '✓ ' + t('room_host_menu_guests_can_share') : t('room_host_menu_allow_guests_share'));
     $('lk-hm-makehost').classList.toggle('hidden', !ui.hostActions);
     var list = $('lk-hm-participants'); list.innerHTML = '';
     if (ui.hostActions) {
       var others = room ? Array.from(room.remoteParticipants.values()) : [];
       if (others.length === 0) {
         var none = document.createElement('div'); none.className = 'hm-empty';
-        none.textContent = 'No one else here yet'; list.appendChild(none);
+        none.textContent = t('room_host_menu_no_one_else'); list.appendChild(none);
       }
       others.forEach(function (p) {
         var b = document.createElement('button'); b.type = 'button'; b.className = 'hm-sub';
-        b.textContent = p.name || 'Participant';
+        b.textContent = p.name || t('room_participant');
         b.onclick = function () { makeHost(p.identity); };
         list.appendChild(b);
       });
@@ -253,16 +275,16 @@
     try {
       var msg = JSON.parse(new TextDecoder().decode(payload));
       if (msg && msg.t === 'chat' && msg.text) {
-        addMsg(msg.name || (participant && participant.name) || 'Guest', String(msg.text), false);
+        addMsg(msg.name || (participant && participant.name) || t('room_guest'), String(msg.text), false);
       }
     } catch (e) { /* ignore non-chat data */ }
   }
   function addMsg(who, text, mine) {
     var empty = $('lk-chat-empty'); if (empty) empty.remove();
     var el = document.createElement('div'); el.className = 'msg' + (mine ? ' me' : '');
-    var w = document.createElement('div'); w.className = 'who'; w.textContent = mine ? 'You' : who;
-    var t = document.createElement('div'); t.textContent = text;
-    el.appendChild(w); el.appendChild(t);
+    var w = document.createElement('div'); w.className = 'who'; w.textContent = mine ? t('room_chat_you') : who;
+    var body = document.createElement('div'); body.textContent = text; // not `t`: that would shadow t()
+    el.appendChild(w); el.appendChild(body);
     var box = $('lk-chat-msgs'); box.appendChild(el); box.scrollTop = box.scrollHeight;
     if (!chatOpen && !mine) { unread++; paintChatBadge(); }
   }
@@ -271,7 +293,7 @@
     if (!text || !room) return;
     var data = new TextEncoder().encode(JSON.stringify({ t: 'chat', name: myName, text: text }));
     try { room.localParticipant.publishData(data, { reliable: true }); } catch (e) {}
-    addMsg('You', text, true);
+    addMsg(t('room_chat_you'), text, true);
   }
   function setChat(open) {
     chatOpen = open;
@@ -305,7 +327,7 @@
     var others = room ? Array.from(room.remoteParticipants.values()) : [];
     var sel = $('lk-reassign-sel'); sel.innerHTML = '';
     others.forEach(function (p) {
-      var o = document.createElement('option'); o.value = p.identity; o.textContent = p.name || 'Participant';
+      var o = document.createElement('option'); o.value = p.identity; o.textContent = p.name || t('room_participant');
       sel.appendChild(o);
     });
     $('lk-reassign-wrap').classList.toggle('hidden', others.length === 0);
@@ -345,8 +367,10 @@
     camoff.innerHTML = '<div class="avatar">' + initial(name) + '</div>';
     var label = document.createElement('div');
     label.className = 'label';
-    label.innerHTML = '<span class="host-badge hidden">Host</span><span class="name"></span><span class="mic-off hidden">' + ICON.micOff + '</span>';
-    label.querySelector('.name').textContent = name + (isLocal ? ' (you)' : '');
+    label.innerHTML = '<span class="host-badge hidden"></span><span class="name"></span><span class="mic-off hidden">' + ICON.micOff + '</span>';
+    // Translated text goes in via textContent, never concatenated into the innerHTML string.
+    label.querySelector('.host-badge').textContent = t('room_host_badge');
+    label.querySelector('.name').textContent = isLocal ? t('room_tile_you', name) : name;
     el.appendChild(video); el.appendChild(camoff); el.appendChild(label);
     el.addEventListener('click', function () { togglePin(identity); });
     $('lk-grid').appendChild(el);
@@ -412,18 +436,22 @@
     if (!name) { $('lk-name').focus(); return; }
     myName = name;
     try { localStorage.setItem('calnode_name', name); } catch (e) {}
-    $('lk-join').disabled = true; $('lk-join').textContent = 'Joining…';
+    $('lk-join').disabled = true; $('lk-join').textContent = t('room_joining');
 
-    var data;
+    // Never show the server's `error` text or the browser's exception message ("livekit: bad
+    // room token signature", "Failed to fetch", a JSON SyntaxError from a proxy's HTML page):
+    // they're English and technical. The message is picked from the status (tokenErrorKey).
+    var data, status;
     try {
       var res = await fetch('/v1/livekit/token', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ t: roomToken, name: name })
       });
+      status = res.status;
+      if (!res.ok) throw new Error('token request failed: ' + status);
       data = await res.json();
-      if (!res.ok) throw new Error(data && data.error ? data.error : 'Could not get a meeting token.');
     } catch (e) {
-      stopPreview(); fail(e.message); return;
+      stopPreview(); fail(t(RoomLogic.tokenErrorKey(status))); return;
     }
     stopPreview();
     accessToken = (data && data.token) || '';
@@ -468,7 +496,7 @@
     try {
       await room.connect(data.url, data.token);
     } catch (e) {
-      fail('Could not connect to the meeting server.'); return;
+      fail(t('room_error_connect')); return;
     }
     showOnly('lk-room');
     tileFor(room.localParticipant.identity, name, true);
@@ -556,7 +584,7 @@
     paint();
   }
 
-  if (!LK) { fail('Video library failed to load.'); }
+  if (!LK) { fail(t('room_error_library')); }
   else if (document.readyState !== 'loading') initPrejoin();
   else document.addEventListener('DOMContentLoaded', initPrejoin);
 })();

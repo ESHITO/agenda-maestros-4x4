@@ -16,7 +16,7 @@
 		// Require a valid address up front — otherwise the request silently no-ops
 		// (the endpoint returns the same generic message), which looks broken.
 		if (!isValidEmail(addr)) {
-			error = 'Enter a valid email address first.';
+			error = 'Ingresa una dirección de correo electrónico válida primero.';
 			return;
 		}
 		error = '';
@@ -30,40 +30,40 @@
 			const data = await res.json().catch(() => ({}));
 			message =
 				data.message ||
-				'If an account with that email exists, a password-reset link is on its way.';
+				'Si existe una cuenta con ese correo electrónico, te enviaremos un enlace para restablecer la contraseña.';
 		} catch {
-			message = 'If an account with that email exists, a password-reset link is on its way.';
+			message = 'Si existe una cuenta con ese correo electrónico, te enviaremos un enlace para restablecer la contraseña.';
 		} finally {
 			submitting = false;
 		}
 	}
 </script>
 
-<svelte:head><title>Forgot password — Calnode</title></svelte:head>
+<svelte:head><title>Olvidé mi contraseña — Calnode</title></svelte:head>
 
 <div class="flex min-h-screen items-center justify-center bg-muted/30 p-6">
 	<div class="w-full max-w-sm">
 		<div class="mb-8 text-center">
-			<h1 class="text-xl font-semibold tracking-tight">Forgot your password?</h1>
+			<h1 class="text-xl font-semibold tracking-tight">¿Olvidaste tu contraseña?</h1>
 			<p class="mt-2 text-sm text-muted-foreground">
-				Enter your account email and we'll send you a link to set a new password.
+				Ingresa el correo electrónico de tu cuenta y te enviaremos un enlace para establecer una nueva contraseña.
 			</p>
 		</div>
 
 		{#if message}
 			<div class="rounded-md bg-green-50 px-3 py-2.5 text-sm text-green-700">{message}</div>
 			<p class="mt-4 text-center text-sm">
-				<a href="/admin/login" class="text-muted-foreground hover:underline">Back to sign in</a>
+				<a href="/admin/login" class="text-muted-foreground hover:underline">Volver a iniciar sesión</a>
 			</p>
 		{:else}
 			<form onsubmit={submit} class="space-y-4">
 				<div class="space-y-1.5">
-					<Label for="email">Email</Label>
+					<Label for="email">Correo electrónico</Label>
 					<Input
 						id="email"
 						type="email"
 						autocomplete="email"
-						placeholder="you@example.com"
+						placeholder="tu@ejemplo.com"
 						bind:value={email}
 						oninput={() => (error = '')}
 						aria-invalid={error ? 'true' : undefined}
@@ -74,11 +74,11 @@
 					{/if}
 				</div>
 				<Button type="submit" class="h-11 w-full" disabled={submitting}>
-					{submitting ? 'Sending…' : 'Send reset link'}
+					{submitting ? 'Enviando…' : 'Enviar enlace de restablecimiento'}
 				</Button>
 			</form>
 			<p class="mt-4 text-center text-sm">
-				<a href="/admin/login" class="text-muted-foreground hover:underline">Back to sign in</a>
+				<a href="/admin/login" class="text-muted-foreground hover:underline">Volver a iniciar sesión</a>
 			</p>
 		{/if}
 	</div>

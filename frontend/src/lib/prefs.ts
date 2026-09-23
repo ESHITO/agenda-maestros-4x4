@@ -62,7 +62,7 @@ export function fmtTime(iso: string, p: UserPrefs = get(prefs)): string {
 	});
 }
 
-export const WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+export const WEEK_DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 export const TIMEZONES = [
 	'Pacific/Auckland',

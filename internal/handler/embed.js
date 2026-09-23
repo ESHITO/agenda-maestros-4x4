@@ -7,7 +7,8 @@
  * pane layout (container-query driven) and a :host reset are widget-specific.
  *
  * Calls the instance's public, CORS-enabled endpoints: /public, /slots, /questions,
- * POST /bookings.
+ * POST /bookings, and /v1/phone-countries (only when the form has a 'phone' question).
+ * The phone picker's flags are <img> from the instance's own /assets/flags/.
  *
  * Usage:
  *   <script src="https://booking.example.com/embed.js" async></script>
@@ -65,6 +66,274 @@
     }
     return out;
   }
+
+  // ── Phone questions: country picker ──────────────────────────────────────────────
+  // Clients and mentors are in many countries, so there is NO default country, ever: the
+  // picker starts from a best guess and may start with nothing chosen. Its data (the
+  // [ISO, calling code] list, a time zone -> country map, and the instance's guess from the
+  // visitor's IP via Cloudflare's CF-IPCountry) comes from GET /v1/phone-countries, fetched
+  // only when the form has a 'phone' question. Country names are never translated by hand:
+  // Intl.DisplayNames gives them in the resolved locale. Flags are the instance's own SVGs
+  // (BASE + /assets/flags/xx.svg), never a third-party CDN.
+  //
+  // The four phone* functions below are DELIBERATE COPIES, verbatim, of the originals in
+  // internal/handler/assets/booking-logic.js (tested there with node --test), which this
+  // widget does not load (see the note on fmt above). Each is self-contained, so the copy is
+  // the whole function: change one, change the other.
+
+  // Mirror of BookingLogic.phoneDetectCountry in booking-logic.js - keep in step.
+  // The country the picker starts on, or '' for none: the server's hint, then the browser's
+  // time zone, then the region of navigator.languages, each only if it is in `known`.
+  function phoneDetectCountry(opts) {
+    var o = opts || {};
+    function isKnown(iso) {
+      var known = o.known;
+      if (!iso || !known) return false;
+      if (typeof known.has === 'function') return known.has(iso);
+      return Array.isArray(known) && known.indexOf(iso) !== -1;
+    }
+    // "es-PE" -> "PE", "zh-Hant-TW" -> "TW" (script skipped), "en_US" -> "US" (some Android
+    // WebViews use '_'); "es-419" (a UN M.49 area, not a country) and "de" -> ''.
+    function regionOf(tag) {
+      var parts = String(tag || '').split(/[-_]/);
+      for (var i = 1; i < parts.length; i++) {
+        if (/^[A-Za-z]{2}$/.test(parts[i])) return parts[i].toUpperCase();
+        // An extlang (3 letters) or a script (4) may come before the region; anything else
+        // (a numeric area, a variant, an extension's singleton) means there is no region.
+        if (!/^[A-Za-z]{3,4}$/.test(parts[i])) break;
+      }
+      return '';
+    }
+
+    var hint = String(o.hint || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(hint) && isKnown(hint)) return hint;
+
+    var tz2cc = o.tz2cc;
+    if (tz2cc && o.timeZone && Object.prototype.hasOwnProperty.call(tz2cc, o.timeZone)) {
+      var byZone = String(tz2cc[o.timeZone] || '').toUpperCase();
+      if (isKnown(byZone)) return byZone;
+    }
+
+    var langs = typeof o.languages === 'string' ? [o.languages] : (o.languages || []);
+    for (var i = 0; i < langs.length; i++) {
+      var region = regionOf(langs[i]);
+      if (isKnown(region)) return region;
+    }
+    return '';
+  }
+
+  // Mirror of BookingLogic.phoneCombine in booking-logic.js - keep in step.
+  // The ONE string a phone answer travels as: "+<dial> <digits>" ("51", "987 654-321" ->
+  // "+51 987654321"); a number typed with a leading '+' keeps its own code; '' with no digits.
+  function phoneCombine(dial, raw) {
+    // Country calling codes form a prefix code (none is the start of another); the one- and
+    // two-digit ones are this fixed list, and every other code has three digits. The node
+    // tests hold it against every code in phone-data.json.
+    var SHORT_CODE = /^(?:1|7|2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/;
+    function ascii(s) {
+      return s.replace(/[\u0660-\u0669\u06f0-\u06f9\uff10-\uff19\uff0b]/g, function (ch) {
+        var c = ch.charCodeAt(0);
+        if (c === 0xff0b) return '+';
+        return String(c <= 0x0669 ? c - 0x0660 : c <= 0x06f9 ? c - 0x06f0 : c - 0xff10);
+      });
+    }
+    var text = ascii(String(raw == null ? '' : raw));
+    var digits = text.replace(/\D/g, '');
+    if (!digits) return '';
+    var code = ascii(String(dial == null ? '' : dial)).replace(/\D/g, '');
+    if (/^\s*\+/.test(text)) {
+      if (!code || digits.indexOf(code) !== 0) {
+        var m = SHORT_CODE.exec(digits);
+        code = m ? m[0] : digits.slice(0, 3);
+      }
+      digits = digits.slice(code.length);
+      return digits ? '+' + code + ' ' + digits : '';
+    }
+    return code ? '+' + code + ' ' + digits : '';
+  }
+
+  // Mirror of BookingLogic.phoneFilter in booking-logic.js - keep in step.
+  // The [iso, dial] pairs matching the search box: by localized name (no case, no accents),
+  // exact ISO code, or calling code ("+34", "34"); exact matches first, then prefixes.
+  function phoneFilter(list, query, nameOf) {
+    function fold(s) {
+      s = String(s == null ? '' : s).toLowerCase();
+      if (s.normalize) s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return s.replace(/[\u2018\u2019\u02bc\u00b4`]/g, "'").replace(/\s+/g, ' ').trim();
+    }
+    function nameFor(iso) {
+      try {
+        var n = nameOf ? nameOf(iso) : '';
+        return n ? String(n) : String(iso);
+      } catch (e) {
+        return String(iso);
+      }
+    }
+    var items = (list || []).slice();
+    var q = fold(query);
+    var groups = [[], [], []];
+    if (/^\+?[\d\s().-]*$/.test(q)) {
+      var qd = q.replace(/\D/g, '');
+      if (!qd) return items;
+      items.forEach(function (c) {
+        var dial = String(c[1]);
+        if (dial === qd) groups[0].push(c);
+        else if (dial.indexOf(qd) === 0) groups[1].push(c);
+        else if (qd.indexOf(dial) === 0) groups[2].push(c);
+      });
+    } else {
+      var iso = q.toUpperCase();
+      items.forEach(function (c) {
+        var name = fold(nameFor(c[0]));
+        if (String(c[0]).toUpperCase() === iso || name === q) { groups[0].push(c); return; }
+        for (var at = name.indexOf(q); at !== -1; at = name.indexOf(q, at + 1)) {
+          if (at === 0 || /[\s'(,./-]/.test(name.charAt(at - 1))) { groups[1].push(c); return; }
+        }
+        if (name.indexOf(q) !== -1) groups[2].push(c);
+      });
+    }
+    return groups[0].concat(groups[1], groups[2]);
+  }
+
+  // Mirror of BookingLogic.phoneSort in booking-logic.js - keep in step.
+  // The pinned ISO codes first, in the order given, then the rest by localized name.
+  function phoneSort(list, nameOf, locale, pinned) {
+    function nameFor(iso) {
+      try {
+        var n = nameOf ? nameOf(iso) : '';
+        return n ? String(n) : String(iso);
+      } catch (e) {
+        return String(iso);
+      }
+    }
+    var plain = function (a, b) { return a < b ? -1 : a > b ? 1 : 0; };
+    var locales = [].concat(locale == null ? [] : locale).filter(function (l) { return !!l; });
+    var compare = plain;
+    try {
+      compare = new Intl.Collator(locales.length ? locales : undefined).compare;
+    } catch (e) {
+      try { compare = new Intl.Collator().compare; } catch (e2) { compare = plain; }
+    }
+    var byIso = {};
+    (list || []).forEach(function (c) { byIso[String(c[0]).toUpperCase()] = c; });
+    var head = [];
+    var taken = {};
+    [].concat(pinned == null ? [] : pinned).forEach(function (p) {
+      var key = String(p).toUpperCase();
+      if (Object.prototype.hasOwnProperty.call(byIso, key) && !taken[key]) {
+        taken[key] = true;
+        head.push(byIso[key]);
+      }
+    });
+    var rest = [];
+    (list || []).forEach(function (c) {
+      var key = String(c[0]).toUpperCase();
+      if (!taken[key]) rest.push({ entry: c, name: nameFor(c[0]), iso: key });
+    });
+    rest.sort(function (a, b) { return compare(a.name, b.name) || plain(a.iso, b.iso); });
+    return head.concat(rest.map(function (r) { return r.entry; }));
+  }
+
+  // PHONE_NO_FLAG: no SVG in assets/flags for these, so they are never requested.
+  var PHONE_NO_FLAG = { AC: true, TA: true };
+  // Any digit phoneCombine accepts: ASCII, Arabic-Indic, Persian and full-width. Same as
+  // PHONE_ANY_DIGIT in book.html (phoneDigits below only counts 0-9, which is right for the
+  // degraded field only, whose value is built from it).
+  var PHONE_ANY_DIGIT = /[0-9\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19]/;
+  function phoneIsIntl(raw) { return /^\s*\+/.test(raw); }
+  function phoneDigits(raw) { return String(raw || '').replace(/\D/g, ''); }
+  // Lower case: /assets/flags/{name} answers only ^[a-z]{2}\.svg$. Absolute, since the
+  // widget runs on the customer's origin.
+  function phoneFlagURL(iso) { return BASE + '/assets/flags/' + iso.toLowerCase() + '.svg'; }
+
+  // phonePickerData: the /v1/phone-countries payload, checked on the way in (it names the
+  // flag URLs and feeds the picker), or null when unusable: the field then degrades.
+  function phonePickerData(d) {
+    var list = (d && Array.isArray(d.countries) ? d.countries : []).filter(function (c) {
+      return Array.isArray(c) && /^[A-Z]{2}$/.test(c[0]) && /^[0-9]{1,4}$/.test(String(c[1]));
+    }).map(function (c) { return [c[0], String(c[1])]; });
+    if (!list.length) return null;
+    return {
+      countries: list,
+      tz2cc: d.tz2cc && typeof d.tz2cc === 'object' ? d.tz2cc : {},
+      visitor_country: typeof d.visitor_country === 'string' ? d.visitor_country : '',
+    };
+  }
+
+  // phoneShared: everything the pickers of one widget share, computed once. Mirrors
+  // phoneShared in book.html's "Phone questions" block, except that the hint arrives as
+  // visitor_country (the API's snake_case) and locale may be '' here, which Intl rejects
+  // with a RangeError, so it is left out rather than passed. Throws if the data is
+  // unusable; the caller then degrades.
+  function phoneShared(data, locale) {
+    var countries = data.countries;
+    if (!countries || !countries.length) throw new Error('no countries');
+    var dialOf = {}, byDial = {}, zones = {}, known = new Set();
+    countries.forEach(function (c) {
+      dialOf[c[0]] = c[1];
+      (byDial[c[1]] = byDial[c[1]] || []).push(c[0]);
+      known.add(c[0]);
+    });
+    // Names from the browser in the resolved locale, never from a hand-made table.
+    // Intl.DisplayNames is missing in old Safari/WebViews and returns the code itself for
+    // rare ones (AC, TA): the ISO code is the last resort either way.
+    var names = null;
+    try { names = new Intl.DisplayNames(locale ? [locale, 'en'] : ['en'], { type: 'region' }); } catch (e) { names = null; }
+    var nameCache = {};
+    var nameOf = function (iso) {
+      if (!nameCache[iso]) {
+        var n = '';
+        try { n = names ? names.of(iso) : ''; } catch (e) { n = ''; }
+        nameCache[iso] = n || iso;
+      }
+      return nameCache[iso];
+    };
+    var detected = '';
+    try {
+      detected = phoneDetectCountry({
+        hint: data.visitor_country || '',
+        // The browser's own zone: this widget has no zone picker, so TZ is exactly that.
+        timeZone: TZ,
+        // navigator.languages carries the region ("es-PE"); the locale the server resolved
+        // usually does not ("es").
+        languages: (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || ''],
+        tz2cc: data.tz2cc || {},
+        known: known,
+      }) || '';
+    } catch (e) { detected = ''; }
+    if (!known.has(detected)) detected = '';
+    // How many time zones each country owns: only used to pick which flag to show when a
+    // typed "+<code>" is shared (US over the other 24 "+1" countries). The stored value is
+    // the same whichever of them is shown.
+    Object.keys(data.tz2cc || {}).forEach(function (z) { var cc = data.tz2cc[z]; zones[cc] = (zones[cc] || 0) + 1; });
+    var sorted = null; // built on first open: nobody pays for sorting 245 names who never opens it
+    var sortedList = function () { return sorted || (sorted = phoneSort(countries.slice(), nameOf, locale, detected)); };
+    return { dialOf: dialOf, byDial: byDial, zones: zones, nameOf: nameOf, detected: detected, sortedList: sortedList };
+  }
+
+  // phoneCountryFor: the country to show for a dial code the visitor typed, or '' if the
+  // data has none. For a shared code: the current choice if it has it, then the detected
+  // country, then the one with the most time zones. Mirror of phoneCountryFor in book.html's
+  // "Phone questions" block - keep in step.
+  function phoneCountryFor(S, code, current) {
+    var cands = S.byDial[code];
+    if (!cands) return '';
+    if (cands.indexOf(current) !== -1) return current;
+    if (cands.indexOf(S.detected) !== -1) return S.detected;
+    return cands.reduce(function (best, iso) { return (S.zones[iso] || 0) > (S.zones[best] || 0) ? iso : best; }, cands[0]);
+  }
+
+  // The country button's fixed insides, the same markup book.html renders: flag (hidden
+  // until there is one), globe (shown when there is none), caret, the chosen country's name
+  // for screen readers, and the code ("+51") or the "Country" label. Static: no data in it.
+  // The space between the two spans keeps the accessible name "Perú +51", not "Perú+51"
+  // (a flex container does not render it).
+  var PHONE_BTN_HTML =
+    '<img class="phone-flag" alt="" width="20" height="15" hidden>' +
+    '<svg class="phone-globe" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>' +
+    '<svg class="phone-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>' +
+    '<span class="phone-sr"></span> ' +
+    '<span class="phone-cc-code"></span>';
 
   var SVG_CLOCK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
   var SVG_PIN = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
@@ -167,6 +436,10 @@
     '.powered a:hover{text-decoration:underline;}' +
     '.loading{padding:48px 24px;color:#6b7280;font-size:.875rem;text-align:center;}' +
     '.infotext{display:block;}' +
+    // Phone picker: its look is booking.css's (.phone-picker and friends, shared verbatim
+    // with book.html). Widget-only: a list flag the host page blocks (its CSP img-src, or
+    // COEP) is swapped for its ISO code, sized here to fit the flag's 20x15 box.
+    '.phone-list .phone-flag-none{font-size:8px;line-height:15px;text-align:center;color:#6b7280;overflow:hidden;}' +
     '@media (max-width:560px){:host([data-modal]) .card{min-height:100dvh;border-radius:0;}}';
 
   function api(path) {
@@ -229,7 +502,15 @@
         this.setAttribute('lang', this.locale || 'en'); // accessibility: announce the resolved language
         this.questions = (r[1] && r[1].items) || [];
         this.ensureAsstDrawer();
-        await this.loadMonth();
+        // Country picker data: only for a form with a 'phone' question, fetched alongside
+        // the first month of slots. Never fatal: a failure must not end in 'Could not load
+        // this booking page.' - the phone field degrades to one plain international input.
+        var phoneReq = this.questions.some(function (q) { return q.type === 'phone'; })
+          ? api('/v1/phone-countries').then(phonePickerData).catch(function () { return null; })
+          : Promise.resolve(null);
+        var ready = await Promise.all([this.loadMonth(), phoneReq]);
+        this.phoneData = ready[1];
+        this.phoneS = undefined; // phoneShared(phoneData), computed on the first form view
         this.render();
       } catch (e) {
         this.wrap.innerHTML = '';
@@ -571,6 +852,283 @@
       }).format(new Date(dayKeyStr + 'T00:00:00'));
     }
 
+    // phoneField builds one 'phone' question: a country picker (button + search + list)
+    // beside the national number. A DELIBERATE MIRROR of the 'phone' branch of book.html
+    // (markup, the booking.css class names, keyboard model, detection order and stored
+    // value) and of phonePicker / phoneFallback in its "Phone questions" script: change one,
+    // change the other. Two controls, ONE answer: the hidden input holds
+    // "+<dial> <digits>" (phoneCombine), so answers[].value stays a plain string and the
+    // webhook payload keeps its shape. It stays EMPTY until there is a country AND digits.
+    // The picker's state is the ISO code, never the dial code: "1" alone is shared by 25
+    // countries (US, CA, DO, PR...).
+    //
+    // Widget-only differences, all forced by the Shadow DOM or the third-party page: ids
+    // are per shadow root (they carry the question id, so two phone questions cannot
+    // collide); the outside-press check reads composedPath(), because a document listener
+    // sees every press inside the widget retargeted to the <calnode-booking> host; flags
+    // use absolute URLs and load as they scroll into the list (IntersectionObserver rooted
+    // on the list: native lazy loading measures against the viewport, which the whole list
+    // is within the margin of, so it would fetch all 243 on a phone), and one the host
+    // page blocks shows its ISO code; the chosen country survives a re-render (back to the
+    // times and forward again).
+    //
+    // S = phoneShared(this.phoneData), or null when the data is missing or unusable: then
+    // the button hides and the number is accepted only in international form, stored as
+    // "+<digits>" (with no dial table there is no knowing where the code ends, so this is
+    // the one case where the value carries no space).
+    //
+    // Returns {field, num, value, check}: value() is the string to send ('' = no answer);
+    // check() is null when the answer is usable, else the control to focus.
+    phoneField(q, S) {
+      var self = this, i18n = this.i18n;
+      var base = 'ans-' + String(q.id).replace(/[^A-Za-z0-9_-]/g, '_');
+      var label = el('label', { id: 'lbl-' + base, for: base + '-num', html: esc(q.label) + (q.required ? ' <span class="required-star">*</span>' : '') });
+      // First control of the .field, as in book.html, whose collector reads the first input
+      // of each field. This widget's own submit calls value() instead of walking the DOM.
+      var hidden = el('input', { type: 'hidden', value: '', 'data-phone-hidden': '' });
+      var btn = el('button', {
+        type: 'button', class: 'phone-cc-btn', id: base + '-cc', 'aria-haspopup': 'listbox', 'aria-expanded': 'false',
+        'aria-controls': base + '-list', 'aria-describedby': 'lbl-' + base, 'data-phone-cc': '', html: PHONE_BTN_HTML,
+      });
+      var flag = btn.querySelector('.phone-flag');
+      var nameEl = btn.querySelector('.phone-sr');
+      var codeEl = btn.querySelector('.phone-cc-code');
+      var num = el('input', { class: 'phone-num', id: base + '-num', type: 'tel', inputmode: 'tel', autocomplete: 'tel-national', maxlength: '20', placeholder: t(i18n, 'phone_number_label'), 'data-phone-num': '' });
+      if (q.required) num.required = true;
+      // No name and no required on the search box: it is not an answer.
+      var search = el('input', {
+        class: 'phone-search', id: base + '-search', type: 'text', role: 'combobox', 'aria-expanded': 'true',
+        'aria-controls': base + '-list', 'aria-autocomplete': 'list', autocomplete: 'off', autocapitalize: 'off',
+        spellcheck: 'false', enterkeyhint: 'done', placeholder: t(i18n, 'phone_country_search'), 'aria-label': t(i18n, 'phone_country_search'),
+      });
+      var list = el('ul', { class: 'phone-list', id: base + '-list', role: 'listbox', 'aria-label': t(i18n, 'phone_country_label') });
+      var empty = el('p', { class: 'phone-empty', role: 'status', text: t(i18n, 'phone_no_results') });
+      empty.hidden = true;
+      var panel = el('div', { class: 'phone-panel', id: base + '-panel' }, [search, list, empty]);
+      panel.hidden = true;
+      var picker = el('div', { class: 'phone-picker' }, [el('div', { class: 'phone-row' }, [btn, num]), panel]);
+      var field = el('div', { class: 'field' }, [label, hidden, picker]);
+      codeEl.textContent = t(i18n, 'phone_country_label');
+
+      if (!S) {
+        btn.hidden = true;
+        num.setAttribute('autocomplete', 'tel');
+        num.placeholder = '+';
+        var syncPlain = function () {
+          var digits = phoneDigits(num.value);
+          hidden.value = phoneIsIntl(num.value) && digits ? '+' + digits : '';
+        };
+        num.addEventListener('input', syncPlain);
+        num.addEventListener('change', syncPlain);
+        syncPlain();
+        return {
+          field: field, num: num,
+          value: function () { syncPlain(); return hidden.value; },
+          check: function () {
+            var digits = phoneDigits(num.value);
+            if (!digits) return q.required ? num : null;
+            return phoneIsIntl(num.value) && digits.length >= 8 && digits.length <= 15 ? null : num;
+          },
+        };
+      }
+
+      this.phoneSel = this.phoneSel || {};
+      var iso = S.dialOf[this.phoneSel[q.id]] ? this.phoneSel[q.id] : S.detected;
+      var nodes = null;     // iso -> <li>, created on first open (243 flags are not loaded up front)
+      var shown = [];       // the [iso, dial] pairs currently listed, in order
+      var active = -1, activeLi = null;
+
+      // As in book.html, phoneCombine gets the number exactly as typed: it drops the
+      // separators, recognises a typed "+<dial>" however it is spaced, and reads Arabic,
+      // Persian and full-width digits and a full-width plus itself. (Pre-normalising with
+      // phoneDigits, which keeps 0-9 only, used to erase such a number entirely.)
+      var sync = function () {
+        hidden.value = iso ? phoneCombine(S.dialOf[iso], num.value) : '';
+      };
+      var renderButton = function () {
+        var hasFlag = !!iso && !PHONE_NO_FLAG[iso];
+        flag.hidden = !hasFlag;
+        if (hasFlag) flag.src = phoneFlagURL(iso); else flag.removeAttribute('src');
+        btn.classList.toggle('has-flag', hasFlag);
+        nameEl.textContent = iso ? S.nameOf(iso) : '';
+        codeEl.textContent = iso ? '+' + S.dialOf[iso] : t(i18n, 'phone_country_label');
+        btn.title = iso ? S.nameOf(iso) + ' +' + S.dialOf[iso] : '';
+      };
+      flag.addEventListener('error', function () { flag.hidden = true; btn.classList.remove('has-flag'); });
+      var setIso = function (code) {
+        if (nodes && nodes[iso]) nodes[iso].setAttribute('aria-selected', 'false');
+        iso = code;
+        self.phoneSel[q.id] = code;
+        if (nodes && nodes[iso]) nodes[iso].setAttribute('aria-selected', 'true');
+        renderButton();
+        sync();
+      };
+
+      var io = null;
+      var loadFlag = function (img) { img.src = img.getAttribute('data-src'); img.removeAttribute('data-src'); };
+      var buildList = function () {
+        nodes = {};
+        if (window.IntersectionObserver) {
+          io = new IntersectionObserver(function (entries) {
+            entries.forEach(function (en) { if (en.isIntersecting) { io.unobserve(en.target); loadFlag(en.target); } });
+          }, { root: list, rootMargin: '160px 0px' });
+        }
+        S.sortedList().forEach(function (c) {
+          var code = c[0], mark;
+          var li = el('li', { class: 'phone-opt' + (code === S.detected ? ' is-pinned' : ''), id: list.id + '-' + code, role: 'option', 'aria-selected': code === iso ? 'true' : 'false', 'data-iso': code });
+          if (PHONE_NO_FLAG[code]) {
+            mark = el('span', { class: 'phone-flag phone-flag-none', 'aria-hidden': 'true' });
+          } else {
+            mark = el('img', { class: 'phone-flag', alt: '', width: '20', height: '15', decoding: 'async' });
+            mark.addEventListener('error', function () {
+              if (mark.parentNode) mark.parentNode.replaceChild(el('span', { class: 'phone-flag phone-flag-none', 'aria-hidden': 'true', text: code }), mark);
+            });
+            if (io) { mark.setAttribute('data-src', phoneFlagURL(code)); io.observe(mark); }
+            else { mark.setAttribute('loading', 'lazy'); mark.src = phoneFlagURL(code); } // loading before src, or it does not apply
+          }
+          li.appendChild(mark);
+          li.appendChild(el('span', { class: 'phone-opt-name', text: S.nameOf(code) }));
+          li.appendChild(el('span', { class: 'phone-opt-dial', text: '+' + c[1] }));
+          nodes[code] = li;
+        });
+      };
+      // Scroll inside the list only: scrollIntoView would scroll the host page too.
+      var scrollToLi = function (li) {
+        var top = li.offsetTop, bottom = top + li.offsetHeight;
+        if (top < list.scrollTop) list.scrollTop = top;
+        else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+      };
+      var setActive = function (i, scroll) {
+        if (activeLi) activeLi.classList.remove('is-active');
+        active = (i >= 0 && i < shown.length) ? i : -1;
+        activeLi = active >= 0 ? nodes[shown[active][0]] : null;
+        if (activeLi) {
+          activeLi.classList.add('is-active');
+          search.setAttribute('aria-activedescendant', activeLi.id);
+          if (scroll !== false) scrollToLi(activeLi);
+        } else {
+          search.removeAttribute('aria-activedescendant');
+        }
+      };
+      var indexOfIso = function (code) {
+        for (var i = 0; i < shown.length; i++) if (shown[i][0] === code) return i;
+        return -1;
+      };
+      // Existing nodes are re-appended in the filter's order: no flag is re-requested per
+      // keystroke, and the search text only ever reaches textContent.
+      var renderList = function () {
+        var qs = search.value;
+        shown = qs.trim() ? phoneFilter(S.sortedList(), qs, S.nameOf) : S.sortedList();
+        var frag = document.createDocumentFragment();
+        shown.forEach(function (c) { if (nodes[c[0]]) frag.appendChild(nodes[c[0]]); });
+        list.textContent = '';
+        list.appendChild(frag);
+        list.hidden = shown.length === 0;
+        empty.hidden = shown.length > 0;
+      };
+
+      var downEvt = window.PointerEvent ? 'pointerdown' : 'mousedown';
+      var onOutside = function (e) {
+        var path = e.composedPath ? e.composedPath() : [e.target];
+        if (path.indexOf(picker) === -1) close(false);
+      };
+      var open = function () {
+        if (!panel.hidden) return;
+        if (!nodes) buildList();
+        search.value = '';
+        renderList();
+        panel.hidden = false;
+        picker.classList.add('is-open');
+        btn.setAttribute('aria-expanded', 'true');
+        var i = indexOfIso(iso);
+        setActive(i >= 0 ? i : 0);
+        search.focus();
+        document.addEventListener(downEvt, onOutside, true);
+      };
+      var close = function (focusBtn) {
+        if (panel.hidden) return;
+        panel.hidden = true;
+        picker.classList.remove('is-open');
+        btn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener(downEvt, onOutside, true);
+        if (focusBtn) btn.focus();
+      };
+      var choose = function (code) {
+        setIso(code);
+        close(false);
+        num.focus();
+      };
+
+      btn.addEventListener('click', function () { if (panel.hidden) open(); else close(true); });
+      btn.addEventListener('keydown', function (e) {
+        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && panel.hidden) { e.preventDefault(); open(); }
+        // stopPropagation: in popup mode Escape also closes the whole popup from a document
+        // listener (keydown is composed and leaves the shadow root), form and all.
+        else if (e.key === 'Escape' && !panel.hidden) { e.preventDefault(); e.stopPropagation(); close(true); }
+      });
+      search.addEventListener('input', function () { renderList(); list.scrollTop = 0; setActive(shown.length ? 0 : -1); });
+      search.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); if (shown.length) setActive(Math.min(active + 1, shown.length - 1)); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); if (shown.length) setActive(Math.max(active - 1, 0)); }
+        // Always swallowed: in a <form>, Enter in a text box is an implicit submit, which
+        // would run the booking handler with a half-filled form.
+        else if (e.key === 'Enter') { e.preventDefault(); if (activeLi) choose(activeLi.getAttribute('data-iso')); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+        // The panel vanishes, so land where the visitor was heading: forward to the number,
+        // back to the country button.
+        else if (e.key === 'Tab') { e.preventDefault(); close(false); (e.shiftKey ? btn : num).focus(); }
+      });
+      list.addEventListener('click', function (e) {
+        var li = e.target.closest ? e.target.closest('.phone-opt') : null;
+        if (li) choose(li.getAttribute('data-iso'));
+      });
+      list.addEventListener('mousemove', function (e) {
+        var li = e.target.closest ? e.target.closest('.phone-opt') : null;
+        if (li && li !== activeLi) setActive(indexOfIso(li.getAttribute('data-iso')), false);
+      });
+
+      // A number typed or pasted in international form ("+34 612...") carries its own code,
+      // which phoneCombine already stores in place of the picked one; this moves the picker
+      // to match, so the flag on screen is the country the webhook gets. Same probe as
+      // book.html: with an empty dial phoneCombine answers only for "+" input (full-width
+      // too), and only once a digit follows a complete code, hence the "0": the flag
+      // follows as soon as the code is typed.
+      var onNumber = function () {
+        var own = phoneCombine('', num.value + '0');
+        if (own) {
+          var found = phoneCountryFor(S, own.slice(1, own.indexOf(' ')), iso);
+          if (found && found !== iso) setIso(found);
+        }
+        sync();
+      };
+      num.addEventListener('input', onNumber);
+      // 'change' as well as 'input': a value can land without an 'input' (browser or
+      // password-manager autofill, which autocomplete="tel-national" invites).
+      num.addEventListener('change', onNumber);
+
+      renderButton();
+      onNumber(); // a restored country or number is reflected before any event fires
+      return {
+        field: field, num: num,
+        value: function () { onNumber(); return hidden.value; },
+        // Mirror of the phoneChecks validator in book.html: it judges the stored string,
+        // i.e. exactly what would be sent.
+        check: function () {
+          onNumber();
+          if (!PHONE_ANY_DIGIT.test(num.value)) return q.required ? num : null;
+          if (!iso) return btn;
+          var m = /^\+(\d+) (\d+)$/.exec(hidden.value);
+          // No number after the code, or a typed "+<code>" the data does not know (so the
+          // picker could not follow it): either way not the chosen country's number.
+          if (!m || m[1] !== S.dialOf[iso]) return num;
+          // At least 6 national digits (the server's validPhone floor counts the code too),
+          // and no more than E.164's 15 in total.
+          if (m[2].length < 6 || m[1].length + m[2].length > 15) return num;
+          return null;
+        },
+      };
+    }
+
     formView(slot) {
       var self = this;
       var back = el('button', { class: 'back-btn', html: SVG_BACK + ' ' + t(this.i18n, 'back') });
@@ -586,7 +1144,9 @@
       if (this.info.allow_phone_call) form.appendChild(el('div', { class: 'field' }, [el('label', { for: 'phone-call-number', text: t(this.i18n, 'phone_call_number') }), phone]));
       var qInputs = [];
       this.questions.forEach(function (q) {
-        var inp, field;
+        // ph stays null for every other type; a non-null ph (the picker built by phoneField)
+        // is what marks this entry as a phone question further down.
+        var inp, field, ph = null;
         if (q.type === 'checkbox') {
           inp = el('input', { type: 'checkbox' });
           // Native required on a checkbox means "must be ticked" — the browser blocks
@@ -598,13 +1158,25 @@
           inp = el('select', {}, [el('option', { value: '', text: t(self.i18n, 'choose_option') })].concat((q.options || []).map(function (o) { return el('option', { value: o, text: o }); })));
           if (q.required) inp.required = true;
           field = el('div', { class: 'field' }, [el('label', { html: esc(q.label) + (q.required ? ' <span class="required-star">*</span>' : '') }), inp]);
+        } else if (q.type === 'phone') {
+          // Country picker + national number (phoneField), ONE stored answer. The shared
+          // country state is computed once per widget. If that or the picker throws (an
+          // Intl quirk in some WebView), the field degrades to the plain international
+          // input: render() has already emptied .wrap, so an exception here would leave
+          // the widget blank right after the visitor picked a time.
+          if (self.phoneS === undefined) {
+            try { self.phoneS = self.phoneData ? phoneShared(self.phoneData, self.locale) : null; } catch (err) { self.phoneS = null; }
+          }
+          try { ph = self.phoneField(q, self.phoneS); } catch (err) { ph = self.phoneField(q, null); }
+          inp = ph.num;
+          field = ph.field;
         } else {
           inp = el('textarea', { rows: '3' });
           if (q.required) inp.required = true;
           field = el('div', { class: 'field' }, [el('label', { html: esc(q.label) + (q.required ? ' <span class="required-star">*</span>' : '') }), inp]);
         }
         form.appendChild(field);
-        qInputs.push({ q: q, inp: inp });
+        qInputs.push({ q: q, inp: inp, ph: ph });
       });
       var errBox = el('p', { class: 'form-error' });
       var cta = el('button', { class: 'btn-primary', type: 'submit', text: t(this.i18n, 'confirm_booking') });
@@ -614,7 +1186,28 @@
         errBox.textContent = '';
         cta.disabled = true; cta.textContent = t(self.i18n, 'confirming');
         var answers = [];
+        // A required phone question left blank is caught here, before the request, with
+        // the same string book.html shows. This form is novalidate, so inp.required is
+        // inert and the widget would otherwise round-trip to the server and surface its
+        // differently-worded err_required_field — the number field would behave one way
+        // on the booking page and another inside the customer's site. Deliberately
+        // phone-only: the other types still rely on the server, as they always have.
+        var badPhone = null;
         qInputs.forEach(function (x) {
+          // Phone questions send ONE combined string, "+51 987654321" (phoneCombine) -
+          // byte-identical to what book.html submits. An empty number omits the answer
+          // entirely: a bare dial code would look non-empty to the server's required check
+          // and fire the WhatsApp webhook at a number that does not exist. check() holds
+          // back the same answers book.html's phoneChecks do: a required one left blank,
+          // digits with no country, a "+<code>" that is not the chosen country's, and a
+          // number too short or too long to be real; badPhone is the control to fix.
+          if (x.ph) {
+            var bad = x.ph.check();
+            if (bad) { if (!badPhone) badPhone = bad; return; }
+            var v = x.ph.value();
+            if (v) answers.push({ question_id: x.q.id, value: v });
+            return;
+          }
           // Checkboxes always send an explicit yes/no, matching book.html — this used to
           // send 'Yes' or omit the answer entirely, which both diverged from the booking
           // page's stored value and made "declined" indistinguishable from "never asked".
@@ -624,6 +1217,12 @@
             answers.push({ question_id: x.q.id, value: x.inp.value });
           }
         });
+        if (badPhone) {
+          errBox.textContent = t(self.i18n, 'required_fields_error');
+          cta.disabled = false; cta.textContent = t(self.i18n, 'confirm_booking');
+          badPhone.focus();
+          return;
+        }
         fetch(BASE + '/v1/bookings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ event_type_slug: self.slug, start_at: slot.start, name: name.value.trim(), email: email.value.trim().toLowerCase(), phone: phone.value.trim(), timezone: TZ, language: self.locale, hp_extra: hp.value, answers: answers }),

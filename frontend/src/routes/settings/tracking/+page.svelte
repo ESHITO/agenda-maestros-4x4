@@ -23,11 +23,11 @@
 	};
 
 	const fieldLabels: Record<string, string> = {
-		booking_id: 'Booking reference', event_type_slug: 'Event type slug', event_type_name: 'Event type name',
-		start_at: 'Start time', end_at: 'End time', status: 'Status', location: 'Location',
-		host_name: 'Host name', attendee_name: 'Attendee name', attendee_email: 'Attendee email',
-		attendee_timezone: 'Attendee timezone', answers: 'Intake answers',
-		value: 'Revenue / amount', currency: 'Currency', is_paid: 'Paid flag', transaction_id: 'Transaction ID'
+		booking_id: 'Referencia de reserva', event_type_slug: 'Slug del tipo de atención', event_type_name: 'Nombre del tipo de atención',
+		start_at: 'Hora de inicio', end_at: 'Hora de fin', status: 'Estado', location: 'Ubicación',
+		host_name: 'Nombre del anfitrión', attendee_name: 'Nombre del asistente', attendee_email: 'Correo del asistente',
+		attendee_timezone: 'Zona horaria del asistente', answers: 'Respuestas del formulario',
+		value: 'Ingreso / monto', currency: 'Moneda', is_paid: 'Indicador de pago', transaction_id: 'ID de transacción'
 	};
 	const piiFields = new Set(['attendee_name', 'attendee_email', 'attendee_timezone', 'answers']);
 
@@ -50,7 +50,7 @@
 		availableFields = t.available_fields ?? [];
 		gtmId = t.gtm_container_id ?? '';
 		ga4Id = t.ga4_measurement_id ?? '';
-	}, 'Could not load tracking settings'));
+	}, 'No se pudo cargar la configuración de seguimiento'));
 
 	function toggleField(key: string) {
 		dlFields = dlFields.includes(key) ? dlFields.filter((f) => f !== key) : [...dlFields, key];
@@ -69,41 +69,42 @@
 			dlFields = t.datalayer_fields ?? [];
 			gtmId = t.gtm_container_id ?? '';
 			ga4Id = t.ga4_measurement_id ?? '';
-			toast.success('Tracking settings saved');
-		}, 'Could not save tracking settings');
+			toast.success('Configuración de seguimiento guardada');
+		}, 'No se pudo guardar la configuración de seguimiento');
 	}
 </script>
 
 <svelte:window onkeydown={saveOnCmdS(save, () => !savingFlag.active)} />
 
 {#if !$currentUser?.is_admin}
-	<p class="text-sm text-muted-foreground">Admin access required.</p>
+	<p class="text-sm text-muted-foreground">Se requiere acceso de administrador.</p>
 {:else if loadingFlag.active}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else}
 	<div class="max-w-2xl space-y-6">
 		<!-- Native GA4 / GTM -->
 		<div class="rounded-lg border bg-card p-6">
 			<h2 class="text-sm font-semibold">Google Analytics &amp; Tag Manager</h2>
 			<p class="mt-0.5 text-xs text-muted-foreground">
-				Enter an ID and Calnode loads the official tag on your booking page automatically — no snippet to
-				paste, and the page's CSP is handled for you. Leave a field blank to turn that tag off.
+				Ingresa un ID y Calnode carga la etiqueta oficial en tu página de reserva automáticamente, sin necesidad
+				de pegar ningún fragmento de código, y el CSP de la página se gestiona por ti. Deja un campo en blanco
+				para desactivar esa etiqueta.
 			</p>
 			<div class="mt-4 grid gap-4 sm:grid-cols-2">
 				<div class="space-y-1.5">
-					<Label for="gtm-id">GTM Container ID</Label>
+					<Label for="gtm-id">ID de contenedor de GTM</Label>
 					<Input id="gtm-id" bind:value={gtmId} placeholder="GTM-XXXXXXX" class="font-mono" />
 					<p class="text-xs text-muted-foreground">
-						Recommended — manages GA4 + Ads tags. Trigger them on the
-						<code class="rounded bg-muted px-1">calnode_booking_confirmed</code> dataLayer event below.
+						Recomendado — gestiona las etiquetas de GA4 + Ads. Actívalas con el evento
+						<code class="rounded bg-muted px-1">calnode_booking_confirmed</code> del dataLayer de abajo.
 					</p>
 				</div>
 				<div class="space-y-1.5">
-					<Label for="ga4-id">GA4 Measurement ID</Label>
+					<Label for="ga4-id">ID de medición de GA4</Label>
 					<Input id="ga4-id" bind:value={ga4Id} placeholder="G-XXXXXXXXXX" class="font-mono" />
 					<p class="text-xs text-muted-foreground">
-						Loads GA4 directly. Bookings fire a <code class="rounded bg-muted px-1">purchase</code> /
-						<code class="rounded bg-muted px-1">generate_lead</code> event with revenue.
+						Carga GA4 directamente. Las reservas disparan un evento <code class="rounded bg-muted px-1">purchase</code> /
+						<code class="rounded bg-muted px-1">generate_lead</code> con el ingreso.
 					</p>
 				</div>
 			</div>
@@ -111,24 +112,26 @@
 
 		<!-- Code injection -->
 		<div class="rounded-lg border bg-card p-6">
-			<h2 class="text-sm font-semibold">Code injection (head)</h2>
+			<h2 class="text-sm font-semibold">Inyección de código (head)</h2>
 			<p class="mt-0.5 text-xs text-muted-foreground">
-				Raw HTML/JS injected into the &lt;head&gt; of your public booking and manage pages — for any tag
-				<em>not</em> covered above (Meta Pixel, Plausible, custom). It runs on visitors' browsers; only admins can set it.
+				HTML/JS sin procesar que se inyecta en el &lt;head&gt; de tus páginas públicas de reserva y gestión — para
+				cualquier etiqueta <em>no</em> cubierta arriba (Meta Pixel, Plausible, personalizada). Se ejecuta en los
+				navegadores de los visitantes; solo los administradores pueden configurarlo.
 			</p>
 			<div class="mt-4 space-y-1.5">
-				<Label for="head-html">&lt;head&gt; HTML</Label>
+				<Label for="head-html">HTML del &lt;head&gt;</Label>
 				<Textarea id="head-html" bind:value={headHtml} rows={8} class="font-mono text-xs"
-					placeholder="<!-- Paste your GTM / GA4 / Meta Pixel snippet here -->" />
+					placeholder="<!-- Pega aquí tu fragmento de GTM / GA4 / Meta Pixel -->" />
 			</div>
 			<div class="mt-4 space-y-1.5">
-				<Label for="csp-allow">Allowed origins <span class="font-normal text-muted-foreground">(optional)</span></Label>
+				<Label for="csp-allow">Orígenes permitidos <span class="font-normal text-muted-foreground">(opcional)</span></Label>
 				<Input id="csp-allow" bind:value={cspAllow}
 					placeholder="https://www.googletagmanager.com https://*.google-analytics.com" />
 				<p class="text-xs text-muted-foreground">
-					Leave blank to allow any <code class="rounded bg-muted px-1">https:</code> origin while injection is
-					active — simplest, and GTM-managed tags just work. Fill in to lock the page's CSP to only these
-					origins (space-separated); tags from other domains will then be blocked.
+					Déjalo en blanco para permitir cualquier origen <code class="rounded bg-muted px-1">https:</code> mientras
+					la inyección esté activa — es lo más simple, y las etiquetas gestionadas por GTM funcionan sin problema.
+					Complétalo para restringir el CSP de la página solo a estos orígenes (separados por espacios); las
+					etiquetas de otros dominios quedarán bloqueadas.
 				</p>
 			</div>
 		</div>
@@ -137,12 +140,12 @@
 		<div class="rounded-lg border bg-card p-6">
 			<div class="flex items-start justify-between gap-4">
 				<div>
-					<h2 class="text-sm font-semibold">dataLayer events</h2>
+					<h2 class="text-sm font-semibold">Eventos de dataLayer</h2>
 					<p class="mt-0.5 text-xs text-muted-foreground">
-						Push <code class="rounded bg-muted px-1">calnode_booking_confirmed</code> /
+						Envía <code class="rounded bg-muted px-1">calnode_booking_confirmed</code> /
 						<code class="rounded bg-muted px-1">_cancelled</code> /
-						<code class="rounded bg-muted px-1">_rescheduled</code> into
-						<code class="rounded bg-muted px-1">window.dataLayer</code> so GTM can trigger on them.
+						<code class="rounded bg-muted px-1">_rescheduled</code> a
+						<code class="rounded bg-muted px-1">window.dataLayer</code> para que GTM pueda activarse con ellos.
 					</p>
 				</div>
 				<Switch bind:checked={dlEnabled} />
@@ -150,7 +153,7 @@
 			{#if dlEnabled}
 				<div class="mt-4 space-y-2">
 					<p class="text-xs font-medium text-muted-foreground">
-						Fields to include — untick anything you don't want exposed to the browser / GTM.
+						Campos a incluir — desmarca lo que no quieras exponer al navegador / GTM.
 					</p>
 					<div class="grid grid-cols-2 gap-x-4 gap-y-1">
 						{#each availableFields as key}
@@ -164,6 +167,6 @@
 			{/if}
 		</div>
 
-		<Button onclick={save} disabled={savingFlag.active}>{savingFlag.active ? 'Saving…' : 'Save'}</Button>
+		<Button onclick={save} disabled={savingFlag.active}>{savingFlag.active ? 'Guardando…' : 'Guardar'}</Button>
 	</div>
 {/if}

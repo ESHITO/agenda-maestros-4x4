@@ -6,10 +6,17 @@ import (
 	"time"
 )
 
-// ListUsers handles GET /v1/users — admin only. Returns all users.
+// ListUsers handles GET /v1/users — admin, or support. Returns all users.
+//
+// Support reads this list and nothing else on this route file: every mutation
+// below (DeleteUser, and the invite/archive/role endpoints elsewhere) keeps its
+// own admin/owner check, so read access here does not widen anything. It is the
+// lookup support needs to turn "a member wrote in" into the user id behind the
+// bookings it is allowed to cancel and reschedule. The payload carries no
+// secrets — name, email, tier, auth provider, teams.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	admin, ok := userFromContext(r.Context())
-	if !ok || !admin.IsAdmin {
+	if !ok || !(admin.IsAdmin || admin.IsSupport) {
 		h.writeError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -21,7 +28,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		where = ""
 	}
 	rows, err := h.db.QueryContext(r.Context(), `
-		SELECT u.id, u.email, u.name, u.iana_timezone, u.is_admin, u.is_owner, u.email_login,
+		SELECT u.id, u.email, u.name, u.iana_timezone, u.is_admin, u.is_owner, u.is_support, u.email_login,
 		       COALESCE(u.provider,''), COALESCE(u.avatar_url,''), u.created_at,
 		       u.archived_at, COALESCE(u.archived_by,''), COALESCE(ab.name,'')
 		FROM users u LEFT JOIN users ab ON ab.id = u.archived_by
@@ -44,7 +51,8 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		Timezone       string    `json:"timezone"`
 		IsAdmin        bool      `json:"is_admin"`
 		IsOwner        bool      `json:"is_owner"`
-		Role           string    `json:"role"` // "owner" | "admin" | "member"
+		IsSupport      bool      `json:"is_support"`
+		Role           string    `json:"role"` // "owner" | "admin" | "support" | "member"
 		EmailLogin     bool      `json:"email_login"`
 		Provider       string    `json:"provider,omitempty"`
 		AvatarURL      string    `json:"avatar_url,omitempty"`
@@ -59,23 +67,32 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	byID := map[string]*userRow{}
 	for rows.Next() {
 		var u userRow
-		var isAdmin, isOwner, emailLogin int
+		var isAdmin, isOwner, isSupport, emailLogin int
 		var archivedAt sql.NullString
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Timezone, &isAdmin, &isOwner, &emailLogin,
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Timezone, &isAdmin, &isOwner, &isSupport, &emailLogin,
 			&u.Provider, &u.AvatarURL, &u.CreatedAt, &archivedAt, &u.ArchivedBy, &u.ArchivedByName); err != nil {
 			continue
 		}
 		u.IsAdmin = isAdmin != 0
 		u.IsOwner = isOwner != 0
+		u.IsSupport = isSupport != 0
 		u.EmailLogin = emailLogin != 0
 		u.Archived = archivedAt.Valid
 		u.ArchivedAt = archivedAt.String
 		u.Teams = []teamRef{}
+		// Same precedence as AuthUser.Role() (auth.go): Owner > Admin > Support >
+		// Member. Support MUST appear here: this list is the only place the owner
+		// sees who holds which tier, and it is what the members page binds the role
+		// selector to. Omitting it reported a support user as a plain "member",
+		// which both hid the privilege and made the selector's "Miembro" option a
+		// no-op change — leaving is_support = 1 set with no way to revoke it.
 		switch {
 		case u.IsOwner:
 			u.Role = "owner"
 		case u.IsAdmin:
 			u.Role = "admin"
+		case u.IsSupport:
+			u.Role = "support"
 		default:
 			u.Role = "member"
 		}

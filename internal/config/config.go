@@ -51,6 +51,14 @@ type Config struct {
 	// that mounts a volume elsewhere.
 	DataDir string
 
+	// ForceLocale pins every public surface (booking and manage pages, the embed
+	// widget's payload, emails, the video room) to one locale, ignoring ?lang=, the
+	// language cookie and Accept-Language, and hides the language switcher. Empty
+	// (the default) keeps per-visitor resolution. For operators whose audience shares
+	// one language but not one browser setting — e.g. Spanish-speaking members abroad
+	// on borrowed computers set to English. Unsupported codes are ignored at boot.
+	ForceLocale string
+
 	// CookieSecure sets the Secure flag on session cookies. Defaults to true
 	// when BASE_URL starts with https://, but can be overridden explicitly via
 	// COOKIE_SECURE=false for HTTPS-terminated-at-proxy setups where the binary
@@ -133,6 +141,7 @@ func Load() *Config {
 
 		EmbedAllowedOrigins: splitCSV(getEnv("EMBED_ALLOWED_ORIGINS", "")),
 		DataDir:             getEnv("DATA_DIR", "data"),
+		ForceLocale:         strings.TrimSpace(getEnv("FORCE_LOCALE", "")),
 		TrustedProxyCIDRs:   splitCSV(getEnv("TRUSTED_PROXY_CIDRS", "")),
 		// Space-separated, not comma: the value goes into a CSP source list verbatim, so
 		// it reads the same in the env var as it does in the header.

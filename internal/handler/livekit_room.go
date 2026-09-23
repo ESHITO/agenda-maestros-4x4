@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/calnode/calnode/internal/i18n"
 )
 
 //go:embed templates/livekit-room.html
@@ -45,24 +47,99 @@ var (
 	liveKitRoomJSVer = strings.Trim(liveKitRoomJSETag, `"`)
 )
 
+// liveKitRoomPageData feeds templates/livekit-room.html. A struct, not a map: T is a
+// function and I18NJSON a template.JS, and a missing T would make {{call .T …}} fail
+// mid-render and cut the page off.
+type liveKitRoomPageData struct {
+	SDKVer       string
+	RoomVer      string
+	LogoURL      string // relative, same-origin; empty = no logo
+	BusinessName string
+	// Locale/T/I18NJSON follow bookPageData: T resolves one key server-side for the static
+	// markup; I18NJSON is the same locale's room_* strings, read by livekit-room.js through
+	// window.__CALNODE_I18N for the text it writes itself.
+	Locale   string
+	T        func(string) string
+	I18NJSON template.JS
+}
+
+// roomI18NPrefix scopes the string table the room page ships to the room's own keys: the
+// room JS never looks up a booking-page string, so there is no reason to send it ~9 KB of them
+// on every (uncacheable) load.
+const roomI18NPrefix = "room_"
+
+// liveKitRoomI18N holds each shipped locale's room_* table, already JSON-encoded. Built once:
+// locale tables are fixed at init, and internal/i18n is initialised before this package.
+var liveKitRoomI18N = buildLiveKitRoomI18N()
+
+func buildLiveKitRoomI18N() map[string][]byte {
+	out := make(map[string][]byte)
+	for _, opt := range i18n.SupportedLocales() {
+		out[opt.Code] = roomStringTable(i18n.Get(opt.Code))
+	}
+	return out
+}
+
+// roomStringTable is loc's slice of the ONE translation table (no second string system):
+// the room_* keys, taken from English (the reference key set the i18n guards hold every
+// locale to), each resolved through loc.T so a missing translation falls back to English
+// exactly as it does server-side. json.Marshal escapes <, > and &, so the result is safe to
+// embed in a <script> block — the same guarantee Locale.JSON gives book.html.
+func roomStringTable(loc *i18n.Locale) []byte {
+	var all map[string]string
+	if en, err := i18n.Default().JSON(); err == nil {
+		_ = json.Unmarshal(en, &all)
+	}
+	room := make(map[string]string)
+	for k := range all {
+		if strings.HasPrefix(k, roomI18NPrefix) {
+			room[k] = loc.T(k)
+		}
+	}
+	b, err := json.Marshal(room)
+	if err != nil {
+		return []byte("{}") // never empty: "window.__CALNODE_I18N = ;" would be a syntax error
+	}
+	return b
+}
+
+// liveKitRoomI18NJSON returns the room_* string table for loc.
+func liveKitRoomI18NJSON(loc *i18n.Locale) []byte {
+	if b, ok := liveKitRoomI18N[loc.Code]; ok {
+		return b
+	}
+	return roomStringTable(loc) // defensive: every resolved locale is in the map
+}
+
 // LiveKitRoom serves the public video-room page at GET /room/{room}. The page itself is
 // static; the opaque room token travels in the query string and the room JS exchanges it for
 // a real LiveKit token via LiveKitToken. 404s when LiveKit isn't configured.
+//
+// The page is rendered in the visitor's language, resolved per request exactly as book.html
+// and manage.html do it (?lang= > calnode_lang cookie > Accept-Language > the operator's
+// fallback). So each participant sees the room UI in their own language, and someone who
+// picked Spanish on the booking page (the cookie is Path=/) lands in a Spanish room.
 func (h *Handler) LiveKitRoom(w http.ResponseWriter, r *http.Request) {
 	if h.getLiveKit() == nil {
 		h.writeError(w, http.StatusNotFound, "video meetings are not configured on this instance")
 		return
 	}
 	brand := h.loadBranding(r.Context())
+	loc := h.resolveLocaleWithFallback(r, brand.FallbackLocale) // brand already loaded: no second server_settings read
+	h.persistLangOverride(w, r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	// The HTML carries content-versioned asset URLs, so it must never be cached itself.
 	w.Header().Set("Cache-Control", "no-store")
-	if err := liveKitRoomTmpl.Execute(w, map[string]string{
-		"SDKVer":       liveKitSDKVer,
-		"RoomVer":      liveKitRoomJSVer,
-		"LogoURL":      brand.LogoURL, // relative, same-origin; empty = no logo
-		"BusinessName": brand.BusinessName,
+	w.Header().Set("Vary", "Accept-Language, Cookie") // see the same header in book.go's BookPage
+	if err := liveKitRoomTmpl.Execute(w, liveKitRoomPageData{
+		SDKVer:       liveKitSDKVer,
+		RoomVer:      liveKitRoomJSVer,
+		LogoURL:      brand.LogoURL,
+		BusinessName: brand.BusinessName,
+		Locale:       loc.Code,
+		T:            loc.T,
+		I18NJSON:     template.JS(liveKitRoomI18NJSON(loc)), // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block
 	}); err != nil {
 		h.logger.ErrorContext(r.Context(), "livekit room: render", "error", err)
 	}

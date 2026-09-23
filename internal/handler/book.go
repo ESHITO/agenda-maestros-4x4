@@ -22,7 +22,8 @@ import (
 var bookTmplSrc string
 
 // bookingLogicJS is the shared pure date/slot/format module (booking-logic.js), inlined into the
-// book + manage pages and prepended to embed.js so all three booking surfaces share one tested copy.
+// book + manage pages. embed.js does NOT get it (EmbedJS serves that file as is): the widget
+// carries deliberate, commented mirrors of the few helpers it needs.
 //
 //go:embed assets/booking-logic.js
 var bookingLogicJS string
@@ -89,6 +90,8 @@ type bookPageData struct {
 	Locale   string
 	T        func(string) string
 	I18NJSON template.JS
+	// LocaleForced (FORCE_LOCALE) hides the language switcher in the shared footer.
+	LocaleForced bool
 	// Tracking
 	HeadHTML         template.HTML // operator-configured <head> code injection (trusted)
 	GTMContainerID   string        // native GTM container (validated GTM-XXXX); "" = off
@@ -96,6 +99,10 @@ type bookPageData struct {
 	DataLayerEnabled bool
 	DataLayerFields  template.JS // JSON array of enabled dataLayer field keys
 	QuestionsJSON    template.JS // {questionID: label} map for labelling answers in dataLayer
+	// PhoneDataJSON is window.__CALNODE_PHONE ({countries, tz2cc, visitorCountry}) for the
+	// "phone" question's country picker; see phonePageJSON. Empty = the event type has no
+	// phone question, and the template emits nothing (no ~13 KB on every booking page).
+	PhoneDataJSON template.JS
 	// Branding
 	BusinessName  string
 	LogoURL       string
@@ -506,6 +513,15 @@ func (h *Handler) BookPage(w http.ResponseWriter, r *http.Request) {
 	}
 	qjson, _ := json.Marshal(qmap)
 
+	// Country-picker data, only when some question asks for a phone number.
+	var phoneJSON []byte
+	for _, q := range questions {
+		if q.QType == "phone" {
+			phoneJSON = phonePageJSON(r)
+			break
+		}
+	}
+
 	loc := h.resolveLocaleWithFallback(r, brand.FallbackLocale)
 	i18nJSON, _ := loc.JSON()
 
@@ -527,6 +543,7 @@ func (h *Handler) BookPage(w http.ResponseWriter, r *http.Request) {
 		LocationLabel:       locationLabel(locType, locValue, loc),
 		PriceLabel:          formatPrice(priceCents, currency),
 		Locale:              loc.Code,
+		LocaleForced:        h.localeForced(),
 		T:                   loc.T,
 		I18NJSON:            template.JS(i18nJSON), // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block
 		PriceCents:          priceCents,
@@ -545,6 +562,8 @@ func (h *Handler) BookPage(w http.ResponseWriter, r *http.Request) {
 		DataLayerEnabled: track.DataLayerEnabled,
 		DataLayerFields:  template.JS(dlFields), // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block
 		QuestionsJSON:    template.JS(qjson),    // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block
+
+		PhoneDataJSON: template.JS(phoneJSON), // #nosec G203 -- json.Marshal output of embedded data plus visitorCountry, which admits only two A-Z letters; escapes <,>,& by default; safe for embedding in a <script> block
 
 		BusinessName:  brand.BusinessName,
 		LogoURL:       brand.LogoURL,
@@ -565,7 +584,13 @@ func (h *Handler) BookPage(w http.ResponseWriter, r *http.Request) {
 	// The body varies by resolved locale (Accept-Language, or the calnode_lang override
 	// cookie) — without this, a shared cache/CDN in front of a self-hosted instance would
 	// serve the first visitor's language to everyone. See internal-docs/i18n-plan.md.
-	w.Header().Set("Vary", "Accept-Language, Cookie")
+	// With a phone question the body also carries the visitor's CF-IPCountry (the picker's
+	// starting country), so it varies by that header too.
+	vary := "Accept-Language, Cookie"
+	if len(phoneJSON) > 0 {
+		vary += ", CF-IPCountry"
+	}
+	w.Header().Set("Vary", vary)
 	if err := bookTmpl.Execute(w, data); err != nil {
 		h.logger.ErrorContext(r.Context(), "book page: template", "error", err)
 	}

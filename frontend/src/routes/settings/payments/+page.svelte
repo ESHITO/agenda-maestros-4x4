@@ -34,7 +34,7 @@
 			settings = await api.patch<StripeSettings>('/v1/settings/stripe', body);
 			secretKey = '';
 			webhookSecret = '';
-			toast.success('Saved — set a price on an event type to start charging');
+			toast.success('Guardado — configura un precio en un tipo de atención para empezar a cobrar');
 		}, 'Could not save payment settings');
 	}
 
@@ -42,7 +42,7 @@
 		await savingFlag.run(async () => {
 			settings = await api.patch<StripeSettings>('/v1/settings/stripe', { clear: true });
 			secretKey = publishableKey = webhookSecret = '';
-			toast.success('Stripe disconnected');
+			toast.success('Stripe desconectado');
 		}, 'Could not disconnect');
 	}
 </script>
@@ -50,39 +50,39 @@
 <svelte:window onkeydown={saveOnCmdS(save, () => !savingFlag.active)} />
 
 {#if !$currentUser?.is_admin}
-	<p class="text-sm text-muted-foreground">Admin access required.</p>
+	<p class="text-sm text-muted-foreground">Se requiere acceso de administrador.</p>
 {:else}
 
 {#if loadingFlag.active}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else}
 	<div class="max-w-lg space-y-4">
 
 		{#if !settings?.configured}
 		<div class="rounded-lg border bg-card p-6">
-			<h2 class="mb-4 text-sm font-semibold">Setup instructions</h2>
+			<h2 class="mb-4 text-sm font-semibold">Instrucciones de configuración</h2>
 			<ol class="space-y-4 text-sm">
 				<li class="flex gap-3">
 					<span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">1</span>
 					<div>
-						In your <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="font-medium text-primary underline">Stripe Dashboard → Developers → API keys</a>,
-						copy the <span class="font-medium">Secret key</span> and <span class="font-medium">Publishable key</span>.
+						En tu <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="font-medium text-primary underline">Panel de Stripe → Desarrolladores → Claves de API</a>,
+						copia la <span class="font-medium">Clave secreta</span> y la <span class="font-medium">Clave publicable</span>.
 					</div>
 				</li>
 				<li class="flex gap-3">
 					<span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">2</span>
 					<div>
-						Go to <span class="font-medium">Developers → Webhooks → Add endpoint</span> and set the URL to:
+						Ve a <span class="font-medium">Desarrolladores → Webhooks → Agregar endpoint</span> y configura la URL como:
 						<code class="mt-1 block rounded bg-muted px-2 py-1 text-xs font-mono break-all">{webhookURL}</code>
-						Subscribe to <code class="rounded bg-muted px-1">checkout.session.completed</code> and
+						Suscríbete a <code class="rounded bg-muted px-1">checkout.session.completed</code> y
 						<code class="rounded bg-muted px-1">checkout.session.expired</code>.
 					</div>
 				</li>
 				<li class="flex gap-3">
 					<span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">3</span>
 					<div>
-						Copy the endpoint's <span class="font-medium">Signing secret</span> (<code class="rounded bg-muted px-1">whsec_…</code>),
-						paste all three values below, and save.
+						Copia el <span class="font-medium">Secreto de firma</span> del endpoint (<code class="rounded bg-muted px-1">whsec_…</code>),
+						pega los tres valores abajo y guarda.
 					</div>
 				</li>
 			</ol>
@@ -94,55 +94,55 @@
 				<div>
 					<h2 class="text-sm font-semibold">Stripe</h2>
 					<p class="mt-0.5 text-xs text-muted-foreground">
-						Lets you charge for bookings. An event type with a price sends the booker to Stripe
-						Checkout before the slot is confirmed.
+						Te permite cobrar por las reservas. Un tipo de atención con un precio envía a quien reserva a Stripe
+						Checkout antes de confirmar el horario.
 					</p>
 				</div>
 				{#if settings !== null}
 					<span class="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium {settings.configured ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}">
 						<span class="h-1.5 w-1.5 rounded-full {settings.configured ? 'bg-green-500' : 'bg-amber-400'}"></span>
-						{settings.configured ? 'Configured' : 'Not configured'}
+						{settings.configured ? 'Configurado' : 'No configurado'}
 					</span>
 				{/if}
 			</div>
 
 			<div class="space-y-3">
 				<div class="space-y-1.5">
-					<Label for="s-secret">Secret key</Label>
+					<Label for="s-secret">Clave secreta</Label>
 					<Input id="s-secret" type="password"
-						placeholder={settings?.secret_key_set ? '•••••••• (stored)' : 'sk_live_… or sk_test_…'}
+						placeholder={settings?.secret_key_set ? '•••••••• (guardada)' : 'sk_live_… o sk_test_…'}
 						bind:value={secretKey} />
 					{#if settings?.secret_key_set && !secretKey}
-						<p class="text-xs text-muted-foreground">Stored — leave blank to keep it.</p>
+						<p class="text-xs text-muted-foreground">Guardada — déjalo en blanco para conservarla.</p>
 					{/if}
 				</div>
 				<div class="space-y-1.5">
-					<Label for="s-pub">Publishable key</Label>
-					<Input id="s-pub" type="text" placeholder="pk_live_… or pk_test_…" bind:value={publishableKey} />
+					<Label for="s-pub">Clave publicable</Label>
+					<Input id="s-pub" type="text" placeholder="pk_live_… o pk_test_…" bind:value={publishableKey} />
 				</div>
 				<div class="space-y-1.5">
-					<Label for="s-wh">Webhook signing secret</Label>
+					<Label for="s-wh">Secreto de firma del webhook</Label>
 					<Input id="s-wh" type="password"
-						placeholder={settings?.webhook_secret_set ? '•••••••• (stored)' : 'whsec_…'}
+						placeholder={settings?.webhook_secret_set ? '•••••••• (guardado)' : 'whsec_…'}
 						bind:value={webhookSecret} />
 					{#if settings?.webhook_secret_set && !webhookSecret}
-						<p class="text-xs text-muted-foreground">Stored — leave blank to keep it.</p>
+						<p class="text-xs text-muted-foreground">Guardado — déjalo en blanco para conservarlo.</p>
 					{/if}
 				</div>
 			</div>
 
 			{#if settings?.configured}
 				<div class="mt-5 border-t pt-4">
-					<p class="text-xs font-medium text-muted-foreground">Webhook endpoint</p>
-					<p class="mt-0.5 text-xs text-muted-foreground">Register this in Stripe → Developers → Webhooks.</p>
+					<p class="text-xs font-medium text-muted-foreground">Endpoint del webhook</p>
+					<p class="mt-0.5 text-xs text-muted-foreground">Regístralo en Stripe → Desarrolladores → Webhooks.</p>
 					<code class="mt-2 block rounded bg-muted px-2 py-1 text-xs font-mono break-all">{webhookURL}</code>
 				</div>
 			{/if}
 
 			<div class="mt-5 flex items-center gap-2">
-				<Button onclick={save} disabled={savingFlag.active}>{savingFlag.active ? 'Saving…' : 'Save'}</Button>
+				<Button onclick={save} disabled={savingFlag.active}>{savingFlag.active ? 'Guardando…' : 'Guardar'}</Button>
 				{#if settings?.configured}
-					<Button variant="outline" onclick={() => (confirmDisconnectOpen = true)} disabled={savingFlag.active}>Disconnect</Button>
+					<Button variant="outline" onclick={() => (confirmDisconnectOpen = true)} disabled={savingFlag.active}>Desconectar</Button>
 				{/if}
 			</div>
 		</div>
@@ -152,9 +152,9 @@
 
 <ConfirmDialog
 	bind:open={confirmDisconnectOpen}
-	title="Remove Stripe credentials?"
-	description="Paid event types will stop being bookable."
-	confirmText="Remove"
+	title="¿Eliminar las credenciales de Stripe?"
+	description="Los tipos de atención de pago dejarán de poder reservarse."
+	confirmText="Eliminar"
 	destructive
 	onConfirm={disconnect}
 />

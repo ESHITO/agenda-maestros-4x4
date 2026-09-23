@@ -78,6 +78,8 @@ type managePageData struct {
 	Locale   string
 	T        func(string) string
 	I18NJSON template.JS
+	// LocaleForced (FORCE_LOCALE) hides the language switcher in the shared footer.
+	LocaleForced bool
 }
 
 // ManagePage renders the attendee manage page for a booking (reschedule / cancel).
@@ -188,6 +190,7 @@ func (h *Handler) renderManage(w http.ResponseWriter, r *http.Request, data mana
 	data.BookingLogicJS = template.JS(bookingLogicJS) // #nosec G203 -- our own bundled JS source constant, not user input
 	data.DemoMode = h.demoMode
 	data.Locale = loc.Code
+	data.LocaleForced = h.localeForced()
 	data.T = loc.T
 	i18nJSON, _ := loc.JSON()
 	data.I18NJSON = template.JS(i18nJSON) // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block

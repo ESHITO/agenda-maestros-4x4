@@ -156,14 +156,16 @@ func (h *Handler) CreateQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Type {
-	case "text", "checkbox":
+	// 'phone' carries no options — it is a free-text answer rendered as a country
+	// selector + number field, stored as one combined string ("+51 987654321").
+	case "text", "checkbox", "phone":
 	case "select":
 		if len(req.Options) == 0 {
 			h.writeError(w, http.StatusBadRequest, "options is required for type 'select'")
 			return
 		}
 	default:
-		h.writeError(w, http.StatusBadRequest, "type must be one of: text, select, checkbox")
+		h.writeError(w, http.StatusBadRequest, "type must be one of: text, select, checkbox, phone")
 		return
 	}
 
@@ -288,10 +290,13 @@ func (h *Handler) UpdateQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Type != nil {
 		switch *req.Type {
-		case "text", "checkbox", "select":
+		// Keep this set in step with CreateQuestion above and with the CHECK on
+		// event_type_questions.type (00063) — a type accepted here but missing from
+		// the CHECK fails as a 500 instead of a 400.
+		case "text", "checkbox", "select", "phone":
 			current.Type = *req.Type
 		default:
-			h.writeError(w, http.StatusBadRequest, "type must be one of: text, select, checkbox")
+			h.writeError(w, http.StatusBadRequest, "type must be one of: text, select, checkbox, phone")
 			return
 		}
 	}
@@ -559,6 +564,34 @@ func (h *Handler) validateAnswersCore(ctx context.Context, eventTypeID string, r
 					canonical = "yes"
 				}
 				out = append(out, booking.Answer{QuestionID: q.id, Value: canonical})
+			}
+			continue
+		}
+
+		// A 'phone' answer is free text, but it arrives as ONE combined string that the
+		// form builds from a country selector plus a number field ("+51 987654321").
+		// The country selector always contributes its dial code, so the generic rule
+		// below — non-empty after trimming — is already satisfied by "+51" with the
+		// number left blank: the same hole the checkbox branch above exists to close.
+		// So a value carrying no actual number counts as no answer. validPhone
+		// (booking_handler.go) is the same lenient check the attendee phone field uses;
+		// anything stricter is the form's job.
+		//
+		// That holds for OPTIONAL phone questions too. The forms never send them anything
+		// but "" or a usable number, yet POST /v1/bookings is public and MCP callers send
+		// whatever the model picked, and this value goes out in the webhook payload the
+		// WhatsApp automations dial. So a non-empty optional answer that is not a phone
+		// number (a bare "+51", free text, a URL) is dropped like no answer at all, rather
+		// than failed with err_required_field, which would name the field "required". An
+		// empty "" is still kept as before (book.html sends one for every unanswered
+		// question), so the payload's shape does not change.
+		if q.qtype == "phone" {
+			val = strings.TrimSpace(val)
+			if q.required && (!answered || !validPhone(val)) {
+				return nil, &answerError{loc.Tf("err_required_field", q.label)}
+			}
+			if answered && (val == "" || validPhone(val)) {
+				out = append(out, booking.Answer{QuestionID: q.id, Value: val})
 			}
 			continue
 		}

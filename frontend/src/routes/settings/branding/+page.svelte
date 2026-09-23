@@ -83,7 +83,7 @@
 		termsUrl = b.terms_url ?? '';
 		fallbackLocale = b.fallback_locale || 'en';
 		supportedLocales = b.supported_locales ?? [];
-	}, 'Could not load branding settings'));
+	}, 'No se pudieron cargar los ajustes de marca'));
 
 	async function onFileChange(target: CropTarget) {
 		const input = target === 'logo' ? fileInput : bannerFileInput;
@@ -133,17 +133,17 @@
 			cropSrc = '';
 			if (fileInput) fileInput.value = '';
 			if (bannerFileInput) bannerFileInput.value = '';
-			toast.success(target === 'logo' ? 'Logo uploaded' : 'Banner uploaded');
-		}, `Could not upload ${target}`);
+			toast.success(target === 'logo' ? 'Logo subido' : 'Banner subido');
+		}, `No se pudo subir ${target === 'logo' ? 'el logo' : 'el banner'}`);
 	}
 
 	async function removeLogo() {
 		try {
 			await api.del('/v1/settings/branding/logo');
 			logoUrl = '';
-			toast.success('Logo removed');
+			toast.success('Logo eliminado');
 		} catch (e: any) {
-			toast.error(e.message || 'Could not remove logo');
+			toast.error(e.message || 'No se pudo eliminar el logo');
 		}
 	}
 
@@ -151,9 +151,9 @@
 		try {
 			await api.del('/v1/settings/branding/banner');
 			bannerUrl = '';
-			toast.success('Banner removed');
+			toast.success('Banner eliminado');
 		} catch (e: any) {
-			toast.error(e.message || 'Could not remove banner');
+			toast.error(e.message || 'No se pudo eliminar el banner');
 		}
 	}
 
@@ -175,30 +175,30 @@
 			privacyUrl = b.privacy_url ?? '';
 			termsUrl = b.terms_url ?? '';
 			fallbackLocale = b.fallback_locale || 'en';
-			toast.success('Branding saved');
-		}, 'Could not save branding settings');
+			toast.success('Marca guardada');
+		}, 'No se pudieron guardar los ajustes de marca');
 	}
 </script>
 
 <svelte:window onkeydown={saveOnCmdS(save, () => !savingFlag.active)} />
 
 {#if !$currentUser?.is_admin}
-	<p class="text-sm text-muted-foreground">Admin access required.</p>
+	<p class="text-sm text-muted-foreground">Se requiere acceso de administrador.</p>
 {:else if loadingFlag.active}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else}
 	<div class="max-w-2xl space-y-6">
 		<div class="rounded-lg border bg-card p-6">
-			<h2 class="text-sm font-semibold">Branding</h2>
+			<h2 class="text-sm font-semibold">Marca</h2>
 			<p class="mt-0.5 text-xs text-muted-foreground">
-				Your logo appears at the top of booking confirmation emails and on your public booking and manage
-				pages. The business name is the wordmark where there's no logo.
+				Tu logo aparece en la parte superior de los correos de confirmación de reservas y en tus páginas
+				públicas de reserva y gestión. El nombre del negocio es el texto que se muestra cuando no hay logo.
 			</p>
 
 			<div class="mt-4 space-y-1.5">
-				<Label for="business-name">Business name</Label>
+				<Label for="business-name">Nombre del negocio</Label>
 				<Input id="business-name" bind:value={businessName} placeholder="Orchestratr" maxlength={200} />
-				<p class="text-xs text-muted-foreground">Used where there's no logo. Falls back to “Calnode” if left blank.</p>
+				<p class="text-xs text-muted-foreground">Se usa cuando no hay logo. Vuelve a “Calnode” si se deja en blanco.</p>
 			</div>
 
 			<div class="mt-5 space-y-3">
@@ -208,13 +208,13 @@
 					type="button"
 					onclick={() => fileInput?.click()}
 					disabled={uploadingFlag.active}
-					title={logoUrl ? 'Replace logo' : 'Upload logo'}
+					title={logoUrl ? 'Reemplazar logo' : 'Subir logo'}
 					class="group relative flex min-h-[88px] w-full max-w-md cursor-pointer items-center justify-center overflow-hidden rounded-md border bg-white px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait"
 				>
 					{#if logoUrl}
 						<img src={logoUrl} alt="Logo" style="height:{logoHeight}px;width:auto;opacity:{logoOpacity / 100};" />
 					{:else}
-						<span class="text-sm text-muted-foreground">Click to upload a logo</span>
+						<span class="text-sm text-muted-foreground">Haz clic para subir un logo</span>
 					{/if}
 					<div class="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
 						<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -224,24 +224,25 @@
 				{#if logoUrl}
 					<div class="max-w-md space-y-3">
 						<div class="flex items-center gap-3">
-							<span class="w-14 text-xs font-medium text-muted-foreground">Size</span>
+							<span class="w-14 text-xs font-medium text-muted-foreground">Tamaño</span>
 							<input type="range" min="16" max="64" step="1" bind:value={logoHeight} class="flex-1 accent-primary" />
 							<span class="w-10 text-right text-xs tabular-nums text-muted-foreground">{logoHeight}px</span>
 						</div>
 						<div class="flex items-center gap-3">
-							<span class="w-14 text-xs font-medium text-muted-foreground">Opacity</span>
+							<span class="w-14 text-xs font-medium text-muted-foreground">Opacidad</span>
 							<input type="range" min="20" max="100" step="1" bind:value={logoOpacity} class="flex-1 accent-primary" />
 							<span class="w-10 text-right text-xs tabular-nums text-muted-foreground">{logoOpacity}%</span>
 						</div>
-						<Button type="button" variant="ghost" size="sm" onclick={removeLogo} class="text-destructive hover:text-destructive">Remove logo</Button>
+						<Button type="button" variant="ghost" size="sm" onclick={removeLogo} class="text-destructive hover:text-destructive">Eliminar logo</Button>
 					</div>
 				{/if}
 
 				<p class="text-xs text-muted-foreground">
-					Click the box to upload. Shown at up to 600×160, so anything wider than it is tall works
-					best. PNG with a transparent background looks best on a light background. Any shape — you
-					can crop it next. JPEG, PNG, GIF or WebP, max 5 MB; it is re-encoded as a PNG. Adjust size
-					and opacity (preview updates live), then Save.
+					Haz clic en el recuadro para subir. Se muestra hasta 600×160, así que lo que sea más ancho
+					que alto funciona mejor. Un PNG con fondo transparente se ve mejor sobre un fondo claro.
+					Cualquier forma sirve — puedes recortarlo después. JPEG, PNG, GIF o WebP, máx. 5 MB; se
+					vuelve a codificar como PNG. Ajusta el tamaño y la opacidad (la vista previa se actualiza
+					en vivo) y luego Guarda.
 				</p>
 			</div>
 
@@ -252,13 +253,13 @@
 					type="button"
 					onclick={() => bannerFileInput?.click()}
 					disabled={uploadingFlag.active}
-					title={bannerUrl ? 'Replace banner' : 'Upload banner'}
+					title={bannerUrl ? 'Reemplazar banner' : 'Subir banner'}
 					class="group relative flex min-h-[88px] w-full max-w-md cursor-pointer items-center justify-center overflow-hidden rounded-md border bg-white px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait"
 				>
 					{#if bannerUrl}
 						<img src={bannerUrl} alt="Banner" style="width:100%;height:auto;opacity:{bannerOpacity / 100};" />
 					{:else}
-						<span class="text-sm text-muted-foreground">Click to upload a banner</span>
+						<span class="text-sm text-muted-foreground">Haz clic para subir un banner</span>
 					{/if}
 					<div class="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
 						<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -268,60 +269,62 @@
 				{#if bannerUrl}
 					<div class="max-w-md space-y-3">
 						<div class="flex items-center gap-3">
-							<span class="w-14 text-xs font-medium text-muted-foreground">Opacity</span>
+							<span class="w-14 text-xs font-medium text-muted-foreground">Opacidad</span>
 							<input type="range" min="20" max="100" step="1" bind:value={bannerOpacity} class="flex-1 accent-primary" />
 							<span class="w-10 text-right text-xs tabular-nums text-muted-foreground">{bannerOpacity}%</span>
 						</div>
-						<Button type="button" variant="ghost" size="sm" onclick={removeBanner} class="text-destructive hover:text-destructive">Remove banner</Button>
+						<Button type="button" variant="ghost" size="sm" onclick={removeBanner} class="text-destructive hover:text-destructive">Eliminar banner</Button>
 					</div>
 				{/if}
 
 				<p class="text-xs text-muted-foreground">
-					Shown full-width below your logo on booking emails and your public booking/manage pages — hidden
-					entirely if not set. Displayed at up to 1600×800, so wide images work best. JPEG, PNG, GIF or
-					WebP, max 5 MB; it is re-encoded as a PNG.
+					Se muestra a todo el ancho debajo de tu logo en los correos de reserva y en tus páginas
+					públicas de reserva/gestión — se oculta por completo si no está configurado. Se muestra
+					hasta 1600×800, así que las imágenes anchas funcionan mejor. JPEG, PNG, GIF o WebP, máx. 5
+					MB; se vuelve a codificar como PNG.
 				</p>
 			</div>
 		</div>
 
 		<div class="rounded-lg border bg-card p-6">
-			<h2 class="text-sm font-semibold">Legal links</h2>
+			<h2 class="text-sm font-semibold">Enlaces legales</h2>
 			<p class="mt-0.5 text-xs text-muted-foreground">
-				Links to your own privacy policy and terms. They appear in your public booking page footer, and
-				your privacy policy is linked from the cookie-consent banner. You're the data controller for
-				bookings made through your Calnode — these just point visitors to your policies.
+				Enlaces a tu propia política de privacidad y términos. Aparecen en el pie de tu página pública
+				de reserva, y tu política de privacidad se enlaza desde el banner de consentimiento de cookies.
+				Tú eres el responsable de los datos de las reservas hechas a través de tu Calnode — esto solo
+				dirige a los visitantes a tus políticas.
 			</p>
 
 			<div class="mt-4 space-y-1.5">
-				<Label for="privacy-url">Privacy policy URL</Label>
+				<Label for="privacy-url">URL de política de privacidad</Label>
 				<Input id="privacy-url" type="url" bind:value={privacyUrl} placeholder="https://example.com/privacy" maxlength={500} />
 			</div>
 
 			<div class="mt-4 space-y-1.5">
-				<Label for="terms-url">Terms URL</Label>
+				<Label for="terms-url">URL de términos</Label>
 				<Input id="terms-url" type="url" bind:value={termsUrl} placeholder="https://example.com/terms" maxlength={500} />
-				<p class="text-xs text-muted-foreground">Leave a field blank to hide that link. Must be a full http(s):// URL.</p>
+				<p class="text-xs text-muted-foreground">Deja un campo en blanco para ocultar ese enlace. Debe ser una URL http(s):// completa.</p>
 			</div>
 		</div>
 
 		{#if supportedLocales.length > 1}
 			<div class="rounded-lg border bg-card p-6">
-				<h2 class="text-sm font-semibold">Language</h2>
+				<h2 class="text-sm font-semibold">Idioma</h2>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					Your public booking pages and emails are translated per visitor — most see their
-					browser's language automatically. This sets what a visitor sees when their browser
-					asks for a language you don't support (e.g. an operator serving mostly Spanish-speaking
-					customers might prefer Spanish here instead of English).
+					Tus páginas públicas de reserva y correos se traducen según el visitante — la mayoría ve
+					automáticamente el idioma de su navegador. Esto define lo que ve un visitante cuando su
+					navegador solicita un idioma que no soportas (por ejemplo, un operador que atiende
+					mayormente a clientes hispanohablantes podría preferir español aquí en vez de inglés).
 				</p>
 				<div class="mt-4 max-w-xs space-y-1.5">
-					<Label for="fallback-locale">Fallback language</Label>
+					<Label for="fallback-locale">Idioma de respaldo</Label>
 					<Select.Root
 						type="single"
 						value={fallbackLocale}
 						onValueChange={(v) => { if (v) fallbackLocale = v; }}
 					>
 						<Select.Trigger id="fallback-locale" class="w-full">
-							{supportedLocales.find((l) => l.code === fallbackLocale)?.name ?? 'Select…'}
+							{supportedLocales.find((l) => l.code === fallbackLocale)?.name ?? 'Seleccionar…'}
 						</Select.Trigger>
 						<Select.Content>
 							{#each supportedLocales as loc}
@@ -333,23 +336,23 @@
 			</div>
 		{/if}
 
-		<Button onclick={save} disabled={savingFlag.active}>{savingFlag.active ? 'Saving…' : 'Save'}</Button>
+		<Button onclick={save} disabled={savingFlag.active}>{savingFlag.active ? 'Guardando…' : 'Guardar'}</Button>
 	</div>
 
 	<Dialog.Root bind:open={cropOpen} onOpenChange={(o) => { if (!o) cancelCrop(); }}>
 		<Dialog.Content class="max-w-lg">
 			<Dialog.Header>
-				<Dialog.Title>{cropTarget === 'logo' ? 'Crop logo' : 'Crop banner'}</Dialog.Title>
-				<Dialog.Description>Drag to adjust, or just save to use the whole image.</Dialog.Description>
+				<Dialog.Title>{cropTarget === 'logo' ? 'Recortar logo' : 'Recortar banner'}</Dialog.Title>
+				<Dialog.Description>Arrastra para ajustar, o simplemente guarda para usar la imagen completa.</Dialog.Description>
 			</Dialog.Header>
 			<div class="mt-2 overflow-hidden rounded-md bg-muted" style="max-height: 360px;">
 				{#if cropSrc}
-					<img bind:this={cropperEl} src={cropSrc} alt="Crop preview" class="block max-w-full" />
+					<img bind:this={cropperEl} src={cropSrc} alt="Vista previa de recorte" class="block max-w-full" />
 				{/if}
 			</div>
 			<Dialog.Footer class="mt-4">
-				<Button variant="outline" onclick={cancelCrop} disabled={uploadingFlag.active}>Cancel</Button>
-				<Button onclick={cropAndUpload} disabled={uploadingFlag.active}>{uploadingFlag.active ? 'Uploading…' : cropTarget === 'logo' ? 'Save logo' : 'Save banner'}</Button>
+				<Button variant="outline" onclick={cancelCrop} disabled={uploadingFlag.active}>Cancelar</Button>
+				<Button onclick={cropAndUpload} disabled={uploadingFlag.active}>{uploadingFlag.active ? 'Subiendo…' : cropTarget === 'logo' ? 'Guardar logo' : 'Guardar banner'}</Button>
 			</Dialog.Footer>
 		</Dialog.Content>
 	</Dialog.Root>

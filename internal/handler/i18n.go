@@ -39,9 +39,31 @@ func (h *Handler) resolveLocale(r *http.Request) *i18n.Locale {
 
 // resolveLocaleWithFallback is resolveLocale given an already-known fallback code (e.g.
 // from a brandingSettings the caller loaded moments ago) — no DB access.
+//
+// Every public surface resolves through here, so FORCE_LOCALE is enforced in this one
+// place: when set, it wins over ?lang=, the language cookie and Accept-Language alike.
 func (h *Handler) resolveLocaleWithFallback(r *http.Request, fallbackCode string) *i18n.Locale {
+	if h.forceLocale != "" {
+		return i18n.Get(h.forceLocale)
+	}
 	return i18n.ResolveWithFallback(r.Header.Get("Accept-Language"), h.localeOverride(r), fallbackCode)
 }
+
+// SetForceLocale pins every public surface to one locale (config FORCE_LOCALE) and reports
+// whether it took. An unsupported code is refused and per-visitor resolution stays on, so
+// a typo in the env var degrades to the stock behaviour instead of a page with no strings.
+func (h *Handler) SetForceLocale(code string) bool {
+	if code == "" || i18n.Get(code) == nil {
+		h.forceLocale = ""
+		return false
+	}
+	h.forceLocale = code
+	return true
+}
+
+// localeForced reports whether FORCE_LOCALE is on; pages use it to hide the language
+// switcher, which would otherwise offer choices that no longer change anything.
+func (h *Handler) localeForced() bool { return h.forceLocale != "" }
 
 // persistLangOverride sets langCookie when the request carries a valid ?lang= switch, so
 // the choice sticks on subsequent page loads without the query param. No-op otherwise —

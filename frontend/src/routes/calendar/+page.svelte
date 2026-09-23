@@ -7,6 +7,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { authStatus } from '$lib/stores';
+	import ProviderIcon from '$lib/components/ProviderIcon.svelte';
 
 	// Display names for known calendar providers.
 	const PROVIDER_LABELS: Record<string, string> = {
@@ -19,9 +20,9 @@
 	// been given credentials for. Google is self-serve (a settings page); Microsoft is
 	// currently env-var-only, so it points at the docs instead of a form.
 	const UNCONFIGURED_SETUP: Record<string, { text: string; href: string; external?: boolean }> = {
-		google: { text: 'Set up in Settings → Google OAuth', href: '/admin/settings/google' },
+		google: { text: 'Configurar en Configuración → OAuth de Google', href: '/admin/settings/google' },
 		microsoft: {
-			text: 'See setup docs',
+			text: 'Ver documentación de configuración',
 			href: 'https://github.com/Calnode/calnode/blob/main/.env.example',
 			external: true
 		}
@@ -38,18 +39,18 @@
 	let caldavErr = $state('');
 
 	const appPwHelp: Record<string, { label: string; href: string }> = {
-		icloud: { label: 'Create an app-specific password at appleid.apple.com', href: 'https://support.apple.com/102654' },
-		fastmail: { label: 'Create an app password in Fastmail settings', href: 'https://www.fastmail.help/hc/en-us/articles/360058752854' }
+		icloud: { label: 'Crea una contraseña específica de aplicación en appleid.apple.com', href: 'https://support.apple.com/102654' },
+		fastmail: { label: 'Crea una contraseña de aplicación en la configuración de Fastmail', href: 'https://www.fastmail.help/hc/en-us/articles/360058752854' }
 	};
 
 	async function connectCaldav() {
 		caldavErr = '';
 		if (caldavPreset === 'custom' && !caldavServer.trim()) {
-			caldavErr = 'Enter your CalDAV server URL.';
+			caldavErr = 'Ingresa la URL de tu servidor CalDAV.';
 			return;
 		}
 		if (!caldavUser.trim() || !caldavPass) {
-			caldavErr = 'Username and app password are both required.';
+			caldavErr = 'El nombre de usuario y la contraseña de aplicación son obligatorios.';
 			return;
 		}
 		caldavBusy = true;
@@ -66,12 +67,12 @@
 			justConnected = true;
 			await load();
 		} catch (e: any) {
-			caldavErr = e.message || 'Could not connect. Check the server, username and app password.';
+			caldavErr = e.message || 'No se pudo conectar. Verifica el servidor, el nombre de usuario y la contraseña de aplicación.';
 		} finally {
 			caldavBusy = false;
 		}
 	}
-	const label = (p?: string) => (p ? PROVIDER_LABELS[p] ?? p : 'calendar');
+	const label = (p?: string) => (p ? PROVIDER_LABELS[p] ?? p : 'calendario');
 
 	let status = $state<CalendarStatus | null>(null);
 	let loading = $state(true);
@@ -153,7 +154,7 @@
 			}
 		} catch (e: any) {
 			if (e?.status === 409) reauthNeeded = new Set(reauthNeeded).add(c.id);
-			pickerErr = e.message || 'Could not load calendars for this account.';
+			pickerErr = e.message || 'No se pudieron cargar los calendarios de esta cuenta.';
 		} finally {
 			pickerLoading = false;
 		}
@@ -188,7 +189,7 @@
 			pickerConnId = null;
 			await load();
 		} catch (e: any) {
-			pickerErr = e.message || 'Could not save calendar selection.';
+			pickerErr = e.message || 'No se pudo guardar la selección de calendarios.';
 		} finally {
 			pickerSaving = false;
 		}
@@ -246,44 +247,44 @@
 
 <ConfirmDialog
 	bind:open={disconnectOpen}
-	title="Disconnect this calendar?"
-	description="Calnode will stop checking it for conflicts. If it was your booking calendar, another connected calendar is promoted automatically."
-	confirmText="Disconnect"
+	title="¿Desconectar este calendario?"
+	description="Calnode dejará de revisarlo en busca de conflictos. Si era tu calendario de reservas, otro calendario conectado se promoverá automáticamente."
+	confirmText="Desconectar"
 	destructive
 	onConfirm={doDisconnect}
 />
 
 <ConfirmDialog
 	bind:open={zoomDisconnectOpen}
-	title="Disconnect Zoom?"
-	description="New Zoom-located bookings assigned to you won't get an auto-generated meeting link."
-	confirmText="Disconnect"
+	title="¿Desconectar Zoom?"
+	description="Las nuevas reservas con ubicación Zoom que te asignen no tendrán un enlace de reunión generado automáticamente."
+	confirmText="Desconectar"
 	destructive
 	onConfirm={doZoomDisconnect}
 />
 
-<svelte:head><title>Calendar — Calnode</title></svelte:head>
+<svelte:head><title>Calendario — Calnode</title></svelte:head>
 
 <div class="mb-8">
-	<h1 class="text-2xl font-semibold tracking-tight">Calendar</h1>
-	<p class="mt-1 text-sm text-muted-foreground">Connect one or more accounts. Choose which calendars are checked for conflicts, and which single calendar bookings are written into.</p>
+	<h1 class="text-2xl font-semibold tracking-tight">Calendario</h1>
+	<p class="mt-1 text-sm text-muted-foreground">Conecta una o más cuentas. Elige qué calendarios se revisan en busca de conflictos y en cuál calendario se escriben las reservas.</p>
 </div>
 
 {#if error}
 	<p class="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
 {/if}
 {#if justConnected && status?.connected}
-	<p class="mb-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">Calendar connected successfully.</p>
+	<p class="mb-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">Calendario conectado con éxito.</p>
 {/if}
 
 {#if loading}
-	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
+	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else if status?.configured === false}
 	<div class="max-w-md rounded-md bg-amber-50 px-3 py-2.5 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
-		<p class="font-medium">No calendar provider configured</p>
+		<p class="font-medium">Ningún proveedor de calendario configurado</p>
 		<p class="mt-1 text-amber-700">
-			Add Google OAuth credentials in <a href="/admin/settings/google" class="font-medium underline">Settings → Google OAuth</a>,
-			or set the Microsoft (Outlook) credentials via environment variables, then restart the server.
+			Agrega las credenciales de OAuth de Google en <a href="/admin/settings/google" class="font-medium underline">Configuración → OAuth de Google</a>,
+			o configura las credenciales de Microsoft (Outlook) mediante variables de entorno y luego reinicia el servidor.
 		</p>
 	</div>
 {:else}
@@ -295,54 +296,52 @@
 					<div class="p-4">
 						<div class="flex items-center justify-between gap-3">
 						<div class="flex min-w-0 items-center gap-3">
-							<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground">
-								<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-							</svg>
+							<ProviderIcon provider={c.provider} />
 							<div class="min-w-0">
 								<p class="truncate font-medium">{c.account_email || label(c.provider)}</p>
-								<p class="text-xs text-muted-foreground">{label(c.provider)} · checked for conflicts</p>
+								<p class="text-xs text-muted-foreground">{label(c.provider)} · revisado en busca de conflictos</p>
 								{#if reauthNeeded.has(c.id)}
-									<p class="text-xs font-medium text-destructive">Reconnect needed — disconnect and connect again.</p>
+									<p class="text-xs font-medium text-destructive">Reconexión necesaria — desconecta y vuelve a conectar.</p>
 								{/if}
 							</div>
 						</div>
 						<div class="flex shrink-0 items-center gap-4">
 							<label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
 								<input type="radio" name="destination" checked={c.is_destination} disabled={busy} onchange={() => setDestination(c)} />
-								Add bookings here
+								Agregar reservas aquí
 							</label>
-							<Button variant="ghost" size="sm" onclick={() => askDisconnect(c)} disabled={busy}>Disconnect</Button>
+							<Button variant="ghost" size="sm" onclick={() => askDisconnect(c)} disabled={busy}>Desconectar</Button>
 						</div>
 						</div>
 						<div class="mt-2 pl-8">
 							<button type="button" class="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline" onclick={() => togglePicker(c)}>
-								{pickerConnId === c.id ? 'Hide calendars' : 'Manage calendars'}
+								{pickerConnId === c.id ? 'Ocultar calendarios' : 'Administrar calendarios'}
 							</button>
 						</div>
 						{#if pickerConnId === c.id}
 							<div class="mt-3 space-y-3 rounded-md border bg-muted/30 p-3">
 								{#if pickerLoading}
-									<p class="text-xs text-muted-foreground">Loading calendars…</p>
+									<p class="text-xs text-muted-foreground">Cargando calendarios…</p>
 								{:else if pickerErr}
 									<p class="text-xs text-destructive">{pickerErr}</p>
 								{:else if pickerCals.length === 0}
-									<p class="text-xs text-muted-foreground">No calendars found for this account.</p>
+									<p class="text-xs text-muted-foreground">No se encontraron calendarios para esta cuenta.</p>
 								{:else}
 									<p class="text-xs text-muted-foreground">
-										Tick the calendars to check for conflicts, and choose the one bookings are
-										written into (select it again to clear the choice).
+										Marca los calendarios que quieres revisar en busca de conflictos y elige aquel en el
+										que se escriben las reservas (selecciónalo de nuevo para borrar la elección).
 									</p>
 									<div class="space-y-1.5">
 										<div class="flex items-center gap-2 pb-1 text-xs font-medium text-muted-foreground">
-											<span class="w-10 shrink-0 text-center">Check</span>
-											<span class="w-20 shrink-0 text-center">Destination</span>
-											<span>Calendar</span>
+											<span class="w-10 shrink-0 text-center">Revisar</span>
+											<span class="w-20 shrink-0 text-center">Destino</span>
+											<span>Calendario</span>
 										</div>
 										{#each pickerCals as cal (cal.id)}
 											<div class="flex items-center gap-2 text-sm">
 												<span class="w-10 shrink-0 text-center">
 													<input type="checkbox" bind:checked={cal.check_conflicts} disabled={pickerSaving}
-														aria-label="Check {cal.name} for conflicts" />
+														aria-label="Revisar {cal.name} en busca de conflictos" />
 												</span>
 												<span class="w-20 shrink-0 text-center">
 													<!-- One destination per account in the UI; the API enforces one per user
@@ -351,21 +350,21 @@
 													<input type="checkbox" disabled={pickerSaving || !cal.writable}
 														checked={cal.is_destination}
 														onchange={() => toggleDestination(cal)}
-														aria-label="Write bookings into {cal.name} (select again to clear)" />
+														aria-label="Escribir reservas en {cal.name} (selecciona de nuevo para borrar)" />
 												</span>
 												<span class="truncate">
 													{cal.name}
-													{#if cal.primary}<span class="ml-1 text-xs text-muted-foreground">(primary)</span>{/if}
-													{#if !cal.writable}<span class="ml-1 text-xs text-muted-foreground">(read-only)</span>{/if}
+													{#if cal.primary}<span class="ml-1 text-xs text-muted-foreground">(principal)</span>{/if}
+													{#if !cal.writable}<span class="ml-1 text-xs text-muted-foreground">(solo lectura)</span>{/if}
 												</span>
 											</div>
 										{/each}
 									</div>
 									<div class="flex items-center gap-2 pt-1">
 										<Button size="sm" onclick={() => savePicker(c)} disabled={pickerSaving}>
-											{pickerSaving ? 'Saving…' : 'Save'}
+											{pickerSaving ? 'Guardando…' : 'Guardar'}
 										</Button>
-										<Button variant="ghost" size="sm" onclick={() => (pickerConnId = null)} disabled={pickerSaving}>Cancel</Button>
+										<Button variant="ghost" size="sm" onclick={() => (pickerConnId = null)} disabled={pickerSaving}>Cancelar</Button>
 									</div>
 								{/if}
 							</div>
@@ -374,92 +373,86 @@
 				{/each}
 			</div>
 			<p class="text-xs text-muted-foreground">
-				Use <span class="font-medium">Manage calendars</span> on each account to choose which of its
-				calendars are checked for conflicts. Confirmed bookings (and any auto-generated meeting links)
-				are written to the account marked <span class="font-medium">“Add bookings here”</span>.
+				Usa <span class="font-medium">Administrar calendarios</span> en cada cuenta para elegir cuáles de sus
+				calendarios se revisan en busca de conflictos. Las reservas confirmadas (y cualquier enlace de reunión
+				generado automáticamente) se escriben en la cuenta marcada como <span class="font-medium">“Agregar reservas aquí”</span>.
 			</p>
 		{/if}
 
 		<!-- Connect (another) calendar -->
 		{#if $authStatus.demo_mode}
-			<p class="text-sm text-muted-foreground">Calendar connect is disabled in the demo.</p>
+			<p class="text-sm text-muted-foreground">La conexión de calendarios está deshabilitada en la demo.</p>
 		{:else}
 		<div class="space-y-2">
-			<p class="text-sm font-medium">{connections.length > 0 ? 'Connect another calendar' : 'Connect a calendar'}</p>
+			<p class="text-sm font-medium">{connections.length > 0 ? 'Conectar otro calendario' : 'Conectar un calendario'}</p>
 			{#each providers as p}
 				{#if p === 'caldav'}
 					<div class="rounded-lg border bg-card p-4">
 						<div class="flex items-center justify-between">
 							<div class="flex items-center gap-3">
-								<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground">
-									<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-								</svg>
+								<ProviderIcon provider={p} />
 								<p class="font-medium">{label('caldav')}</p>
 							</div>
 							<Button variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (caldavOpen = !caldavOpen)}>
-								{caldavOpen ? 'Cancel' : 'Connect'}
+								{caldavOpen ? 'Cancelar' : 'Conectar'}
 							</Button>
 						</div>
 						{#if caldavOpen}
 							<form class="mt-4 space-y-3 border-t pt-4" onsubmit={(e) => { e.preventDefault(); connectCaldav(); }}>
 								<div class="space-y-1.5">
-									<Label for="caldav-preset">Provider</Label>
+									<Label for="caldav-preset">Proveedor</Label>
 									<select id="caldav-preset" bind:value={caldavPreset}
 										class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm">
 										<option value="icloud">Apple iCloud</option>
 										<option value="fastmail">Fastmail</option>
-										<option value="custom">Nextcloud / other (custom URL)</option>
+										<option value="custom">Nextcloud / otro (URL personalizada)</option>
 									</select>
 								</div>
 								{#if caldavPreset === 'custom'}
 									<div class="space-y-1.5">
-										<Label for="caldav-server">Server URL</Label>
+										<Label for="caldav-server">URL del servidor</Label>
 										<Input id="caldav-server" type="url" placeholder="https://cloud.example.com/remote.php/dav" bind:value={caldavServer} />
 									</div>
 								{/if}
 								<div class="space-y-1.5">
-									<Label for="caldav-user">Username / email</Label>
+									<Label for="caldav-user">Nombre de usuario / correo electrónico</Label>
 									<Input id="caldav-user" type="text" autocomplete="username" placeholder="you@icloud.com" bind:value={caldavUser} />
 								</div>
 								<div class="space-y-1.5">
-									<Label for="caldav-pass">App-specific password</Label>
+									<Label for="caldav-pass">Contraseña específica de aplicación</Label>
 									<Input id="caldav-pass" type="password" autocomplete="off" bind:value={caldavPass} />
 									{#if appPwHelp[caldavPreset]}
 										<p class="text-xs text-muted-foreground">
-											<a class="underline" href={appPwHelp[caldavPreset].href} target="_blank" rel="noopener noreferrer">{appPwHelp[caldavPreset].label}</a> — your normal password won't work.
+											<a class="underline" href={appPwHelp[caldavPreset].href} target="_blank" rel="noopener noreferrer">{appPwHelp[caldavPreset].label}</a> — tu contraseña normal no funcionará.
 										</p>
 									{:else}
-										<p class="text-xs text-muted-foreground">Use an app password from your provider, not your login password.</p>
+										<p class="text-xs text-muted-foreground">Usa una contraseña de aplicación de tu proveedor, no tu contraseña de inicio de sesión.</p>
 									{/if}
 								</div>
 								{#if caldavErr}
 									<p class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{caldavErr}</p>
 								{/if}
-								<Button type="submit" disabled={caldavBusy}>{caldavBusy ? 'Connecting…' : 'Connect calendar'}</Button>
+								<Button type="submit" disabled={caldavBusy}>{caldavBusy ? 'Conectando…' : 'Conectar calendario'}</Button>
 							</form>
 						{/if}
 					</div>
 				{:else}
 					<div class="flex items-center justify-between rounded-lg border bg-card p-4">
 						<div class="flex items-center gap-3">
-							<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground">
-								<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-							</svg>
+							<ProviderIcon provider={p} />
 							<p class="font-medium">{label(p)}</p>
 						</div>
-						<Button variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (window.location.href = `/v1/calendar/connect?provider=${p}`)}>Connect</Button>
+						<Button variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (window.location.href = `/v1/calendar/connect?provider=${p}`)}>Conectar</Button>
 					</div>
 				{/if}
 			{/each}
 			{#each status?.unconfigured_providers ?? [] as p}
 				<div class="flex items-center justify-between rounded-lg border border-dashed bg-muted/20 p-4">
 					<div class="flex items-center gap-3">
-						<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground/60">
-							<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-						</svg>
+						<ProviderIcon provider={p} muted />
 						<div>
 							<p class="font-medium text-muted-foreground">{label(p)}</p>
-							<p class="text-xs text-muted-foreground">Not set up on this instance</p>
+							<p class="text-xs text-muted-foreground">No configurado en esta instancia</p>
 						</div>
 					</div>
 					{#if UNCONFIGURED_SETUP[p]}
@@ -473,7 +466,7 @@
 				</div>
 			{/each}
 			{#if connections.length > 0}
-				<p class="text-xs text-muted-foreground">Connect a personal + work calendar (or both providers) so nothing double-books.</p>
+				<p class="text-xs text-muted-foreground">Conecta un calendario personal y uno de trabajo (o ambos proveedores) para que no haya reservas duplicadas.</p>
 			{/if}
 		</div>
 		{/if}
@@ -485,10 +478,10 @@
 	<div class="mt-10">
 		<h2 class="text-lg font-semibold tracking-tight">Zoom</h2>
 		<p class="mt-1 text-sm text-muted-foreground">
-			Connect your Zoom account so bookings with a Zoom location get a real meeting link minted under your account.
+			Conecta tu cuenta de Zoom para que las reservas con ubicación Zoom obtengan un enlace de reunión real generado con tu cuenta.
 		</p>
 		{#if zoomJustConnected && zoom.connected}
-			<p class="mt-3 max-w-md rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">Zoom connected successfully.</p>
+			<p class="mt-3 max-w-md rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">Zoom conectado con éxito.</p>
 		{/if}
 		<div class="mt-3 max-w-md">
 			{#if zoom.connected}
@@ -499,12 +492,12 @@
 							<p class="font-medium">Zoom</p>
 							<p class="mt-0.5 inline-flex items-center gap-1.5 text-sm text-green-700">
 								<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-								Connected
+								Conectado
 							</p>
 						</div>
 					</div>
 					<Button variant="outline" onclick={() => (zoomDisconnectOpen = true)} disabled={zoomDisconnecting}>
-						{zoomDisconnecting ? 'Disconnecting…' : 'Disconnect'}
+						{zoomDisconnecting ? 'Desconectando…' : 'Desconectar'}
 					</Button>
 				</div>
 			{:else}
@@ -513,7 +506,7 @@
 						<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
 						<p class="font-medium">Zoom</p>
 					</div>
-					<Button onclick={() => (window.location.href = '/v1/zoom/connect')}>Connect</Button>
+					<Button onclick={() => (window.location.href = '/v1/zoom/connect')}>Conectar</Button>
 				</div>
 			{/if}
 		</div>

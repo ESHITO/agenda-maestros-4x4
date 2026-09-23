@@ -40,6 +40,13 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 	h := handler.New(db, logger)
 	h.SetBaseURL(cfg.BaseURL)
 	h.SetPublicBaseURL(cfg.PublicBaseURL)
+	if cfg.ForceLocale != "" {
+		if h.SetForceLocale(cfg.ForceLocale) {
+			logger.Info("public pages pinned to one locale (FORCE_LOCALE)", "locale", cfg.ForceLocale)
+		} else {
+			logger.Warn("FORCE_LOCALE ignored: not a supported locale", "locale", cfg.ForceLocale)
+		}
+	}
 	// DATA_DIR, defaulting to the relative "data" every deployment has always used.
 	// The fallback is repeated here because tests build a Config literal that skips
 	// Load, and an empty dir would put uploads beside the binary.
@@ -428,6 +435,10 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	// Public event-type display info for the widget (name/duration/location/brand).
 	mux.HandleFunc("GET /v1/event-types/{slug}/public", cors(h.PublicEventType))
 
+	// Country list + time-zone map for the "phone" question's picker in the widget
+	// (book.html gets the same data inline). Per-visitor default country from CF-IPCountry.
+	mux.HandleFunc("GET /v1/phone-countries", cors(h.PhoneCountries))
+
 	// unthrottled is a CPU + API-quota abuse vector on an openly-public page.
 	slotsRL := RateLimit(60, time.Minute)
 	mux.HandleFunc("GET /v1/event-types/{slug}/slots", cors(slotsRL(h.GetSlots)))
@@ -462,6 +473,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("GET /embed.js", h.EmbedJS)
 	mux.HandleFunc("GET /booking.css", h.BookingCSS)
 	mux.HandleFunc("GET /book/{slug}", h.BookPage)
+	// Flag SVGs for the phone country picker (book.html + widget); name must be ^[a-z]{2}\.svg$.
+	mux.HandleFunc("GET /assets/flags/{name}", h.FlagAsset)
 
 	// Built-in LiveKit video room (public): the page, its vendored assets, and the token
 	// exchange. The signed room token in the join URL is the capability — no auth.

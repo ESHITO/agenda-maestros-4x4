@@ -49,6 +49,7 @@ type Handler struct {
 	livekitMu         sync.RWMutex
 	livekit           *livekit.Client // nil when LiveKit video is unconfigured
 	demoMode          bool            // true on the public demo instance: disables calendar/Zoom connect
+	forceLocale       string          // FORCE_LOCALE: every public surface in this one locale ("" = per visitor); see i18n.go
 	demoResetInterval time.Duration
 	demoMu            sync.RWMutex
 	demoNextResetAt   time.Time

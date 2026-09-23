@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	defaultMsgConfirmation = "Looking forward to our meeting! Feel free to reply if you have any questions beforehand."
-	defaultMsgCancellation = "Apologies for the cancellation. You're welcome to rebook at any time."
-	defaultMsgReschedule   = "Apologies for the change — looking forward to connecting at the new time!"
-	defaultMsgReminder     = "Please reach out if you need to make any last-minute changes."
+	defaultMsgConfirmation = "¡Nos vemos pronto en la sesión! Si tienes alguna duda antes, puedes responder a este correo."
+	defaultMsgCancellation = "Lamentamos la cancelación. Puedes volver a reservar cuando quieras."
+	defaultMsgReschedule   = "Disculpa el cambio. ¡Nos vemos en el nuevo horario!"
+	defaultMsgReminder     = "Escríbenos si necesitas hacer algún cambio de última hora."
 )
 
 type eventTypeJSON struct {
@@ -228,6 +228,17 @@ func (h *Handler) CreateEventType(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Slug == "" || req.Name == "" {
 		h.writeError(w, http.StatusBadRequest, "slug and name are required")
+		return
+	}
+	// Slugify on create, exactly as PatchEventType already does on rename. Without it
+	// create was the one path that stored a slug verbatim, so a pasted URL became the
+	// slug and its slashes broke every route built from it — /admin/event-types/{slug}
+	// and /book/{slug} both 404, which also left the row uneditable and undeletable
+	// from the UI. Reject rather than silently rename when nothing usable survives
+	// (e.g. a slug of only punctuation), so the operator sees why.
+	req.Slug = slugify(req.Slug)
+	if req.Slug == "" {
+		h.writeError(w, http.StatusBadRequest, "slug must contain letters or numbers")
 		return
 	}
 	if req.MaxActiveBookings != nil && *req.MaxActiveBookings < 0 {
