@@ -169,6 +169,7 @@
   "time_afternoon": "Tarde",
   "time_evening": "Noche",
   "phone_call_number": "Teléfono (opcional, para una llamada)",
+  "calendar_degraded_notice": "No se pudo cargar parte de la información del calendario, por lo que la disponibilidad puede estar incompleta.",
   "phone_country_label": "País",
   "phone_country_search": "Buscar país o código",
   "phone_no_results": "Sin resultados",

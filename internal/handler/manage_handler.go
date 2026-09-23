@@ -110,6 +110,7 @@ func (h *Handler) ManagePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	accentColor = accentOrDefault(accentColor)
 
 	if b.LocationType != "" {
 		locType = b.LocationType

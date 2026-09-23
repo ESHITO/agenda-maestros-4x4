@@ -162,6 +162,7 @@
   "time_afternoon": "Nachmittag",
   "time_evening": "Abend",
   "phone_call_number": "Telefonnummer (optional, für einen Anruf)",
+  "calendar_degraded_notice": "Einige Kalenderinformationen konnten nicht geladen werden, daher ist die Verfügbarkeit möglicherweise unvollständig.",
   "phone_country_label": "Land",
   "phone_country_search": "Land oder Vorwahl suchen",
   "phone_no_results": "Keine Ergebnisse",

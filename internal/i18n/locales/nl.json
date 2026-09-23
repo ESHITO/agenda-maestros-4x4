@@ -162,6 +162,7 @@
   "time_afternoon": "Middag",
   "time_evening": "Avond",
   "phone_call_number": "Telefoonnummer (optioneel, voor een telefoongesprek)",
+  "calendar_degraded_notice": "Sommige agendagegevens konden niet worden geladen, dus de beschikbaarheid is mogelijk onvolledig.",
   "phone_country_label": "Land",
   "phone_country_search": "Land of landcode zoeken",
   "phone_no_results": "Geen resultaten",

@@ -162,6 +162,7 @@
   "time_afternoon": "Pomeriggio",
   "time_evening": "Sera",
   "phone_call_number": "Telefono (facoltativo, per una chiamata)",
+  "calendar_degraded_notice": "Non è stato possibile caricare alcune informazioni del calendario, quindi la disponibilità potrebbe essere incompleta.",
   "phone_country_label": "Paese",
   "phone_country_search": "Cerca paese o prefisso",
   "phone_no_results": "Nessun risultato",

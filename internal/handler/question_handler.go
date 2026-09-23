@@ -291,7 +291,7 @@ func (h *Handler) UpdateQuestion(w http.ResponseWriter, r *http.Request) {
 	if req.Type != nil {
 		switch *req.Type {
 		// Keep this set in step with CreateQuestion above and with the CHECK on
-		// event_type_questions.type (00063) — a type accepted here but missing from
+		// event_type_questions.type (00067) — a type accepted here but missing from
 		// the CHECK fails as a 500 instead of a 400.
 		case "text", "checkbox", "select", "phone":
 			current.Type = *req.Type

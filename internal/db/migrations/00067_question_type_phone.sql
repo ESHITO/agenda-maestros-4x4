@@ -20,8 +20,8 @@
 -- off here would leave the whole process without referential integrity.
 --
 -- The table has no indexes or triggers of its own, so nothing to recreate after the
--- rename. Numbered 00063 — the next number in sequence; see 00062 on why gaps and
--- reserved ranges break goose and SchemaReady.
+-- rename. Numbered 00067 (first shipped as 00063; see 00066 on the renumbering and on why gaps and
+-- reserved ranges break goose and SchemaReady).
 
 -- +goose Up
 PRAGMA foreign_keys=OFF;

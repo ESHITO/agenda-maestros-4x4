@@ -162,6 +162,7 @@
   "time_morning": "Matin",
   "time_afternoon": "Après-midi",
   "time_evening": "Soir",
+  "calendar_degraded_notice": "Certains renseignements d'agenda n'ont pas pu être chargés, les disponibilités peuvent donc être incomplètes.",
   "phone_country_label": "Pays",
   "phone_country_search": "Rechercher un pays ou un indicatif",
   "phone_no_results": "Aucun résultat",
