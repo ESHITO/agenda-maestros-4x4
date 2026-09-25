@@ -40,11 +40,15 @@ func (h *Handler) PrivacyPage(w http.ResponseWriter, r *http.Request) {
 		name = "Club Maestros 4x4"
 	}
 
-	// The owner's address is the contact: the one person guaranteed to exist and to answer
-	// for the workspace. A missing row only drops the mailto lines, never the page.
+	// The owner's address is the contact: the person who answers for the workspace. The
+	// earliest admin stands in if there is no owner (installs claimed before the claim flow
+	// set is_owner, until EnsureWorkspaceOwner runs). No row only drops the mailto lines.
 	var contact string
-	_ = h.db.QueryRowContext(r.Context(),
-		`SELECT email FROM users WHERE is_owner = 1 AND archived_at IS NULL LIMIT 1`).Scan(&contact)
+	_ = h.db.QueryRowContext(r.Context(), `
+		SELECT email FROM users
+		WHERE archived_at IS NULL AND (is_owner = 1 OR is_admin = 1)
+		ORDER BY is_owner DESC, created_at ASC
+		LIMIT 1`).Scan(&contact)
 
 	site := h.publicBaseURL
 	if site == "" {

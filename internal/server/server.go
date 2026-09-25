@@ -60,6 +60,14 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 	h.SetDemoMode(cfg.DemoMode)
 	h.SetDemoResetInterval(cfg.DemoResetInterval)
 
+	// Installs claimed through the browser before the claim flow set is_owner have no
+	// owner; hand it to the earliest admin (no-op once an owner exists).
+	if promoted, err := h.EnsureWorkspaceOwner(ctx); err != nil {
+		logger.Error("owner repair failed", "error", err)
+	} else if promoted != "" {
+		logger.Info("owner repair: earliest admin promoted to workspace owner")
+	}
+
 	if cfg.DemoMode {
 		// There's no persistent volume in demo mode, so the DB is always empty on
 		// boot — this seed doubles as "first boot" and "after a container restart".
