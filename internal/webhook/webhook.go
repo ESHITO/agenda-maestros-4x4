@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -159,6 +160,10 @@ type Service struct {
 	// forceLocale (fork) pins the locale of the start_local* fields, mirroring the
 	// handler's FORCE_LOCALE. "" = use the booker's stored locale. See SetForceLocale.
 	forceLocale string
+	// shortLinkBase (fork) returns the base URL of the WhatsApp short links; nil = none
+	// (fork_short_links.go, SetShortLinkBaseURL). logger (fork) is for their best-effort path.
+	shortLinkBase func() string
+	logger        *slog.Logger
 }
 
 // New creates a Service. If encKeyHex is empty an ephemeral key is generated

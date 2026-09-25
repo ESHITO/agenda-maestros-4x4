@@ -191,7 +191,7 @@ flow, which maps JSON keys (`data.attendee_phone`, ...). FunnelChat **cannot bra
 message. No goose migration was added for any of this - keep it that way (this fork's goose
 numbers 00066/00067 already collide with upstream's); the fork's tables are made in code by
 `webhook.EnsureForkSchema` (below): `webhook_event_type_filters` (+ its trigger),
-`event_type_whatsapp_messages`, `fork_settings`, and the index `idx_fork_webhook_deliveries_booking`
+`event_type_whatsapp_messages`, `fork_settings`, `short_links`, and the index `idx_fork_webhook_deliveries_booking`
 on the upstream `webhook_deliveries`. **No new trigger may name another table** (an upstream
 `CREATE x_new / DROP x / RENAME` rebuild would fail on it); plain tables and indexes are safe.
 
@@ -282,9 +282,13 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
 - **`manage_url` is the only credential kept in clear in the database** (manage tokens are
   stored as hashes). It sits in `webhook_deliveries.payload` only while the delivery is in
   flight: the worker calls `webhook.Service.ScrubManageURL` when it succeeds or runs out of
-  attempts, which also replaces any `/manage/<token>` link **inside** `whatsapp_message` with
-  `[enlace retirado]` (the stored payload is what gets signed and sent, so it must hold the live
-  link until then; the rest of the text stays as a record). Keep it that way if you add a delivery path.
+  attempts, which also removes `whatsapp_message` **whole** (its short-link codes are credentials;
+  removing beats redacting - no link pattern to keep in step - and nothing reads the text back; the
+  stored payload is what gets signed and sent, so both stay until then). Keep it that way if you add a delivery path.
+- **Short links in `whatsapp_message`** (`webhook/fork_short_links.go`, `handler/fork_short_links.go`):
+  `{enlace}` → `{PUBLIC_BASE_URL}/e/{code}`, `{cancelar}` → `/c/{code}`, 8 chars of `23456789abcdefghjkmnpqrstuvwxyz`, a NEW code per rendered message, only for a web link the short one beats (a Meet link, `tel:` or an address stays); payload `location_value`/`manage_url` stay long. `short_links` (EnsureForkSchema, CASCADE) holds only an **HMAC-SHA256 under a key derived from the instance DEK** (a plain SHA-256 of ~40 bits reverses offline).
+  `GET /e|c/{code}`: `RateLimitBy` 20/min per IPv4 address and per IPv6 **/64** (`shortLinkClientKey`: one host usually holds a whole /64); behind a proxy/CDN production needs `TRUSTED_PROXY_CIDRS` with the edge's ranges, or every visitor shares one bucket. Paths redacted in the log, `no-store` + `no-referrer`; malformed → plain 404, no DB; unknown/revoked/expired/wrong route → friendly 404 (manage.html's invalid view, `short_link_invalid_*`). `/e` → 302 to the attendee link built NOW (LiveKit: fresh room token to the CURRENT end + `liveKitJoinGrace`, friendly page after that; cancelled → friendly page); `/c` → additive `IssueManageTokenUntil` (expires with the code's window, not in 60 days) + 302 `/manage/{token}`.
+  Validity follows the booking as it is now (room: end + 12 h, manage: start + 12 h). **A reschedule revokes the manage codes** (`DeleteShortLinks` in `rescheduleSideEffects`, before `booking.rescheduled` renders its new `/c`) - the same invariant as `RotateManageToken`; room codes follow the new time with no write. `expires_at` is a 60-day hard cap the worker purges. `ValidShortCode` accepts `MinShortCodeLen`..`ShortCodeLen`: to lengthen codes raise only `ShortCodeLen`. A failed insert falls back to the long link (logged, never the link), which is why the handler still mints the manage token for `{cancelar}`.
 - **Cancelling from `{cancelar}`** (`manage.html`): the page requires a reason (≥ 3 letters,
   `textarea`), then shows "Tu sesión fue cancelada · ¿Deseas reprogramar?" with "Sí, elegir otra
   fecha" (`/book/{slug}`: a NEW booking of the same type) and "No, cerrar" (a friendly close); an

@@ -69,6 +69,8 @@
   "manage_booking_title": "Gestionar reserva",
   "link_expired_title": "Enlace caducado o no válido",
   "link_expired_text": "Este enlace de gestión ha caducado o ya no es válido. Consulta tu correo de confirmación para obtener un enlace válido, o contacta con el anfitrión para solicitar uno nuevo.",
+  "short_link_invalid_title": "Este enlace ya no es válido",
+  "short_link_invalid_text": "Es posible que la sesión ya haya pasado, que se haya cancelado o que el enlace haya caducado. Si necesitas ayuda, contacta al club y te enviaremos un enlace nuevo.",
   "booking_already_cancelled_title": "Reserva ya cancelada",
   "booking_already_cancelled_text": "Esta reserva ha sido cancelada. Para reservar un nuevo horario, visita la página del evento.",
   "scheduled_for": "Programado para",

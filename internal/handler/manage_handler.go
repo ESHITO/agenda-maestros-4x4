@@ -52,6 +52,9 @@ type managePageData struct {
 	OrganizerTZ     string
 	Status          string // "confirmed" or "cancelled"
 	TokenInvalid    bool   // token not found or expired
+	// ShortLinkInvalid (fork, with TokenInvalid): the page answers a WhatsApp short link
+	// (/e or /c) that no longer opens anything, so it says so in its own words.
+	ShortLinkInvalid bool
 	// Tracking
 	HeadHTML         template.HTML
 	DataLayerEnabled bool
@@ -304,6 +307,12 @@ func (h *Handler) rescheduleSideEffects(bCopy booking.Booking, capturedEtID stri
 	// no longer matches), but without this the new time would get no reminders at all.
 	if err := h.replaceWebhookReminders(ctx, bCopy.ID, bCopy.StartAt); err != nil {
 		h.logger.Error("reschedule: replace webhook reminders", "error", err, "booking_id", bCopy.ID)
+	}
+	// Fork: the WhatsApp /c codes already sent are manage links too, so they die with the
+	// rotation below - here, before anything can return early, and before booking.rescheduled
+	// renders its message, whose own new /c must survive (handler/fork_short_links.go).
+	if err := webhook.DeleteShortLinks(ctx, h.db, bCopy.ID, webhook.ShortLinkManage); err != nil {
+		h.logger.Error("reschedule: revoke short manage links", "error", err, "booking_id", bCopy.ID)
 	}
 
 	d, err := h.loadCancellationData(ctx, &bCopy)

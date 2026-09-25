@@ -111,7 +111,8 @@ func TestWhatsAppMessagesAPI_preview(t *testing.T) {
 	if strings.Contains(created, "Tema:") {
 		t.Errorf("no text question, yet the {tema} line was kept: %q", created)
 	}
-	if !strings.HasSuffix(created, "\nhttps://citas.example.com/manage/ejemplo") {
+	// The short link a delivery carries (fork_short_links.go), with a sample code.
+	if !strings.HasSuffix(created, "\nhttps://citas.example.com/c/ejemplo2") {
 		t.Errorf("preview {cancelar} = %q", created)
 	}
 	if c, _ := p["cancelled"].(string); !strings.Contains(c, "Motivo: _Me surgió un imprevisto en el trabajo_") {
@@ -282,9 +283,9 @@ func TestCancelByToken_reasonReachesTheCancelledWhatsApp(t *testing.T) {
 	}
 }
 
-// A webhook that selected ONLY whatsapp_message still gets a working {cancelar}: the
-// handler mints an additive manage token for the text, and manage_url itself stays out of
-// the payload (that webhook did not ask for it).
+// A webhook that selected ONLY whatsapp_message still gets a working {cancelar} - a /c
+// short link that opens /manage with a fresh, additive token - and manage_url itself stays
+// out of the payload (that webhook did not ask for it).
 func TestJobWebhookReminder_whatsAppOnlyWebhookGetsAWorkingCancelLink(t *testing.T) {
 	h, database, key, userID := setupWorkspaceWithDB(t)
 	h.SetPublicBaseURL("https://citas.example.com")
@@ -305,15 +306,17 @@ func TestJobWebhookReminder_whatsAppOnlyWebhookGetsAWorkingCancelLink(t *testing
 		t.Errorf("manage_url sent to a webhook that did not select it: %v", data)
 	}
 	msg, _ := data["whatsapp_message"].(string)
-	const prefix = "https://citas.example.com/manage/"
+	const prefix = "https://citas.example.com/c/"
 	i := strings.Index(msg, prefix)
 	if i < 0 || !strings.HasPrefix(msg, "Hola Ana ☀️\nTe recordamos tu sesión de *Test Meeting* con Test Host: ") {
 		t.Fatalf("whatsapp_message = %q", msg)
 	}
-	tok := strings.TrimSpace(msg[i+len(prefix):])
-	b, err := booking.New(database).ValidateManageToken(context.Background(), tok)
-	if err != nil || b.ID != id {
-		t.Fatalf("the {cancelar} link does not open this booking: %v", err)
+	code := strings.TrimSpace(msg[i+len(prefix):])
+	loc := followShortLink(t, h, h.ShortManageLink, code)
+	const managePrefix = "https://citas.example.com/manage/"
+	b, err := booking.New(database).ValidateManageToken(context.Background(), strings.TrimPrefix(loc, managePrefix))
+	if !strings.HasPrefix(loc, managePrefix) || err != nil || b.ID != id {
+		t.Fatalf("the {cancelar} link (→ %q) does not open this booking: %v", loc, err)
 	}
 
 	// Without {cancelar} in the text, no token is minted at all.

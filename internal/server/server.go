@@ -544,6 +544,15 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /manage/{token}/reschedule", manageRL(h.RescheduleByToken))
 	mux.HandleFunc("POST /manage/{token}/cancel", manageRL(h.CancelByToken))
 
+	// Fork: the WhatsApp short links (handler/fork_short_links.go): /e enters the session,
+	// /c opens the manage page with a fresh token. Public, so rate-limited on their own
+	// budget, per IPv4 address and per IPv6 /64 (shortLinkClientKey): each code is a ~40-bit
+	// credential and this is what bounds guessing. Behind a proxy or CDN this needs
+	// TRUSTED_PROXY_CIDRS with its ranges, or every visitor shares the one bucket.
+	shortLinkRL := RateLimitBy(20, time.Minute, shortLinkClientKey)
+	mux.HandleFunc("GET /e/{code}", shortLinkRL(h.ShortRoomLink))
+	mux.HandleFunc("GET /c/{code}", shortLinkRL(h.ShortManageLink))
+
 	// Webhooks
 	mux.HandleFunc("POST /v1/webhooks", h.RequireAuth(h.CreateWebhook))
 	mux.HandleFunc("GET /v1/webhooks", h.RequireAuth(h.ListWebhooks))

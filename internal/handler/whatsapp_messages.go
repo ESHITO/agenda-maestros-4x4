@@ -161,6 +161,11 @@ const (
 	sampleWhatsAppZone   = "America/Lima"
 )
 
+// sampleZoomJoinURL has the shape and length of the join_url Zoom returns for a meeting
+// made at booking time (host subdomain, 11-digit id, ?pwd=), so the preview shortens it
+// exactly when a delivery would shorten the real one.
+const sampleZoomJoinURL = "https://us02web.zoom.us/j/81234567890?pwd=EjemploEjemploEjemploEjemplo1234.1"
+
 // sampleJoinLink is {enlace} for the preview: the event type's own link when it has one,
 // else what a booking of a self-generating location would get.
 func (h *Handler) sampleJoinLink(locType, locValue string) string {
@@ -171,13 +176,41 @@ func (h *Handler) sampleJoinLink(locType, locValue string) string {
 	case "livekit":
 		return h.publicURL() + "/room/ejemplo"
 	case "zoom":
-		return "https://zoom.us/j/123456789"
+		return sampleZoomJoinURL
 	case "google_meet":
 		return "https://meet.google.com/abc-defg-hij"
 	case "teams":
 		return "https://teams.microsoft.com/l/meetup-join/ejemplo"
 	}
 	return "" // no link for this type: the line holding {enlace} is dropped, as it would be
+}
+
+// Sample codes of the preview's short links: the real length, obviously an example, and
+// never stored (a delivery draws its own, internal/webhook/fork_short_links.go).
+const (
+	sampleShortCodeRoom   = "ejemplo1"
+	sampleShortCodeManage = "ejemplo2"
+)
+
+// sampleWhatsAppLinks are {enlace} and {cancelar} for the preview, as a delivery would carry
+// them: the short /e and /c links (https://citas.clubmaestros4x4.com/e/ejemplo1) wherever a
+// delivery would shorten. The manage link and a LiveKit link always are (the real ones are
+// ~100 and ~200 characters; the samples stand for them); another web link only when the
+// short one is shorter (a Meet link stays as it is, a Zoom join_url with ?pwd= does not);
+// an address or phone number never. No
+// base URL = the long samples, as a delivery would send.
+func (h *Handler) sampleWhatsAppLinks(locType, locValue string) (enlace, cancelar string) {
+	enlace = h.sampleJoinLink(locType, locValue)
+	base := strings.TrimRight(h.publicURL(), "/")
+	if base == "" {
+		return enlace, "/manage/ejemplo"
+	}
+	if locType == "livekit" && enlace != "" {
+		enlace = webhook.ShortLinkURL(base, webhook.ShortLinkRoom, sampleShortCodeRoom)
+	} else {
+		enlace = webhook.ShortLinkForPreview(base, webhook.ShortLinkRoom, enlace, sampleShortCodeRoom)
+	}
+	return enlace, webhook.ShortLinkURL(base, webhook.ShortLinkManage, sampleShortCodeManage)
 }
 
 // PreviewWhatsAppMessages handles POST /v1/event-types/{slug}/whatsapp-messages/preview:
@@ -236,6 +269,7 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 	if mentor == "" {
 		mentor = "tu mentor"
 	}
+	enlace, cancelar := h.sampleWhatsAppLinks(locType, locValue)
 	base := webhook.WhatsAppValues{
 		Nombre:   sampleWhatsAppName,
 		Mentor:   mentor,
@@ -243,8 +277,8 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 		Fecha:    fecha,
 		Dia:      dia,
 		Hora:     hora,
-		Enlace:   h.sampleJoinLink(locType, locValue),
-		Cancelar: h.publicURL() + "/manage/ejemplo",
+		Enlace:   enlace,
+		Cancelar: cancelar,
 	}
 	if textQuestions > 0 {
 		base.Tema = sampleWhatsAppTopic

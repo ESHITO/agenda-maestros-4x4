@@ -60,8 +60,9 @@ func Logging(logger *slog.Logger, next http.Handler) http.Handler {
 // reach the logs: manage tokens (/manage/{token}), room join URLs (/room/...),
 // and invite tokens (/invites/{token}) would otherwise land verbatim in stdout
 // and any log drain. Query strings are never logged here (only Path is).
+// Fork: the WhatsApp short links' codes (/e/{code}, /c/{code}) are credentials too.
 func redactTokenPaths(path string) string {
-	for _, prefix := range []string{"/manage/", "/room/", "/invites/"} {
+	for _, prefix := range []string{"/manage/", "/room/", "/invites/", "/e/", "/c/"} {
 		if strings.HasPrefix(path, prefix) {
 			return prefix + "[redacted]"
 		}
@@ -215,6 +216,12 @@ func PublicCORS(allowedOrigins []string) func(http.HandlerFunc) http.HandlerFunc
 // locale through only the public limiters was tried and reverted: too much shared-middleware
 // surface for one string on an abuse path a booker reaches only by hammering the endpoint.
 func RateLimit(limit int, period time.Duration) func(http.HandlerFunc) http.HandlerFunc {
+	return RateLimitBy(limit, period, remoteIP)
+}
+
+// RateLimitBy is RateLimit with the bucket chosen by key(r) instead of remoteIP (fork: the
+// WhatsApp short links key on shortLinkClientKey, fork_rate_limit.go). Same 429 answer.
+func RateLimitBy(limit int, period time.Duration, key func(*http.Request) string) func(http.HandlerFunc) http.HandlerFunc {
 	rl := &rateLimiter{
 		windows: make(map[string]*rlWindow),
 		limit:   limit,
@@ -223,8 +230,7 @@ func RateLimit(limit int, period time.Duration) func(http.HandlerFunc) http.Hand
 	go rl.cleanup()
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			ip := remoteIP(r)
-			if !rl.allow(ip) {
+			if !rl.allow(key(r)) {
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(period.Seconds())))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusTooManyRequests)

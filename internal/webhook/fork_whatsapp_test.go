@@ -403,9 +403,10 @@ func TestSetWhatsAppMessages_validationClearAndCascade(t *testing.T) {
 	}
 }
 
-// ScrubManageURL also redacts the manage link INSIDE whatsapp_message once a delivery is
-// finished; a delivery still in flight keeps it (its next attempt sends it).
-func TestScrubManageURL_redactsTheLinkInsideWhatsAppMessage(t *testing.T) {
+// ScrubManageURL also removes whatsapp_message - whole: its links are credentials (short
+// codes, or the long links when a code could not be made) - once a delivery is finished; a
+// delivery still in flight keeps it (its next attempt sends it).
+func TestScrubManageURL_removesTheWhatsAppMessage(t *testing.T) {
 	e := newEnv(t)
 	seedWhatsAppBooking(t, e, "Ventas")
 	ctx := context.Background()
@@ -436,19 +437,50 @@ func TestScrubManageURL_redactsTheLinkInsideWhatsAppMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := lastData(t, e, id)
-	msg, _ := data["whatsapp_message"].(string)
-	if strings.Contains(msg, "/manage/") || strings.Contains(msg, "0123456789abcdef") {
-		t.Errorf("finished delivery still holds the link: %q", msg)
-	}
-	if !strings.Contains(msg, "Si necesitas cancelar o cambiar la fecha: [enlace retirado]") || !strings.HasPrefix(msg, "Hola María Pérez") {
-		t.Errorf("the rest of the text should stay: %q", msg)
+	if _, ok := data["whatsapp_message"]; ok {
+		t.Errorf("finished delivery still holds whatsapp_message: %v", data["whatsapp_message"])
 	}
 	if _, ok := data["manage_url"]; ok {
 		t.Errorf("manage_url not removed: %v", data)
 	}
+	var raw string
+	if err := e.db.QueryRow(`SELECT payload FROM webhook_deliveries WHERE id = ?`, deliveryID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "0123456789abcdef") || !strings.Contains(raw, `"event":"booking.created"`) {
+		t.Errorf("stored payload after scrubbing = %s; want the envelope without the link", raw)
+	}
 	// Idempotent.
 	if err := e.svc.ScrubManageURL(ctx, deliveryID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A webhook that selected whatsapp_message but not manage_url: the text still goes.
+func TestScrubManageURL_removesTheWhatsAppMessageWithoutManageURL(t *testing.T) {
+	e := newEnv(t)
+	seedWhatsAppBooking(t, e, "Ventas")
+	ctx := context.Background()
+	id := waHook(t, e, []string{"booking.created"}, []string{webhook.FieldID, webhook.FieldWhatsAppMessage})
+	if err := e.svc.Enqueue(ctx, "booking.created", webhook.BookingPayload{
+		ID: "bk-wa", HostID: testUserID, StartAt: "2026-09-29T15:00:00Z", Status: "confirmed",
+		ManageURL: "https://citas.example.com/manage/0123456789abcdef0123456789abcdef",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE webhook_deliveries SET status = 'failed' WHERE webhook_id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	var deliveryID string
+	if err := e.db.QueryRow(`SELECT id FROM webhook_deliveries WHERE webhook_id = ?`, id).Scan(&deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.ScrubManageURL(ctx, deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	data := lastData(t, e, id)
+	if _, ok := data["whatsapp_message"]; ok || data["id"] != "bk-wa" {
+		t.Errorf("after scrubbing a failed delivery: %v; want id kept and whatsapp_message gone", data)
 	}
 }
 

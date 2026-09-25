@@ -66,6 +66,8 @@
   "manage_booking_title": "Gerir marcação",
   "link_expired_title": "Ligação expirada ou inválida",
   "link_expired_text": "Esta ligação de gestão expirou ou já não é válida. Consulte o seu e-mail de confirmação para obter uma ligação válida, ou contacte o anfitrião para receber uma nova.",
+  "short_link_invalid_title": "Esta ligação já não é válida",
+  "short_link_invalid_text": "A sessão pode já ter acontecido ou ter sido cancelada, ou a ligação expirou. Se precisar de ajuda, contacte o organizador para receber uma nova ligação.",
   "booking_already_cancelled_title": "Marcação já cancelada",
   "booking_already_cancelled_text": "Esta marcação foi cancelada. Para marcar um novo horário, visite a página do evento.",
   "scheduled_for": "Agendado para",

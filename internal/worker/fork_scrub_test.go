@@ -113,3 +113,77 @@ func TestWorker_keepsManageURLWhileRetrying_scrubsWhenFailed(t *testing.T) {
 		t.Errorf("after exhausting retries: status %q, manage_url %v; want failed and the link removed", status, l)
 	}
 }
+
+// Fork: whatsapp_message carries the WhatsApp short links - credentials - so it leaves the
+// stored payload at the same moment as manage_url: kept while retrying, gone once finished.
+func TestWorker_scrubsWhatsAppMessageWhenFinished(t *testing.T) {
+	database, svc := setup(t)
+	ctx := context.Background()
+
+	fail := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	wh, _, _ := svc.Create(ctx, "host-03", srv.URL, []string{"booking.created"})
+	database.ExecContext(ctx, `UPDATE webhooks SET fields = '["status","whatsapp_message"]' WHERE id = ?`, wh.ID)
+	const text = "Hola Ana, entra aquí: https://citas.example.com/e/k3pq9abx"
+	database.ExecContext(ctx, `
+		INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status)
+		VALUES ('d-wa', ?, 'booking.created', json_object('event', 'booking.created', 'data', json_object('status', 'confirmed', 'whatsapp_message', ?)), 'pending')`,
+		wh.ID, text)
+	database.ExecContext(ctx, `INSERT INTO jobs (id, type, payload, run_at) VALUES ('j-wa', 'webhook.deliver', '{"webhook_delivery_id":"d-wa"}', ?)`,
+		time.Now().UTC().Add(-time.Second).Format(time.RFC3339))
+	stored := func() (string, map[string]any) {
+		t.Helper()
+		var status, payload string
+		database.QueryRowContext(ctx, `SELECT status, payload FROM webhook_deliveries WHERE id = 'd-wa'`).Scan(&status, &payload)
+		var env envelopeData
+		_ = json.Unmarshal([]byte(payload), &env)
+		return status, env.Data
+	}
+	w := newWorker(t, database, svc)
+
+	w.Poll(ctx) // fails once: the retry needs the text
+	if status, data := stored(); status != "pending" || data["whatsapp_message"] != text {
+		t.Fatalf("while retrying: %s %v; want the text kept", status, data)
+	}
+	fail = false
+	database.ExecContext(ctx, `UPDATE jobs SET run_at = ? WHERE id = 'j-wa'`, time.Now().UTC().Add(-time.Second).Format(time.RFC3339))
+	w.Poll(ctx)
+	status, data := stored()
+	if _, ok := data["whatsapp_message"]; status != "success" || ok || data["status"] != "confirmed" {
+		t.Errorf("after success: %s %v; want whatsapp_message removed and the rest kept", status, data)
+	}
+}
+
+// Fork: the worker's periodic purge drops short-link codes past their hard cap.
+func TestWorker_purgesExpiredShortLinks(t *testing.T) {
+	database, svc := setup(t)
+	ctx := context.Background()
+	database.ExecContext(ctx,
+		`INSERT INTO event_types (id, user_id, slug, name, duration_minutes) VALUES ('et-sl','host-01','sl-test','SL',30)`)
+	database.ExecContext(ctx,
+		`INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at) VALUES ('bk-sl','et-sl','host-01','2026-06-14T09:00:00Z','2026-06-14T09:30:00Z')`)
+	if _, err := svc.CreateShortLink(ctx, "bk-sl", webhook.ShortLinkRoom, time.Now().Add(-61*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	live, err := svc.CreateShortLink(ctx, "bk-sl", webhook.ShortLinkManage, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	newWorker(t, database, svc).Poll(ctx)
+	var n int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM short_links`).Scan(&n)
+	if n != 1 {
+		t.Errorf("short_links rows after the purge = %d; want 1", n)
+	}
+	if _, err := svc.ResolveShortLink(ctx, live, webhook.ShortLinkManage, time.Now()); err != nil {
+		t.Errorf("the live code was purged: %v", err)
+	}
+}

@@ -69,6 +69,8 @@
   "manage_booking_title": "Manage booking",
   "link_expired_title": "Link expired or invalid",
   "link_expired_text": "This manage link has expired or is no longer valid. Please check your confirmation email for a valid link, or contact the host for a new one.",
+  "short_link_invalid_title": "This link is no longer valid",
+  "short_link_invalid_text": "The session may have already taken place or been cancelled, or the link may have expired. If you need help, contact the organiser and they will send you a new link.",
   "booking_already_cancelled_title": "Booking already cancelled",
   "booking_already_cancelled_text": "This booking has been cancelled. To book a new time, visit the event page.",
   "scheduled_for": "Scheduled for",

@@ -109,6 +109,11 @@ func (w *Worker) Poll(ctx context.Context) {
 		`DELETE FROM sessions WHERE expires_at < ?`, now); err != nil {
 		w.logger.Error("worker: purge expired sessions", "error", err)
 	}
+	// Fork: WhatsApp short-link codes past their 60-day hard cap (webhook/fork_short_links.go;
+	// one indexed statement - a code whose booking is over already stopped resolving).
+	if err := webhook.PurgeExpiredShortLinks(ctx, w.db, time.Now()); err != nil {
+		w.logger.Error("worker: purge expired short links", "error", err)
+	}
 	// Magic-link tokens are single-use + short-lived; sweep expired/consumed ones.
 	if _, err := w.db.ExecContext(ctx,
 		`DELETE FROM magic_link_tokens WHERE expires_at < ? OR used_at IS NOT NULL`, now); err != nil {

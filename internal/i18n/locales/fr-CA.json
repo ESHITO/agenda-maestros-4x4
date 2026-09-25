@@ -66,6 +66,8 @@
   "manage_booking_title": "Gérer la réservation",
   "link_expired_title": "Lien expiré ou invalide",
   "link_expired_text": "Ce lien de gestion a expiré ou n'est plus valide. Consultez votre courriel de confirmation pour un lien valide, ou contactez l'organisateur pour en obtenir un nouveau.",
+  "short_link_invalid_title": "Ce lien n'est plus valide",
+  "short_link_invalid_text": "La séance a peut-être déjà eu lieu ou été annulée, ou le lien a expiré. Si vous avez besoin d'aide, contactez l'organisateur pour recevoir un nouveau lien.",
   "booking_already_cancelled_title": "Réservation déjà annulée",
   "booking_already_cancelled_text": "Cette réservation a été annulée. Pour réserver un nouveau créneau, rendez-vous sur la page de l'événement.",
   "scheduled_for": "Prévu le",

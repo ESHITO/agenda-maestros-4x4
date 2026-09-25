@@ -81,6 +81,12 @@ func EnsureForkSchema(db *sql.DB) error {
 			return fmt.Errorf("webhook: fork schema: %w", err)
 		}
 	}
+	// The WhatsApp short links (fork_short_links.go): a plain table, same rule.
+	for _, stmt := range forkShortLinkSchema {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("webhook: fork schema: %w", err)
+		}
+	}
 	return nil
 }
 

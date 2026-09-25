@@ -66,6 +66,8 @@
   "manage_booking_title": "Gestisci prenotazione",
   "link_expired_title": "Link scaduto o non valido",
   "link_expired_text": "Questo link di gestione è scaduto o non è più valido. Controlli l'email di conferma per un link valido, oppure contatti l'organizzatore per ottenerne uno nuovo.",
+  "short_link_invalid_title": "Questo link non è più valido",
+  "short_link_invalid_text": "La sessione potrebbe essere già avvenuta o essere stata annullata, oppure il link è scaduto. Se ha bisogno di aiuto, contatti l'organizzatore per ricevere un nuovo link.",
   "booking_already_cancelled_title": "Prenotazione già annullata",
   "booking_already_cancelled_text": "Questa prenotazione è stata annullata. Per prenotare un nuovo orario, visiti la pagina dell'evento.",
   "scheduled_for": "In programma il",

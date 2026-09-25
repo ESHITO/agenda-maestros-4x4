@@ -13,7 +13,6 @@ package webhook
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
@@ -143,8 +142,8 @@ type WhatsAppValues struct {
 	Fecha    string // {fecha}: start_local_long, "martes 30 de septiembre de 2026, 10:00"
 	Dia      string // {dia}: "martes 30 de septiembre"
 	Hora     string // {hora}: "10:00"
-	Enlace   string // {enlace}: location_value, the ATTENDEE's join link
-	Cancelar string // {cancelar}: manage_url, the cancel/reschedule link
+	Enlace   string // {enlace}: location_value, the ATTENDEE's join link (a /e short link in a delivery)
+	Cancelar string // {cancelar}: manage_url, the cancel/reschedule link (a /c short link in a delivery)
 	Motivo   string // {motivo}: the cancellation reason (cancelled only)
 }
 
@@ -328,6 +327,15 @@ func (s *Service) enrichWhatsApp(ctx context.Context, event string, bd *enriched
 	if moment == WhatsAppCancelled {
 		v.Motivo = bd.core.CancellationReason
 	}
+	// Short links (fork_short_links.go): one new code per marker the text really uses, the
+	// long link when there is nothing to shorten or the code cannot be stored. The payload's
+	// own location_value / manage_url keep the long links.
+	if UsesMarker(tmpl, "enlace") {
+		v.Enlace = s.whatsAppShortLink(ctx, bd.core.ID, ShortLinkRoom, v.Enlace)
+	}
+	if UsesMarker(tmpl, "cancelar") {
+		v.Cancelar = s.whatsAppShortLink(ctx, bd.core.ID, ShortLinkManage, v.Cancelar)
+	}
 	bd.whatsappMessage = RenderWhatsApp(tmpl, v)
 }
 
@@ -418,41 +426,4 @@ func (s *Service) SetWhatsAppMessages(ctx context.Context, eventTypeID string, m
 		}
 	}
 	return tx.Commit()
-}
-
-// manageLinkRE finds a manage link ("https://host/manage/<token>", or a bare
-// "/manage/<token>") inside a stored whatsapp_message. Tokens are hex; the class is wider
-// on purpose, so a future token format is still caught.
-var manageLinkRE = regexp.MustCompile(`(?i)(?:https?://\S*?)?/manage/[A-Za-z0-9_-]+`)
-
-// whatsAppLinkRedacted replaces a manage link in a FINISHED delivery's stored text.
-const whatsAppLinkRedacted = "[enlace retirado]"
-
-// scrubWhatsAppManageLinks is ScrubManageURL for the link inside data.whatsapp_message.
-//
-// Why a redaction and not "never store it": the stored payload IS what the worker signs
-// and sends, so while a delivery is in flight the text must hold the working link, exactly
-// as data.manage_url does. Once the delivery is finished ('success', or 'failed' with no
-// attempts left) nothing will send it again, and the link - a 60-day credential to view,
-// cancel and reschedule - is replaced by whatsAppLinkRedacted in the stored copy only.
-// The rest of the text stays, as a record of what the client was sent.
-func (s *Service) scrubWhatsAppManageLinks(ctx context.Context, deliveryID string) error {
-	var msg sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT json_extract(payload, '$.data.whatsapp_message') FROM webhook_deliveries
-		WHERE id = ? AND status IN ('success', 'failed') AND json_valid(payload)`, deliveryID).Scan(&msg)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !msg.Valid) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	scrubbed := manageLinkRE.ReplaceAllString(msg.String, whatsAppLinkRedacted)
-	if scrubbed == msg.String {
-		return nil
-	}
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE webhook_deliveries SET payload = json_set(payload, '$.data.whatsapp_message', ?)
-		WHERE id = ? AND status IN ('success', 'failed')`, scrubbed, deliveryID)
-	return err
 }

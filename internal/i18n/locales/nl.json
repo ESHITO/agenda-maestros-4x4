@@ -66,6 +66,8 @@
   "manage_booking_title": "Boeking beheren",
   "link_expired_title": "Link verlopen of ongeldig",
   "link_expired_text": "Deze beheerlink is verlopen of niet meer geldig. Bekijk je bevestigingsmail voor een geldige link, of vraag de organisator om een nieuwe.",
+  "short_link_invalid_title": "Deze link is niet meer geldig",
+  "short_link_invalid_text": "De sessie heeft misschien al plaatsgevonden of is geannuleerd, of de link is verlopen. Heb je hulp nodig, neem dan contact op met de organisator voor een nieuwe link.",
   "booking_already_cancelled_title": "Boeking al geannuleerd",
   "booking_already_cancelled_text": "Deze boeking is geannuleerd. Ga naar de evenementpagina om een nieuwe tijd te boeken.",
   "scheduled_for": "Gepland op",

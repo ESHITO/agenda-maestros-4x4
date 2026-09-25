@@ -128,7 +128,7 @@ func (h *Handler) getLLM() *llm.Client {
 
 func New(db *sql.DB, logger *slog.Logger) *Handler {
 	whs, _ := webhook.New(db, "") // ephemeral key when no encryption key configured
-	return &Handler{
+	h := &Handler{
 		db:         db,
 		logger:     logger,
 		bookingSvc: booking.New(db),
@@ -136,6 +136,8 @@ func New(db *sql.DB, logger *slog.Logger) *Handler {
 		webhookSvc: whs,
 		calNudge:   make(chan struct{}, 1),
 	}
+	h.wireWebhookSvc(whs) // fork: WhatsApp short links (fork_short_links.go)
+	return h
 }
 
 // SetMailer configures the email sender and the base URL used in email links.
@@ -244,6 +246,7 @@ func (h *Handler) getMicrosoftAuth() *oauth2.Config {
 // backed by the configured encryption key.
 func (h *Handler) SetWebhookSvc(svc *webhook.Service) {
 	h.webhookSvc = svc
+	h.wireWebhookSvc(svc) // fork: WhatsApp short links (fork_short_links.go)
 }
 
 // isEmailEnabled reports whether a real SMTP sender is configured.

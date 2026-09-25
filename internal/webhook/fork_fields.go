@@ -189,8 +189,9 @@ func NormalizePhone(raw string) (e164, digits string) {
 	return "+" + d, d
 }
 
-// ScrubManageURL removes data.manage_url from a FINISHED delivery's stored payload (status
-// 'success', or 'failed' with no attempts left). That link is a working credential for 60
+// ScrubManageURL removes data.manage_url (and data.whatsapp_message, below) from a FINISHED
+// delivery's stored payload (status 'success', or 'failed' with no attempts left). That
+// link is a working credential for 60
 // days - view, cancel, reschedule - and otherwise the only one kept in clear in the
 // database: booking_manage_tokens stores hashes only, while webhook_deliveries rows live
 // 30 days past their last attempt inside the file Litestream replicates offsite. The
@@ -198,16 +199,21 @@ func NormalizePhone(raw string) (e164, digits string) {
 // nothing. A delivery still retrying keeps the link: its next attempt needs it.
 // Called by the worker at both terminal transitions.
 //
-// The same link can also travel INSIDE data.whatsapp_message (the {cancelar} marker, see
-// fork_whatsapp.go), so that text is redacted in the same pass.
+// data.whatsapp_message goes in the same statement, WHOLE. Its {enlace} and {cancelar} are
+// short links (fork_short_links.go) whose codes are credentials - kept nowhere else in
+// clear, the table holds keyed hashes - or, when a code could not be made, the long
+// /room/...?t= and /manage/ links themselves. Removing the text is safer than redacting
+// its links: no pattern to keep in step with every link format, present or future, and
+// nothing reads the stored text back (the notice status in the bookings list uses the
+// delivery's status; the owner previews a text in the editor). While the delivery is in
+// flight the text stays - the stored payload IS what the worker signs and sends.
 func (s *Service) ScrubManageURL(ctx context.Context, deliveryID string) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE webhook_deliveries SET payload = json_remove(payload, '$.data.manage_url')
-		WHERE id = ? AND status IN ('success', 'failed')
-		  AND json_valid(payload) AND json_extract(payload, '$.data.manage_url') IS NOT NULL`,
+		UPDATE webhook_deliveries
+		SET payload = json_remove(payload, '$.data.manage_url', '$.data.whatsapp_message')
+		WHERE id = ? AND status IN ('success', 'failed') AND json_valid(payload)
+		  AND (json_extract(payload, '$.data.manage_url') IS NOT NULL
+		       OR json_extract(payload, '$.data.whatsapp_message') IS NOT NULL)`,
 		deliveryID)
-	if err != nil {
-		return err
-	}
-	return s.scrubWhatsAppManageLinks(ctx, deliveryID)
+	return err
 }

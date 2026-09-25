@@ -66,6 +66,8 @@
   "manage_booking_title": "Hantera bokning",
   "link_expired_title": "Länken har gått ut eller är ogiltig",
   "link_expired_text": "Den här hanteringslänken har gått ut eller är inte längre giltig. Leta efter en giltig länk i ditt bekräftelsemejl, eller kontakta värden för att få en ny.",
+  "short_link_invalid_title": "Den här länken är inte längre giltig",
+  "short_link_invalid_text": "Sessionen kan redan ha ägt rum eller ha ställts in, eller så har länken gått ut. Om du behöver hjälp, kontakta arrangören för att få en ny länk.",
   "booking_already_cancelled_title": "Bokningen är redan avbokad",
   "booking_already_cancelled_text": "Den här bokningen har avbokats. Gå till evenemangssidan för att boka en ny tid.",
   "scheduled_for": "Inbokad",

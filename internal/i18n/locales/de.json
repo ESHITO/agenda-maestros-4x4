@@ -66,6 +66,8 @@
   "manage_booking_title": "Buchung verwalten",
   "link_expired_title": "Link abgelaufen oder ungültig",
   "link_expired_text": "Dieser Verwaltungslink ist abgelaufen oder nicht mehr gültig. Bitte prüfen Sie Ihre Bestätigungs-E-Mail auf einen gültigen Link oder wenden Sie sich an den Gastgeber.",
+  "short_link_invalid_title": "Dieser Link ist nicht mehr gültig",
+  "short_link_invalid_text": "Der Termin hat möglicherweise schon stattgefunden, wurde abgesagt oder der Link ist abgelaufen. Wenn Sie Hilfe brauchen, wenden Sie sich an den Veranstalter, um einen neuen Link zu erhalten.",
   "booking_already_cancelled_title": "Buchung bereits storniert",
   "booking_already_cancelled_text": "Diese Buchung wurde storniert. Um einen neuen Termin zu buchen, besuchen Sie die Veranstaltungsseite.",
   "scheduled_for": "Geplant für",

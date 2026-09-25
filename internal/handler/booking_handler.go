@@ -1107,7 +1107,7 @@ func (h *Handler) mintMeetingLink(ctx context.Context, b *booking.Booking, in bo
 			// Valid from now until a bit past the meeting end (late joins / overruns). Two links:
 			// the host's (controls-enabled) goes on the host calendar events + host emails; the
 			// attendee's plain link goes in the attendee email + manage page + location_value.
-			exp := b.EndAt.Add(2 * time.Hour)
+			exp := b.EndAt.Add(liveKitJoinGrace) // 2 h; shared with the WhatsApp /e links (fork_short_links.go)
 			attendeeURL := lk.BookingJoinURL(h.baseURL, room, "", exp)
 			meetURL = lk.BookingJoinURL(h.baseURL, room, "host", exp) // host calendar events
 			livekitHostURL = meetURL
