@@ -298,6 +298,7 @@ func (h *Handler) ClaimInvite(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	h.applyInviteRole(r.Context(), tx, email, userID) // fork: the role chosen on invite (fork_team_api.go)
 
 	if _, err := tx.ExecContext(r.Context(),
 		`UPDATE invite_tokens SET used_at = ? WHERE id = ?`, now, inviteID); err != nil {

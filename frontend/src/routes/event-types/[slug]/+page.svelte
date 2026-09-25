@@ -3,7 +3,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { api, type EventType, type EventTypeHost, type TeamMember, type Team, type CalendarStatus, type ZoomStatus } from '$lib/api';
+	import { api, copyText, type EventType, type EventTypeHost, type TeamMember, type Team, type CalendarStatus, type ZoomStatus } from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -66,6 +66,22 @@
 	let etLoading = $state(true);
 	let etError = $state('');
 	let etSaving = $state(false);
+
+	// ── Fork: predefined types (et.team) ─────────────────────────────────────────
+	// Decided BEFORE `owned`: a mentor's copy is owned by the template's owner, so for the
+	// owner owned = true, yet every edit of a copy is refused (409) - it is read-only for
+	// everyone, and edited through its template. The template (T) and the shared Soporte
+	// type (S) stay editable by their owner, except who hosts them: that follows the áreas
+	// set in Miembros, so no hosts PUT and no routing fields in the PATCH.
+	const teamKind = $derived(et?.team?.kind);
+	const isCopy = $derived(teamKind === 'mentoria_copy');
+	const isManaged = $derived(teamKind === 'mentoria_template' || teamKind === 'soporte_shared');
+	const mentorName = $derived(et?.team?.mentor_name || et?.mentor_name || et?.team?.host_name || '');
+	async function copyBookLink() {
+		const url = `${window.location.origin}/book/${et?.slug ?? slug}`;
+		if (await copyText(url)) toast.success('Enlace copiado');
+		else toast.error('No se pudo copiar; mantén pulsado el enlace para copiarlo.');
+	}
 
 	// Connected calendar (the owner's) — drives the meeting-link auto-generation hint.
 	let calStatus = $state<CalendarStatus | null>(null);
@@ -332,6 +348,9 @@
 	}
 
 	async function saveET() {
+		// Read-only views (a hosted type, a mentor's copy) have nothing to save; Ctrl/Cmd+S
+		// must not send a PATCH the server refuses.
+		if (!et || et.owned === false || isCopy) return;
 		if (!form.name.trim()) { toast.error('El nombre es obligatorio.'); return; }
 		if (form.duration_minutes < 5) { toast.error('La duración debe ser de al menos 5 minutos.'); return; }
 		// Matches the API, which only requires a positive value. A stricter floor here would
@@ -339,15 +358,17 @@
 		// including when the person is editing something else entirely.
 		if (form.slot_interval_minutes < 1) { toast.error('El intervalo entre turnos debe ser de al menos 1 minuto.'); return; }
 		if (form.max_active_bookings < 0) { toast.error('Las reservas activas máximas no pueden ser negativas (0 = ilimitado).'); return; }
-		if (routingMode === 'round_robin' && rotationHosts.length === 0) {
+		// Fork: a predefined type's hosts come from Miembros, so the host questions do not apply.
+		const managed = isManaged;
+		if (!managed && routingMode === 'round_robin' && rotationHosts.length === 0) {
 			toast.error('Agrega al menos una persona a la rotación'); return;
 		}
-		if (routingMode === 'collective' && !togetherHosts.some((h) => !h.optional)) {
+		if (!managed && routingMode === 'collective' && !togetherHosts.some((h) => !h.optional)) {
 			toast.error('Agrega al menos un anfitrión requerido (alguien que siempre asista)'); return;
 		}
 		etSaving = true;
 		try {
-			const updated = await api.patch<EventType>(`/v1/event-types/${slug}`, {
+			const payload: Record<string, unknown> = {
 				slug: form.slug.trim(),
 				name: form.name.trim(),
 				description: form.description.trim() || null,
@@ -382,12 +403,22 @@
 				subj_cancellation: subj_cancellation.trim(),
 				subj_reschedule: subj_reschedule.trim(),
 				subj_reminder: subj_reminder.trim(),
-			});
+			};
+			// Fork: left out on T and S. Sending them from a page loaded before the Soporte
+			// rotation changed would put the stored routing back (the server also refuses a
+			// change with 409).
+			if (managed) {
+				delete payload.routing_mode;
+				delete payload.rr_strategy;
+			}
+			const updated = await api.patch<EventType>(`/v1/event-types/${slug}`, payload);
 			// A rename moves the row out from under the name this page was loaded with, so
 			// every request after the PATCH has to use the one the server just confirmed.
 			const effSlug = updated?.slug || slug;
 
-			if (routingMode === 'round_robin') {
+			if (managed) {
+				// Fork: hosts are assigned from Miembros (the server refuses this PUT).
+			} else if (routingMode === 'round_robin') {
 				await api.put(`/v1/event-types/${effSlug}/hosts`, {
 					hosts: rotationHosts.map((hh, i) => ({ user_id: hh.user_id, role: 'rotation', priority: i })),
 				});
@@ -463,8 +494,9 @@
 
 	onMount(async () => {
 		await loadET();
-		// Editor-only data (owner-scoped endpoints) — skip for read-only hosts.
-		if (et?.owned === false) return;
+		// Editor-only data (owner-scoped endpoints) — skip for read-only hosts, and for a
+		// mentor's copy (read-only for everyone, fork).
+		if (et?.owned === false || et?.team?.kind === 'mentoria_copy') return;
 		// Connected calendar — best-effort; drives the meeting-link hint only.
 		api.get<CalendarStatus>('/v1/calendar/status').then((s) => (calStatus = s)).catch(() => {});
 	api.get<ZoomStatus>('/v1/zoom/status').then((s) => (zoomStatus = s)).catch(() => {});
@@ -476,6 +508,27 @@
 	});
 
 </script>
+
+{#snippet readOnlySummary(e: EventType)}
+	<div class="rounded-lg border bg-card p-4 sm:p-6">
+		<dl class="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[140px_1fr] sm:gap-y-3">
+			<dt class="text-muted-foreground">Nombre</dt><dd class="mb-2 font-medium sm:mb-0">{e.name}</dd>
+			{#if e.description}<dt class="text-muted-foreground">Descripción</dt><dd class="mb-2 whitespace-pre-line sm:mb-0">{e.description}</dd>{/if}
+			<dt class="text-muted-foreground">Duración</dt><dd class="mb-2 sm:mb-0">{e.duration_minutes} min</dd>
+			{#if e.slot_interval_minutes !== e.duration_minutes}
+				<dt class="text-muted-foreground">Intervalo entre turnos</dt><dd class="mb-2 sm:mb-0">{e.slot_interval_minutes} min</dd>
+			{/if}
+			<dt class="text-muted-foreground">Ubicación</dt><dd class="mb-2 break-words sm:mb-0">{LOCATION_TYPES.find((l) => l.value === e.location_type)?.label ?? e.location_type}{#if e.location_value} · {e.location_value}{/if}</dd>
+			<dt class="text-muted-foreground">Enrutamiento</dt><dd class="mb-2 capitalize sm:mb-0">{ROUTING_MODE_LABELS[e.routing_mode] ?? e.routing_mode.replace('_', ' ')}</dd>
+			<dt class="text-muted-foreground">Estado</dt><dd class="mb-2 sm:mb-0">{e.is_active ? 'Activo' : 'Inactivo'} · {e.is_public ? 'Listado' : 'No listado (solo por enlace)'}</dd>
+			<dt class="text-muted-foreground">Página de reserva</dt>
+			<dd class="flex flex-wrap items-center gap-2">
+				<a href="/book/{e.slug}" target="_blank" rel="noopener" class="break-all text-primary underline">/book/{e.slug}</a>
+				<Button variant="outline" size="sm" onclick={copyBookLink}>Copiar enlace</Button>
+			</dd>
+		</dl>
+	</div>
+{/snippet}
 
 {#snippet hostPickers(target: Target, idPrefix: string)}
 	<div class="grid grid-cols-2 gap-4">
@@ -547,11 +600,37 @@
 	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else if etError}
 	<p class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{etError}</p>
+{:else if et && et.team?.kind === 'mentoria_copy'}
+
+<!-- Fork: a mentor's copy of the Mentoría template - read-only for everyone. -->
+<div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+	{#if et.owned !== false}
+		Es la copia de {mentorName ? mentorName : 'un mentor'}.
+		{#if et.team.template_slug}
+			Se edita en la plantilla:
+			<a href="{base}/event-types/{et.team.template_slug}" class="font-medium underline">{et.team.template_name || et.team.template_slug}</a>.
+		{:else}
+			Se edita en la plantilla{et.team.template_name ? `: ${et.team.template_name}` : ''}.
+		{/if}
+		Los cambios de la plantilla llegan solos a todas las copias.
+	{:else}
+		<span class="font-medium">Predefinido por el propietario.</span>
+		Este es tu enlace personal: compártelo con tus clientes. Tú defines tus horarios en
+		<a href="{base}/availability" class="font-medium underline">Disponibilidad</a>.
+	{/if}
+</div>
+{@render readOnlySummary(et)}
+
 {:else if et && et.owned === false}
 
 <!-- Read-only: the user hosts this event type but doesn't own it -->
 <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-	{#if et.owner_email}
+	{#if et.team}
+		<!-- Fork: a predefined type this person attends (the shared Soporte type). -->
+		<span class="font-medium">Predefinido por el propietario.</span>
+		Se reparte por turnos entre el personal de soporte; tú defines tus horarios en
+		<a href="{base}/availability" class="font-medium underline">Disponibilidad</a>.
+	{:else if et.owner_email}
 		<span class="font-medium">{et.owner_name || et.owner_email}</span> creó este tipo de atención.
 		<a href="mailto:{et.owner_email}?subject={encodeURIComponent('Solicitud de cambio: ' + et.name)}" class="font-medium underline">Envíale un mensaje</a> para solicitar cambios.
 	{:else if et.owner_name}
@@ -560,22 +639,25 @@
 		Este tipo de atención está administrado por su propietario. Contáctalo para solicitar cambios.
 	{/if}
 </div>
-<div class="rounded-lg border bg-card p-6">
-	<dl class="grid grid-cols-[140px_1fr] gap-x-4 gap-y-3 text-sm">
-		<dt class="text-muted-foreground">Nombre</dt><dd class="font-medium">{et.name}</dd>
-		{#if et.description}<dt class="text-muted-foreground">Descripción</dt><dd class="whitespace-pre-line">{et.description}</dd>{/if}
-		<dt class="text-muted-foreground">Duración</dt><dd>{et.duration_minutes} min</dd>
-		{#if et.slot_interval_minutes !== et.duration_minutes}
-			<dt class="text-muted-foreground">Intervalo entre turnos</dt><dd>{et.slot_interval_minutes} min</dd>
-		{/if}
-		<dt class="text-muted-foreground">Ubicación</dt><dd>{LOCATION_TYPES.find((l) => l.value === et?.location_type)?.label ?? et.location_type}{#if et.location_value} · {et.location_value}{/if}</dd>
-		<dt class="text-muted-foreground">Enrutamiento</dt><dd class="capitalize">{ROUTING_MODE_LABELS[et.routing_mode] ?? et.routing_mode.replace('_', ' ')}</dd>
-		<dt class="text-muted-foreground">Estado</dt><dd>{et.is_active ? 'Activo' : 'Inactivo'} · {et.is_public ? 'Listado' : 'No listado (solo por enlace)'}</dd>
-		<dt class="text-muted-foreground">Página de reserva</dt><dd><a href="/book/{et.slug}" target="_blank" rel="noopener" class="text-primary underline">/book/{et.slug}</a></dd>
-	</dl>
-</div>
+{@render readOnlySummary(et)}
 
 {:else}
+
+<!-- Fork: what a predefined type does, above the tabs. -->
+{#if teamKind === 'mentoria_template'}
+	<div class="mb-4 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+		<span class="font-medium">Plantilla de Mentoría.</span>
+		Cada mentor tiene su propia copia con su enlace personal{#if et?.team?.copies !== undefined}{' '}({et.team.copies === 1 ? '1 copia' : `${et.team.copies} copias`}){/if},
+		y las copias siguen los cambios que guardes aquí (datos generales, notificaciones, preguntas y textos de WhatsApp).
+		Este enlace sigue siendo el tuyo.
+	</div>
+{:else if teamKind === 'soporte_shared'}
+	<div class="mb-4 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+		<span class="font-medium">Tipo de Soporte.</span>
+		Un solo enlace que se reparte por turnos entre el personal de soporte (el área se asigna en
+		<a href="{base}/members" class="underline">Miembros</a>).
+	</div>
+{/if}
 
 <div class="mb-6 flex gap-1 overflow-x-auto border-b">
 	{#each TABS as t}
@@ -670,7 +752,7 @@
 			<div class="grid grid-cols-2 gap-4">
 				<div class="space-y-1.5">
 					<Label for="et-loc">Tipo</Label>
-					<Select.Root type="single" bind:value={form.location_type}>
+					<Select.Root type="single" bind:value={form.location_type} disabled={isManaged && et?.location_type === 'livekit'}>
 						<Select.Trigger id="et-loc" class="w-full">
 							{LOCATION_TYPES.find((lt) => lt.value === form.location_type)?.label ?? 'Selecciona…'}
 						</Select.Trigger>
@@ -680,6 +762,9 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
+					{#if isManaged}
+						<p class="text-xs text-muted-foreground">Los tipos predefinidos usan la sala de video integrada.</p>
+					{/if}
 				</div>
 				<div class="space-y-1.5">
 					{#if isOnlineMeeting(form.location_type)}
@@ -781,7 +866,45 @@
 </div>
 {/if}
 
-{#if activeTab === 'hosts'}
+{#if activeTab === 'hosts' && isManaged}
+<!-- Fork: who hosts T / S follows the áreas; nothing to edit here. -->
+<div class="mb-8">
+	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Anfitriones</h2>
+	<div class="rounded-lg border bg-card p-4 sm:p-6">
+		<p class="mb-4 text-sm text-muted-foreground">
+			Asignados por área — se cambian en <a href="{base}/members" class="underline">Miembros</a>.
+		</p>
+		{#if teamKind === 'mentoria_template'}
+			<p class="mb-3 text-sm">
+				Esta plantilla la atiendes tú. Cada mentor atiende su propia copia, con su enlace personal.
+			</p>
+		{:else}
+			<p class="mb-3 text-sm">
+				{et?.routing_mode === 'round_robin'
+					? 'Se reparte por turnos entre el personal de soporte:'
+					: 'Nadie tiene el área Soporte todavía, así que lo atiende su propietario:'}
+			</p>
+		{/if}
+		{#if !hostsLoaded}
+			<p class="text-sm text-muted-foreground">Cargando…</p>
+		{:else}
+			{@const shown = rotationHosts.length > 0 ? rotationHosts : togetherHosts}
+			{#if shown.length > 0}
+				<ul class="space-y-2">
+					{#each shown as h (h.user_id)}
+						<li class="min-w-0 rounded-md border px-3 py-2">
+							<div class="truncate text-sm font-medium">{h.name}</div>
+							<div class="truncate text-xs text-muted-foreground">{h.email}</div>
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="text-sm text-muted-foreground">Sin anfitriones.</p>
+			{/if}
+		{/if}
+	</div>
+</div>
+{:else if activeTab === 'hosts'}
 <div class="mb-8">
 	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Anfitriones</h2>
 	<div class="rounded-lg border bg-card p-6">
@@ -1102,7 +1225,7 @@
 </div>
 {/if}
 
-{#if activeTab === 'hosts' && $currentUser?.is_admin}
+{#if activeTab === 'hosts' && $currentUser?.is_admin && !et?.team}
 	<div class="mt-6 space-y-3 border-t pt-5">
 		<Label for="transfer-owner">Transferir propiedad</Label>
 		<p class="text-sm text-muted-foreground">Elige un anfitrión requerido guardado. La URL de reserva no cambia. La transferencia solo está disponible cuando no hay reservas próximas. Las conexiones de calendario y la disponibilidad global se quedan con cada cuenta.</p>

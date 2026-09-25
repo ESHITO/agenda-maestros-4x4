@@ -25,6 +25,10 @@ type ListFilter struct {
 	HostID      string // a specific host, resolved the same way ViewerID is
 	TeamID      string // any member of this team hosts the booking
 
+	// Fork: EventTypeIDs limits the listing to these event types (the team's área and
+	// template-family filters, fork_list.go). nil = no limit; empty non-nil = nothing.
+	EventTypeIDs []string
+
 	// Status matches exactly when set. When empty, cancelled bookings are excluded:
 	// that is the default every existing caller depends on, and it is why passing an
 	// explicit status is the only way to see cancelled bookings at all.
@@ -118,6 +122,7 @@ func (f ListFilter) where(includeWhen bool) (string, []any) {
 		conds = append(conds, "bookings.event_type_id = ?")
 		args = append(args, f.EventTypeID)
 	}
+	conds, args = f.forkConds(conds, args) // fork: fork_list.go
 	if !f.From.IsZero() {
 		conds = append(conds, "bookings.start_at >= ?")
 		args = append(args, sqlTime(f.From))

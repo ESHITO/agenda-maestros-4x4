@@ -334,6 +334,39 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
 - The panel pre-selects no event (one webhook per FunnelChat flow). There is no "send test"
   button; to map a flow in FunnelChat, make a real booking.
 
+## Team áreas, predefined types and supervision (fork)
+
+- **Tier vs área.** Tier = upstream `is_owner` / `is_admin` / member. Área (`mentoria` | `soporte` | none)
+  = what the person attends, in `fork_member_areas`, set by `PUT /v1/users/{id}/team-role` (one call, the
+  permission matrix is in `SetTeamRole`) or by the role an invite carries (`fork_invite_roles`, applied
+  inside `ClaimInvite`'s tx). **The fork's old `is_support` "desk" tier is retired:** the column and the
+  positional scans stay, `Role()` never returns `support`, it grants nothing (`support_tier_test.go`),
+  `SetUserRole` refuses it with a Spanish 400, and `RetireSupportTier` (boot) turns any leftover flag into
+  área soporte. The 00066 migration comment is history.
+- **Predefined types** (`fork_settings`: `team_mentoria_template_id` = T, `team_soporte_shared_id` = S,
+  owner-only `PUT /v1/team/settings`). Every active área-mentoría user except T's owner gets a **copy** of
+  T (`fork_event_type_links` kind `copy`, owned by T's owner, hosted by the mentor, slug stable forever);
+  S rotates among the área-soporte users. `ReconcileTeam` (`handler/fork_team.go`) is the single idempotent
+  Go engine: boot from `server.New` only (never `BuildHandler`, which `calnode mcp` also runs), and after a
+  2xx of every trigger (route wrappers in `server.go`). Field sync is a row-value UPDATE over `PRAGMA
+  table_info(event_types)` minus an exclusion list - **an upstream column addition fails
+  `TestTeamSyncColumns_classified` until you classify it.** Questions sync in place through
+  `fork_question_links`; a retired question with answers is parked on a hidden **holder** type. Copies are
+  deactivated, never deleted (bookings are RESTRICT).
+- **Guards** (`fork_team_guards.go`, Spanish 409s): copies and holders are read-only (edit T); T and S
+  refuse transfer, hosts PUT, routing changes and leaving `livekit`; ownership transfer is refused while
+  either setting is set. Webhook filters list T, never a copy: `matchingWebhooks` also matches a copy's
+  template (`webhook/fork_team.go`, a const clause), mirrored in `scopedWebhooks`. A copy sends T's
+  WhatsApp texts. Only the owner may select `whatsapp_message`.
+- **Supervision.** Owner and admins see every booking (`scope=all`), read answers, and "Pasar a otra
+  persona" (`TeamReassignGuard`: same-área rule; `teamReassignHost` moves host, seat, `event_type_id` to the
+  new host's copy and remaps answers in one tx; fresh LiveKit host link, `fork_livekit_host_links`).
+  Attendance = our token mints (`fork_livekit_mints`) refined by LiveKit webhook sessions
+  (`fork_livekit_sessions`), computed per list page (`fork_attendance.go`).
+- **Known, out of scope:** staff creating bookings for clients; per-person summary; the owner
+  rescheduling others' sessions (the MCP `reschedule_booking` tool still lets admins do it); a manage-page
+  reschedule on round-robin S may 409 when only another host is free (upstream behaviour).
+
 ## Email - two transports, and the SMTP trap
 
 `internal/mailer` has **two** real transports behind one `Mailer` interface: `smtp.go` and

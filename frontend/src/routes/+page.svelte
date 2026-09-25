@@ -2,13 +2,16 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { base } from '$app/paths';
 	import { api, type CalendarStatus, type AvailabilityRule, type EventType } from '$lib/api';
-	import { authStatus } from '$lib/stores';
+	import { authStatus, currentUser } from '$lib/stores';
 
 	let calendarConnected = $state(false);
 	let calendarConfigured = $state(true);
 	let hasAvailability = $state(false);
 	let hasEventType = $state(false);
 	let firstSlug = $state('');
+	// Fork: the server-built URL of the viewer's personal link (their Mentoría copy, or the
+	// template for its owner), preferred over "the first type" when it is active.
+	let personalUrl = $state('');
 	let origin = $state('');
 	let loading = $state(true);
 	let copied = $state(false);
@@ -27,7 +30,11 @@
 			calendarConnected = cal.connected;
 			hasAvailability = (rules.items?.length ?? 0) > 0;
 			hasEventType = (events.items?.length ?? 0) > 0;
-			firstSlug = events.items?.[0]?.slug ?? '';
+			// The first type used to win even when inactive or archived, or when it was an
+			// older own type while the mentor's real link is their copy.
+			const pl = $currentUser?.personal_link;
+			personalUrl = pl?.active ? pl.url || (pl.slug ? `${origin}/book/${pl.slug}` : '') : '';
+			firstSlug = (events.items ?? []).find((e) => e.is_active && !e.archived)?.slug ?? '';
 		} finally {
 			loading = false;
 		}
@@ -43,7 +50,7 @@
 	// pointing at a dead-end connect flow otherwise.
 	const calendarRequired = $derived(calendarConfigured && !$authStatus.demo_mode);
 	const allDone = $derived((!calendarRequired || calendarDone) && hasAvailability && hasEventType);
-	const bookingUrl = $derived(firstSlug && origin ? `${origin}/book/${firstSlug}` : '');
+	const bookingUrl = $derived(personalUrl || (firstSlug && origin ? `${origin}/book/${firstSlug}` : ''));
 
 	async function copyLink() {
 		if (!bookingUrl) return;

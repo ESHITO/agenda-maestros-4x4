@@ -188,6 +188,7 @@ func (h *Handler) LiveKitToken(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	role = h.teamHostLinkRole(r.Context(), room, req.Token, role) // fork: a previous host's link is an attendee link (fork_team_supervision.go)
 	// Auto-promote: a signed-in Calnode user who hosts this booking gets host controls no matter
 	// which link they opened — so the host never needs the special host link to drive the meeting.
 	if role != "host" {
@@ -215,6 +216,7 @@ func (h *Handler) LiveKitToken(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, "could not create a meeting token")
 		return
 	}
+	h.recordLiveKitMint(r, room, identity, req.Token) // fork: attendance (fork_attendance.go)
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"url":                 lk.ClientURL(),
 		"token":               token,
@@ -345,7 +347,7 @@ func (h *Handler) hostRoomOrOwner(r *http.Request, token string) (string, bool) 
 	if err != nil {
 		return "", false
 	}
-	if role == "host" {
+	if role == "host" && h.teamHostLinkCurrent(r.Context(), room, token) { // fork: only the current host link (fork_team_supervision.go)
 		return room, true
 	}
 	if uid, _, ok := h.sessionUser(r); ok && h.isBookingHost(r.Context(), room, uid) {

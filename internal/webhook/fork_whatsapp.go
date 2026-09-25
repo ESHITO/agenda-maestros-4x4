@@ -274,11 +274,19 @@ func selectsField(matching []matchedWebhook, field string) bool {
 // whatsAppTemplate is the text of moment for the booking's event type: the saved one, else
 // the built-in default. A read error (the table missing) also falls back to the default:
 // the client still gets a correct message.
+//
+// A mentor's copy of a team template (fork_team.go) has no texts of its own: it sends its
+// TEMPLATE's saved texts (the link's template, even once it stopped being the setting, so
+// existing bookings keep what they were booked with), then the default. Only the links
+// are read, never fork_settings.
 func (s *Service) whatsAppTemplate(ctx context.Context, bookingID, moment string) string {
 	var body string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT m.body FROM event_type_whatsapp_messages m
-		JOIN bookings b ON b.event_type_id = m.event_type_id
+		SELECT m.body FROM bookings b
+		JOIN event_type_whatsapp_messages m
+		  ON m.event_type_id = COALESCE((SELECT l.template_id FROM fork_event_type_links l
+		                                 WHERE l.copy_id = b.event_type_id AND l.kind = 'copy'),
+		                                b.event_type_id)
 		WHERE b.id = ? AND m.moment = ?`, bookingID, moment).Scan(&body)
 	if err == nil && strings.TrimSpace(body) != "" {
 		return body

@@ -26,11 +26,25 @@ func TestMigrateWithForkSchema_freshAndRepeated(t *testing.T) {
 		for _, obj := range []struct{ typ, name string }{
 			{"table", "webhook_event_type_filters"},
 			{"trigger", "webhook_event_type_filters_never_widen"},
+			// The team feature (internal/webhook/fork_team.go): links in EnsureForkSchema,
+			// the rest in EnsureTeamSchema, both on this path.
+			{"table", "fork_event_type_links"},
+			{"table", "fork_question_links"},
+			{"table", "fork_member_areas"},
+			{"table", "fork_invite_roles"},
+			{"table", "fork_livekit_mints"},
+			{"table", "fork_livekit_sessions"},
+			{"table", "fork_livekit_host_links"},
 		} {
 			var n int
 			if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, obj.typ, obj.name).Scan(&n); err != nil || n != 1 {
 				t.Errorf("boot %d: %s %s count = %d, err = %v; want 1", boot, obj.typ, obj.name, n, err)
 			}
+		}
+		// attendance_since is written once and kept by later boots (INSERT OR IGNORE).
+		var since int
+		if err := database.QueryRow(`SELECT COUNT(*) FROM fork_settings WHERE key = 'attendance_since' AND value <> ''`).Scan(&since); err != nil || since != 1 {
+			t.Errorf("boot %d: attendance_since rows = %d, err = %v; want 1", boot, since, err)
 		}
 	}
 }

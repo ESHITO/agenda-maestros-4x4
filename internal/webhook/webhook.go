@@ -191,6 +191,7 @@ func New(db *sql.DB, encKeyHex string) (*Service, error) {
 	// nothing - never to the wrong clients.
 	if db != nil {
 		_ = EnsureForkSchema(db)
+		_ = EnsureTeamSchema(db) // fork: team tables (fork_team.go), same best-effort rule
 	}
 	return s, nil
 }
@@ -484,18 +485,16 @@ type matchedWebhook struct {
 //
 // Event-type filter - FORK (fork_event_types.go): after event and scope, a webhook with
 // rows in webhook_event_type_filters is kept only when one of them is the booking's
-// bookings.event_type_id. Same query, no extra round trip. No rows = every type; an
-// unknown booking (bookingID "" or gone) never matches a filtered webhook.
+// bookings.event_type_id - or the template that type is a mentor's copy of
+// (forkEventTypeFilterClause, fork_team.go). Same query, no extra round trip. No rows =
+// every type; an unknown booking (bookingID "" or gone) never matches a filtered webhook.
 func (s *Service) matchingWebhooks(ctx context.Context, event, hostID, bookingID string) ([]matchedWebhook, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT w.id, w.events, w.fields FROM webhooks w
 		WHERE w.is_active = 1
 		  AND (w.user_id = ?
 		       OR w.user_id IN (SELECT id FROM users WHERE is_owner = 1 AND archived_at IS NULL))
-		  AND (NOT EXISTS (SELECT 1 FROM webhook_event_type_filters f WHERE f.webhook_id = w.id)
-		       OR EXISTS (SELECT 1 FROM webhook_event_type_filters f
-		                  JOIN bookings b ON b.event_type_id = f.event_type_id
-		                  WHERE f.webhook_id = w.id AND b.id = ?))`, hostID, bookingID)
+		  AND `+forkEventTypeFilterClause, hostID, bookingID) // #nosec G202 -- fork: a constant (fork_team.go); every value is bound
 	if err != nil {
 		return nil, fmt.Errorf("webhook: list for enqueue: %w", err)
 	}

@@ -6,7 +6,7 @@ package handler
 // the event type and who attends, so the panel can show them without another request.
 //
 // Visibility is the list's own: this only decorates the page parseBookingListFilter
-// already allowed (the owner/admins/support with ?scope=all: everyone's; anyone else: the
+// already allowed (the owner/admins with ?scope=all: everyone's; anyone else: the
 // bookings they host). It adds no endpoint to authorise separately.
 //
 // Cost is fixed per PAGE, never per row: one query for the names, one aggregated query
@@ -82,6 +82,10 @@ type bookingListItem struct {
 	bookingJSON
 	EventTypeName string               `json:"event_type_name,omitempty"`
 	WhatsApp      []whatsAppNoticeJSON `json:"whatsapp,omitempty"`
+	// Area is the team área of the booking's type: "mentoria" | "soporte" | "" (fork_team_bookings.go).
+	Area string `json:"area"`
+	// Attendance is what the video room saw (fork_attendance.go); absent if it could not be read.
+	Attendance *attendanceJSON `json:"attendance,omitempty"`
 }
 
 // noticeRow is one row of the aggregated state query.
@@ -100,7 +104,9 @@ type scopedWebhook struct {
 
 // receives reports whether wh would get event for booking b - the same three tests as
 // webhook.Service.matchingWebhooks: subscribed, in scope (the host's own or an owner's),
-// and the event-type filter, if any, holds the booking's type.
+// and the event-type filter, if any, holds the booking's type. A filter listing a team
+// template also holds that template's copies: scopedWebhooks adds their ids to the set,
+// mirroring the template-aware clause (internal/webhook/fork_team.go).
 func (wh scopedWebhook) receives(event string, b booking.Booking) bool {
 	if !wh.events[event] || (wh.userID != b.HostID && !wh.ownerHook) {
 		return false
@@ -129,6 +135,12 @@ func (h *Handler) withWhatsAppNotices(ctx context.Context, bookings []booking.Bo
 
 	if err := h.fillBookingNames(ctx, string(idsJSON), idx, out); err != nil {
 		h.logger.ErrorContext(ctx, "list bookings: names", "error", err)
+	}
+	if err := h.fillBookingAreas(ctx, string(idsJSON), idx, out); err != nil {
+		h.logger.ErrorContext(ctx, "list bookings: areas", "error", err)
+	}
+	if err := h.fillBookingAttendance(ctx, bookings, string(idsJSON), idx, out, time.Now().UTC()); err != nil {
+		h.logger.ErrorContext(ctx, "list bookings: attendance", "error", err)
 	}
 	rows, err := h.noticeRows(ctx, string(idsJSON))
 	if err != nil {
@@ -225,7 +237,10 @@ func (h *Handler) scopedWebhooks(ctx context.Context) ([]scopedWebhook, error) {
 	rows, err := h.db.QueryContext(ctx, `
 		SELECT w.user_id, w.events,
 		       COALESCE(u.is_owner = 1 AND u.archived_at IS NULL, 0),
-		       (SELECT json_group_array(f.event_type_id) FROM webhook_event_type_filters f WHERE f.webhook_id = w.id)
+		       (SELECT json_group_array(f.event_type_id) FROM webhook_event_type_filters f WHERE f.webhook_id = w.id),
+		       (SELECT json_group_array(l.copy_id) FROM webhook_event_type_filters f
+		          JOIN fork_event_type_links l ON l.template_id = f.event_type_id AND l.kind = 'copy'
+		         WHERE f.webhook_id = w.id)
 		FROM webhooks w
 		LEFT JOIN users u ON u.id = w.user_id
 		WHERE w.is_active = 1`)
@@ -235,15 +250,20 @@ func (h *Handler) scopedWebhooks(ctx context.Context) ([]scopedWebhook, error) {
 	defer rows.Close()
 	var out []scopedWebhook
 	for rows.Next() {
-		var userID, eventsJSON, filterJSON string
+		var userID, eventsJSON, filterJSON, copiesJSON string
 		var owner bool
-		if err := rows.Scan(&userID, &eventsJSON, &owner, &filterJSON); err != nil {
+		if err := rows.Scan(&userID, &eventsJSON, &owner, &filterJSON, &copiesJSON); err != nil {
 			return nil, err
 		}
 		wh := scopedWebhook{userID: userID, ownerHook: owner, events: map[string]bool{}, eventTypeIDs: map[string]bool{}}
 		var events, etIDs []string
 		_ = json.Unmarshal([]byte(eventsJSON), &events)
 		_ = json.Unmarshal([]byte(filterJSON), &etIDs)
+		if len(etIDs) > 0 { // copies widen only a filtered webhook; empty = every type already
+			var copyIDs []string
+			_ = json.Unmarshal([]byte(copiesJSON), &copyIDs)
+			etIDs = append(etIDs, copyIDs...)
+		}
 		for _, e := range events {
 			wh.events[e] = true
 		}

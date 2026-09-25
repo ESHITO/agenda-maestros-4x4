@@ -10,8 +10,14 @@ export type User = {
 	avatar_url?: string;
 	is_admin: boolean;
 	is_owner: boolean;
-	is_support: boolean;
-	role: 'owner' | 'admin' | 'support' | 'member';
+	/** Retired desk tier: the server always sends false now and it grants nothing. */
+	is_support?: boolean;
+	role: 'owner' | 'admin' | 'member';
+	/** Fork: what this person attends ('' = nothing), independent of the tier. */
+	area?: Area;
+	/** Fork: the viewer's own booking link (their Mentoría copy; for the template's owner,
+	 *  the template itself). null/absent = none. */
+	personal_link?: PersonalLink | null;
 	notify_confirmation: boolean;
 	notify_cancellation: boolean;
 	notify_reschedule: boolean;
@@ -67,6 +73,36 @@ export type EventType = {
 	/** Owner identity, returned only when the viewer is a read-only host. */
 	owner_name?: string;
 	owner_email?: string;
+	/** Fork: set only on predefined types (absent for ordinary ones). */
+	team?: EventTypeTeam;
+	/** Fork, single GET of a copy: the mentor it belongs to (also accepted inside team). */
+	mentor_name?: string;
+};
+
+/** Fork: what a person attends. '' = nothing ("Sin área"). */
+export type Area = 'mentoria' | 'soporte' | '';
+
+/** Fork: a personal booking link (GET /v1/users, /v1/users/me). */
+export type PersonalLink = { slug: string; url: string; active: boolean };
+
+/** Fork: one mentor's copy of the Mentoría template (owner only). */
+export type CopyLink = { slug: string; url: string; mentor_name: string; active: boolean };
+
+/** Fork: the `team` object of a predefined event type (GET /v1/event-types and /{slug}). */
+export type EventTypeTeam = {
+	kind: 'mentoria_template' | 'mentoria_copy' | 'soporte_shared';
+	/** Copy only: the template it follows. */
+	template_slug?: string;
+	template_name?: string;
+	/** Template only: how many mentor copies exist. */
+	copies?: number;
+	/** Copy: the mentor who attends it. */
+	host_name?: string;
+	mentor_name?: string;
+	/** Template, owner only: every mentor's link. */
+	copy_links?: CopyLink[];
+	/** Soporte: its current rotation, by priority. */
+	hosts?: { id: string; name: string }[];
 };
 
 export type EventTypeHost = {
@@ -108,7 +144,35 @@ export type Booking = {
 	event_type_name?: string;
 	/** Fork, GET /v1/bookings only: the four WhatsApp notices, in order (1-4). */
 	whatsapp?: WhatsAppNotice[];
+	/** Already serialized by bookingJSON: the primary host, the type and its location kind. */
+	host_id?: string;
+	event_type_id?: string;
+	location_type?: string;
+	/** Fork, GET /v1/bookings only: the área derived from the booking's type ('' / absent = none). */
+	area?: Area;
+	/** Fork, GET /v1/bookings only: who entered the video room. */
+	attendance?: Attendance;
 };
+
+/** Fork: attendance of a LiveKit booking, computed per list page. */
+export type Attendance = {
+	status:
+		| 'not_applicable'
+		| 'pending'
+		| 'in_progress'
+		| 'attended'
+		| 'attended_unverified'
+		| 'client_absent'
+		| 'host_absent'
+		| 'nobody';
+	host_joined_at?: string;
+	client_joined_at?: string;
+	/** attended only: minutes host and client were in the room together. */
+	minutes_together?: number;
+};
+
+/** Fork: GET /v1/bookings/{id}/reassign-candidates. */
+export type ReassignCandidate = { id: string; name: string; area?: Area };
 
 /** Fork: one of a booking's four WhatsApp notices (booking_whatsapp_status.go). */
 export type WhatsAppNotice = {
@@ -187,6 +251,8 @@ export type WebhookEventType = {
 	archived: boolean;
 	owned: boolean;
 	owner_name: string;
+	/** Fork: on the Mentoría template, how many mentor copies it covers (copies themselves are omitted). */
+	copies?: number;
 };
 
 export type WebhookDelivery = {
@@ -294,8 +360,13 @@ export type TeamMember = {
 	timezone: string;
 	is_admin: boolean;
 	is_owner: boolean;
-	is_support: boolean;
-	role: 'owner' | 'admin' | 'support' | 'member';
+	/** Retired desk tier (always false now). */
+	is_support?: boolean;
+	role: 'owner' | 'admin' | 'member';
+	/** Fork: what this person attends ('' = nothing). */
+	area?: Area;
+	/** Fork: their active copy's link (for the template's owner, the template). */
+	personal_link?: PersonalLink | null;
 	email_login: boolean;
 	provider?: string;
 	avatar_url?: string;
@@ -340,6 +411,46 @@ export type Invite = {
 	email: string;
 	expires_at: string;
 	created_by: string;
+	/** Fork: the role the invitee gets on claiming (absent = none stored). */
+	role?: InviteRole;
+};
+
+/** Fork: role carried by an invite. Same spelling as Area for the two áreas. */
+export type InviteRole = 'mentoria' | 'soporte' | 'admin';
+
+/** Fork: GET /v1/team/settings (admins; can_edit = owner). */
+export type TeamSettings = {
+	mentoria_template: {
+		id: string;
+		slug: string;
+		name: string;
+		copies: number;
+		/** Owner only. */
+		copy_links?: CopyLink[];
+	} | null;
+	soporte_shared: {
+		id: string;
+		slug: string;
+		name: string;
+		hosts: { id: string; name: string }[];
+	} | null;
+	can_edit: boolean;
+	/** PUT only: what the save changed or should draw attention to (teamWarnings in Go). */
+	warnings?: {
+		copies_created: number;
+		copies_deactivated: number;
+		/** No active webhook of the owner receives the template's / Soporte type's bookings. */
+		mentoria_template_no_webhook: boolean;
+		soporte_shared_no_webhook: boolean;
+	};
+};
+
+/** Fork: PUT /v1/users/{id}/team-role. */
+export type TeamRoleResponse = {
+	id: string;
+	tier: 'owner' | 'admin' | 'member';
+	area: Area;
+	upcoming_in_previous_area: number;
 };
 
 export type AvailabilityRule = {
@@ -406,3 +517,76 @@ export const api = {
 
 	del: <T = null>(path: string) => apiFetch<T>(path, { method: 'DELETE' })
 };
+
+// ── Fork: team áreas, predefined types and supervision (typed wrappers) ─────────────
+// Thin helpers over `api` so every page calls the new endpoints with the same shapes.
+
+/** Human label of each área, and of a role an invite can carry. */
+export const AREA_LABELS: Record<Exclude<Area, ''>, string> = { mentoria: 'Mentoría', soporte: 'Soporte' };
+export const INVITE_ROLE_LABELS: Record<InviteRole, string> = {
+	mentoria: 'Mentor',
+	soporte: 'Soporte',
+	admin: 'Administrador'
+};
+
+export const teamApi = {
+	/** GET /v1/team/settings (admins). */
+	getSettings: () => api.get<TeamSettings>('/v1/team/settings'),
+
+	/** PUT /v1/team/settings (owner). null = unset. Answers the settings + warnings. */
+	putSettings: (body: { mentoria_template_id: string | null; soporte_shared_id: string | null }) =>
+		api.put<TeamSettings>('/v1/team/settings', body),
+
+	/** PUT /v1/users/{id}/team-role: tier and área in one call (see the matrix in Members). */
+	putTeamRole: (userId: string, body: { tier: 'admin' | 'member'; area: Area }) =>
+		api.put<TeamRoleResponse>(`/v1/users/${userId}/team-role`, body),
+
+	/** GET /v1/users/{id}/upcoming-bookings (admins). */
+	upcomingBookings: (userId: string) =>
+		api.get<{ items: UpcomingBooking[] }>(`/v1/users/${userId}/upcoming-bookings`),
+
+	/** GET /v1/bookings/{id}/reassign-candidates (admins): people of the booking's área. */
+	reassignCandidates: async (bookingId: string) => {
+		const res = await api.get<ReassignCandidate[] | { items: ReassignCandidate[] }>(
+			`/v1/bookings/${bookingId}/reassign-candidates`
+		);
+		// The contract is a bare array; tolerate an { items } envelope too.
+		return (Array.isArray(res) ? res : res?.items) ?? [];
+	},
+
+	/** POST /v1/bookings/{id}/reassign (admins). */
+	reassign: (bookingId: string, hostId: string) =>
+		api.post<Booking>(`/v1/bookings/${bookingId}/reassign`, { host_id: hostId }),
+
+	/** POST /v1/invites with the role the invitee will get. */
+	createInvite: (email: string, role: InviteRole) =>
+		api.post<{ id: string; email: string; invite_url: string; expires_at: string; email_sent: boolean; note: string }>(
+			'/v1/invites',
+			{ email, role }
+		)
+};
+
+/** Upstream reassign errors are English; the fork's guard answers Spanish already. */
+const REASSIGN_ERRORS: Record<string, string> = {
+	'new host not found or archived': 'Esa persona ya no está disponible (no existe o está archivada).',
+	'the chosen host already has a booking at that time': 'Esa persona ya tiene otra reunión a esa hora.',
+	'this booking has been cancelled': 'Esta reunión ya fue cancelada.',
+	'booking not found': 'No se encontró la reunión (quizá ya se movió o se canceló).',
+	'host_id is required': 'Elige a quién pasar la reunión.',
+	'admin access required': 'Solo el propietario y los administradores pueden pasar reuniones a otra persona.'
+};
+
+export function reassignErrorText(e: unknown): string {
+	const msg = e instanceof Error ? e.message : String(e ?? '');
+	return REASSIGN_ERRORS[msg] ?? (msg || 'No se pudo pasar la reunión a otra persona.');
+}
+
+/** Copy text to the clipboard; false when the browser refuses (no permission / not https). */
+export async function copyText(text: string): Promise<boolean> {
+	try {
+		await navigator.clipboard.writeText(text);
+		return true;
+	} catch {
+		return false;
+	}
+}

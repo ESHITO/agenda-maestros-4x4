@@ -160,6 +160,13 @@
 		] },
 	];
 	const allFieldKeys = fieldGroups.flatMap((g) => g.fields.map((f) => f.key));
+	// Fork: only the owner may send whatsapp_message (the server refuses it for anyone else
+	// with a 409: a second webhook would repeat the client's message). Others never see the
+	// field nor get it pre-ticked, or creating any webhook would fail.
+	const isOwner = $derived(!!$currentUser?.is_owner);
+	const visibleFieldGroups = $derived(isOwner ? fieldGroups : fieldGroups.filter((g) => g.group !== 'WhatsApp'));
+	const defaultFieldKeys = () =>
+		$currentUser?.is_owner ? [...allFieldKeys] : allFieldKeys.filter((k) => k !== 'whatsapp_message');
 
 	// Event types a webhook may be limited to (fork: GET /v1/webhooks/event-types). For the
 	// owner that is every type of the team, since the owner's webhooks get every booking.
@@ -183,7 +190,7 @@
 	// typeMode 'all' = every event type (event_type_ids []), 'some' = only the ticked ones.
 	type WebhookForm = { url: string; events: string[]; fields: string[]; typeMode: 'all' | 'some'; eventTypeIds: string[] };
 	const emptyForm = (): WebhookForm => ({
-		url: '', events: [], fields: [...allFieldKeys], typeMode: 'all', eventTypeIds: []
+		url: '', events: [], fields: defaultFieldKeys(), typeMode: 'all', eventTypeIds: []
 	});
 	let form = $state<WebhookForm>(emptyForm());
 
@@ -273,7 +280,7 @@
 		if (!form.url.startsWith('https://')) { createError = 'La URL debe comenzar con https://'; return; }
 		if (form.events.length === 0) { createError = 'Selecciona al menos un evento.'; return; }
 		if (form.typeMode === 'some' && form.eventTypeIds.length === 0) {
-			createError = 'Marca al menos un tipo de cita, o elige «Todos los tipos».';
+			createError = 'Marca al menos un tipo de atención, o elige «Todos los tipos».';
 			return;
 		}
 		creating = true;
@@ -336,13 +343,15 @@
 		// Only the names failed to load; the filter itself is intact, so say that.
 		if (eventTypesFailed) {
 			const n = ids.length === 1 ? '1 tipo' : `${ids.length} tipos`;
-			return `Limitado a ${n} de cita (no se pudieron cargar los nombres; recarga la página)`;
+			return `Limitado a ${n} de atención (no se pudieron cargar los nombres; recarga la página)`;
 		}
 		// Loaded, yet an id is missing: a deleted type takes its filter row with it, so this
 		// one still exists but is out of this user's reach - a type they no longer attend
 		// (or, for the owner, one created after the page loaded).
-		const missing = teamScope ? 'un tipo de cita nuevo (recarga la página)' : 'un tipo de cita que ya no atiendes';
-		return ids.map((id) => eventTypeLabels.get(id) ?? missing).join(', ');
+		const missing = teamScope ? 'un tipo de atención nuevo (recarga la página)' : 'un tipo de atención que ya no atiendes';
+		const withCopies = (id: string) =>
+			(eventTypes.find((t) => t.id === id)?.copies ?? 0) > 0 ? ' (incluye la copia de cada mentor)' : '';
+		return ids.map((id) => (eventTypeLabels.get(id) ? eventTypeLabels.get(id) + withCopies(id) : missing)).join(', ');
 	}
 
 	function toggleField(key: string) {
@@ -488,9 +497,9 @@
 		</div>
 
 		<div class="mb-4 space-y-2">
-			<p class="text-sm font-medium">¿Para qué tipos de cita?</p>
-			<p class="text-xs text-muted-foreground">Para WhatsApp, elige solo los tipos de cita que deben recibir este mensaje. Las demás citas no lo enviarán.</p>
-			<div class="flex flex-col gap-2 sm:flex-row" role="radiogroup" aria-label="¿Para qué tipos de cita?">
+			<p class="text-sm font-medium">¿Para qué tipos de atención?</p>
+			<p class="text-xs text-muted-foreground">Para WhatsApp, elige solo los tipos de atención que deben recibir este mensaje. Las demás citas no lo enviarán.</p>
+			<div class="flex flex-col gap-2 sm:flex-row" role="radiogroup" aria-label="¿Para qué tipos de atención?">
 				{#each [{ value: 'all', label: 'Todos los tipos', hint: 'también los que crees después' }, { value: 'some', label: 'Solo algunos tipos', hint: 'tú eliges cuáles' }] as opt (opt.value)}
 					<label class="flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring {form.typeMode === opt.value ? 'border-primary bg-primary/5' : 'bg-background hover:bg-accent/50'}">
 						<input type="radio" name="wh-type-mode" bind:group={form.typeMode} value={opt.value} class="sr-only" />
@@ -502,11 +511,11 @@
 			{#if form.typeMode === 'some'}
 				<div class="space-y-1.5 rounded-md border bg-background p-3">
 					{#if !eventTypesLoaded}
-						<p class="text-sm text-muted-foreground">Cargando tipos de cita…</p>
+						<p class="text-sm text-muted-foreground">Cargando tipos de atención…</p>
 					{:else if eventTypesFailed}
-						<p class="text-sm text-destructive">No se pudo cargar la lista de tipos de cita. Recarga la página.</p>
+						<p class="text-sm text-destructive">No se pudo cargar la lista de tipos de atención. Recarga la página.</p>
 					{:else if activeEventTypes.length === 0}
-						<p class="text-sm text-muted-foreground">No hay tipos de cita activos.</p>
+						<p class="text-sm text-muted-foreground">No hay tipos de atención activos.</p>
 					{:else}
 						{#each activeEventTypes as et (et.id)}
 							<label class="flex cursor-pointer items-start gap-2 text-sm">
@@ -518,6 +527,11 @@
 								<span class="min-w-0">
 									<span class="font-medium">{et.name}</span>{#if !et.owned && et.owner_name}<span class="text-muted-foreground">{` — de ${et.owner_name}`}</span>{/if}
 									<span class="block break-all font-mono text-xs text-muted-foreground">{et.slug}</span>
+									<!-- Fork: the Mentoría template also covers every mentor's copy (copies are
+									     not listed: the filter matches them through the template). -->
+									{#if et.copies && et.copies > 0}
+										<span class="block text-xs text-muted-foreground">Incluye la copia de cada mentor ({et.copies === 1 ? '1 copia' : `${et.copies} copias`}).</span>
+									{/if}
 								</span>
 							</label>
 						{/each}
@@ -528,7 +542,7 @@
 
 		<div class="mb-4 space-y-3">
 			<p class="text-sm font-medium">Datos a enviar <span class="font-normal text-muted-foreground">— desmarca lo que no quieras enviar</span></p>
-			{#each fieldGroups as grp}
+			{#each visibleFieldGroups as grp}
 				<div class="space-y-1.5">
 					<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 						{grp.group}{#if grp.pii}<span class="ml-1.5 font-normal normal-case text-amber-600">· datos personales</span>{/if}
@@ -567,7 +581,7 @@
 				<tr class="border-b">
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">URL</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Eventos</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Tipos de cita</th>
+					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Tipos de atención</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Campos</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Estado</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Creado</th>
@@ -585,7 +599,7 @@
 								<span class="whitespace-nowrap">{(wh.fields ?? []).length} campos</span>
 								{#if sendsWhatsApp(wh)}
 									<span class="mt-1 block whitespace-nowrap text-green-700">incluye mensaje de WhatsApp</span>
-								{:else if carriesMessage(wh)}
+								{:else if carriesMessage(wh) && isOwner}
 									<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addWhatsAppField(wh)}>
 										{addingWA === wh.id ? 'Añadiendo…' : 'Añadir mensaje de WhatsApp'}
 									</Button>
@@ -656,6 +670,6 @@
 		</table>
 	</div>
 	{#if items.some((wh) => !wh.is_active)}
-		<p class="mt-3 text-sm text-muted-foreground">Un webhook queda «Inactivo» si se elimina el único tipo de cita al que estaba limitado: así no empieza a avisar de todas las citas. Si todavía lo necesitas, elimínalo y créalo de nuevo.</p>
+		<p class="mt-3 text-sm text-muted-foreground">Un webhook queda «Inactivo» si se elimina el único tipo de atención al que estaba limitado: así no empieza a avisar de todas las citas. Si todavía lo necesitas, elimínalo y créalo de nuevo.</p>
 	{/if}
 {/if}

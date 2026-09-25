@@ -100,21 +100,28 @@ type webhookEventTypeJSON struct {
 	Archived  bool   `json:"archived"`
 	Owned     bool   `json:"owned"`
 	OwnerName string `json:"owner_name"`
+	// Copies is how many mentors' copies a team template carries (fork_team.go): a filter
+	// listing the template reaches all of them. 0 (omitted) on any other type.
+	Copies int `json:"copies,omitempty"`
 }
 
 // ListWebhookEventTypes handles GET /v1/webhooks/event-types (fork): the event types this
 // user may limit a webhook to (webhookEventTypeScope), active and inactive, so the panel
 // can both offer checkboxes (active ones) and name every id an existing filter holds. For
 // the owner that is more than GET /v1/event-types, which lists only what they own or host.
+// Mentors' copies and holders of the team feature are left out: a filter lists the
+// template, which includes every copy (the webhook guard refuses a newly listed copy).
 func (h *Handler) ListWebhookEventTypes(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())
 	args := append([]any{user.ID}, webhookEventTypeScopeArgs(user)...)
 	rows, err := h.db.QueryContext(r.Context(), `
 		SELECT et.id, et.slug, et.name, et.is_active, (et.archived_at IS NOT NULL),
-		       (et.user_id = ?), COALESCE(u.name, '')
+		       (et.user_id = ?), COALESCE(u.name, ''),
+		       (SELECT COUNT(*) FROM fork_event_type_links l WHERE l.template_id = et.id AND l.kind = 'copy')
 		FROM event_types et
 		LEFT JOIN users u ON u.id = et.user_id
-		WHERE `+webhookEventTypeScope+`
+		WHERE et.id NOT IN (SELECT copy_id FROM fork_event_type_links)
+		  AND `+webhookEventTypeScope+`
 		ORDER BY et.name COLLATE NOCASE, et.slug`, args...) // #nosec G202 -- webhookEventTypeScope is a constant; every value is bound
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "list webhook event types", "error", err)
@@ -125,7 +132,7 @@ func (h *Handler) ListWebhookEventTypes(w http.ResponseWriter, r *http.Request) 
 	items := make([]webhookEventTypeJSON, 0)
 	for rows.Next() {
 		var it webhookEventTypeJSON
-		if err := rows.Scan(&it.ID, &it.Slug, &it.Name, &it.IsActive, &it.Archived, &it.Owned, &it.OwnerName); err != nil {
+		if err := rows.Scan(&it.ID, &it.Slug, &it.Name, &it.IsActive, &it.Archived, &it.Owned, &it.OwnerName, &it.Copies); err != nil {
 			h.logger.ErrorContext(r.Context(), "scan webhook event type", "error", err)
 			h.writeError(w, http.StatusInternalServerError, "internal error")
 			return

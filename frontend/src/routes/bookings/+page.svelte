@@ -1,6 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type Booking, type WhatsAppNotice } from '$lib/api';
+	import {
+		api,
+		teamApi,
+		reassignErrorText,
+		AREA_LABELS,
+		type Attendance,
+		type Booking,
+		type EventType,
+		type ReassignCandidate,
+		type WhatsAppNotice
+	} from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { prefs, fmtDateTime, fmtTime } from '$lib/prefs';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
@@ -11,22 +21,36 @@
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import { toast } from 'svelte-sonner';
 
 	let items: Booking[] = $state([]);
 	let loading = $state(true);
 	let error = $state('');
 
-	// Members see only their own hosted bookings. Owners/admins — and support, whose
-	// every request starts with finding someone else's booking — can switch to a
-	// workspace-wide view (?scope=all).
-	//
-	// This gate must match parseBookingListFilter in booking_handler.go, which grants
-	// scope=all to IsAdmin || IsSupport. Leaving it on is_admin alone made the server
-	// side unreachable: the toggle never rendered, the query never carried scope=all,
-	// and a support user saw only the bookings they host themselves (usually none).
-	const canSeeAll = $derived(($currentUser?.is_admin ?? false) || ($currentUser?.is_support ?? false));
-	let scope = $state<'mine' | 'all'>('mine');
+	// Members (mentors, support staff) see only their own hosted bookings. The owner and
+	// admins supervise, so they can switch to the workspace-wide view (?scope=all). Must
+	// match parseBookingListFilter in booking_handler.go (the retired "support" desk tier
+	// no longer widens it).
+	const canSeeAll = $derived($currentUser?.is_admin ?? false);
+
+	// Fork: the owner and admins open on "Todas las reservas" unless they chose otherwise;
+	// the choice is remembered per user in this browser (staff may share one). Storage can
+	// be blocked (private mode, policies), so every access is guarded: no stored value just
+	// means the default. The layout mounts pages only once currentUser is set.
+	function initialScope(): 'mine' | 'all' {
+		if (!$currentUser?.is_admin) return 'mine';
+		try {
+			const v = localStorage.getItem(`agenda.bookings.scope.${$currentUser.id}`);
+			if (v === 'mine' || v === 'all') return v;
+		} catch { /* storage unavailable: use the default */ }
+		return 'all';
+	}
+	function rememberScope(s: 'mine' | 'all') {
+		if (!$currentUser) return;
+		try { localStorage.setItem(`agenda.bookings.scope.${$currentUser.id}`, s); } catch { /* not remembered, harmless */ }
+	}
+	let scope = $state<'mine' | 'all'>(initialScope());
 
 	// Filtering, sorting and paging all happen in SQL now. They used to happen here,
 	// over a response that contained every booking the user could see - which meant
@@ -37,18 +61,22 @@
 	let fHost = $state('');
 	let fTeam = $state('');
 	let fStatus = $state('');
+	// Fork: 'mentoria' | 'soporte', derived server-side from the booking's type.
+	let fArea = $state('');
 
 	const PAGE_SIZE = 25;
 	let offset = $state(0);
 	let total = $state(0);
 	let counts = $state({ upcoming: 0, past: 0 });
 
-	// Options for the filter selects, fetched once.
-	let eventTypes = $state<{ slug: string; name: string }[]>([]);
+	// Options for the filter selects, fetched once. label = what the option reads (the
+	// Mentoría template says it covers every mentor: the server expands its slug to the
+	// template plus all the mentors' copies).
+	let eventTypes = $state<{ slug: string; name: string; label: string }[]>([]);
 	let members = $state<{ id: string; name: string }[]>([]);
 	let teams = $state<{ id: string; name: string }[]>([]);
 
-	const hasFilters = $derived(!!(fEventType || fHost || fTeam || fStatus));
+	const hasFilters = $derived(!!(fEventType || fHost || fTeam || fStatus || fArea));
 	const pageStart = $derived(total === 0 ? 0 : offset + 1);
 	const pageEnd = $derived(Math.min(offset + items.length, total));
 	const eventTypeName = $derived(
@@ -69,20 +97,26 @@
 	let expandedId = $state<string | null>(null);
 	let answersCache: Record<string, AnswerItem[]> = $state({});
 	let answersLoading: Record<string, boolean> = $state({});
+	// A failed request is NOT cached as "no answers": to a supervisor that reads as "the
+	// client answered nothing". It shows an error with a retry instead.
+	let answersFailed: Record<string, boolean> = $state({});
+
+	async function loadAnswers(id: string) {
+		answersLoading[id] = true;
+		answersFailed[id] = false;
+		try {
+			const res = await api.get<{ items: AnswerItem[] }>(`/v1/bookings/${id}/answers`);
+			answersCache[id] = res.items ?? [];
+		} catch {
+			answersFailed[id] = true;
+		}
+		answersLoading[id] = false;
+	}
 
 	async function toggleExpand(id: string) {
 		if (expandedId === id) { expandedId = null; return; }
 		expandedId = id;
-		if (answersCache[id] === undefined) {
-			answersLoading[id] = true;
-			try {
-				const res = await api.get<{ items: AnswerItem[] }>(`/v1/bookings/${id}/answers`);
-				answersCache[id] = res.items ?? [];
-			} catch {
-				answersCache[id] = [];
-			}
-			answersLoading[id] = false;
-		}
+		if (answersCache[id] === undefined && !answersLoading[id]) await loadAnswers(id);
 	}
 
 	function query(): string {
@@ -95,6 +129,7 @@
 		if (fEventType) p.set('event_type', fEventType);
 		if (fHost) p.set('host', fHost);
 		if (fTeam) p.set('team', fTeam);
+		if (fArea) p.set('area', fArea);
 		if (fStatus) p.set('status', fStatus);
 		p.set('limit', String(PAGE_SIZE));
 		p.set('offset', String(offset));
@@ -148,8 +183,9 @@
 	async function setScope(s: 'mine' | 'all') {
 		if (scope === s) return;
 		scope = s;
-		// Host and team only mean anything across the workspace.
-		if (s === 'mine') { fHost = ''; fTeam = ''; }
+		rememberScope(s);
+		// Host, team and área only mean anything across the workspace.
+		if (s === 'mine') { fHost = ''; fTeam = ''; fArea = ''; }
 		await reload();
 	}
 
@@ -160,7 +196,7 @@
 	}
 
 	function clearFilters() {
-		fEventType = fHost = fTeam = fStatus = '';
+		fEventType = fHost = fTeam = fStatus = fArea = '';
 		reload();
 	}
 
@@ -173,11 +209,43 @@
 	// Filter options. Failures are silent: a missing dropdown is a smaller problem than
 	// an error banner over a working table, and members can't list users anyway.
 	async function loadFilterOptions() {
+		const opts = new Map<string, { slug: string; name: string; label: string }>();
+		const allMentors = (name: string) => `${name} (todos los mentores)`;
 		try {
-			const res = await api.get<{ items: { slug: string; name: string }[] }>('/v1/event-types');
-			eventTypes = res.items ?? [];
+			const res = await api.get<{ items: EventType[] }>('/v1/event-types');
+			for (const et of res.items ?? []) {
+				const kind = et.team?.kind;
+				if (kind === 'mentoria_copy') {
+					// Copies never get an option of their own. A mentor's copy stands for the
+					// template (same name, and the server narrows it to what they host); the
+					// owner's list holds every copy, and they all collapse into the template.
+					const slug = et.team?.template_slug;
+					if (slug && !opts.has(slug)) {
+						const name = et.team?.template_name || et.name;
+						opts.set(slug, { slug, name, label: name });
+					}
+					continue;
+				}
+				const label = kind === 'mentoria_template' ? allMentors(et.name) : et.name;
+				opts.set(et.slug, { slug: et.slug, name: et.name, label });
+			}
 		} catch { /* leave the dropdown empty */ }
+		eventTypes = [...opts.values()];
 		if (!canSeeAll) return;
+		// An admin who is not the owner lists only their own/hosted types; the team's two
+		// predefined types come from the team settings so they can filter by them too.
+		try {
+			const ts = await teamApi.getSettings();
+			if (ts.mentoria_template) {
+				const t = ts.mentoria_template;
+				opts.set(t.slug, { slug: t.slug, name: t.name, label: allMentors(t.name) });
+			}
+			if (ts.soporte_shared && !opts.has(ts.soporte_shared.slug)) {
+				const t = ts.soporte_shared;
+				opts.set(t.slug, { slug: t.slug, name: t.name, label: t.name });
+			}
+			eventTypes = [...opts.values()];
+		} catch { /* the own/hosted options stay */ }
 		try {
 			// /v1/users returns a bare array, not an { items } envelope like the others.
 			// Archived members are excluded by default, which is what we want here.
@@ -292,6 +360,107 @@
 		if (n.status === 'missed') return `${base}: no se envió a su hora (el servidor estaba detenido o dormido) y se descartó para no llegar tarde`;
 		if (n.status === 'unknown') return `${base}: sin registro (los registros de envío se borran a los 30 días)`;
 		return base;
+	}
+
+	// ── Fork: "Pasar a otra persona" (owner and admins) ──
+	// One Dialog: the candidates of the booking's área (reassign-candidates), what will
+	// happen, and one button. No stacked ConfirmDialog (it cannot show busy nor stay open).
+	let passOpen = $state(false);
+	let passBooking = $state<Booking | null>(null);
+	let passCandidates = $state<ReassignCandidate[]>([]);
+	let passLoading = $state(false);
+	let passLoadError = $state('');
+	let passChoice = $state('');
+	let passBusy = $state(false);
+	let passError = $state('');
+	const passChosen = $derived(passCandidates.find((c) => c.id === passChoice));
+	// The change reaches the client by WhatsApp only through a webhook of this type: when all
+	// four notices are "No aplica" there is none, so the dialog does not promise it.
+	const passHasWhatsApp = $derived(!!passBooking?.whatsapp?.some((n) => n.status !== 'not_applicable'));
+
+	async function loadPassCandidates() {
+		if (!passBooking) return;
+		passLoading = true;
+		passLoadError = '';
+		try {
+			const id = passBooking.id;
+			const list = await teamApi.reassignCandidates(id);
+			if (passBooking?.id !== id) return;
+			passCandidates = list;
+		} catch (e: any) {
+			passLoadError = e?.message || 'No se pudo cargar la lista de personas.';
+		} finally {
+			passLoading = false;
+		}
+	}
+
+	function openPass(b: Booking) {
+		passBooking = b;
+		passCandidates = [];
+		passChoice = '';
+		passError = '';
+		passOpen = true;
+		loadPassCandidates();
+	}
+
+	async function confirmPass() {
+		if (!passBooking || !passChosen || passBusy) return;
+		passBusy = true;
+		passError = '';
+		try {
+			await teamApi.reassign(passBooking.id, passChosen.id);
+			toast.success(`La reunión ahora la atiende ${passChosen.name}. Se avisó al cliente.`);
+			passOpen = false;
+			await load();
+		} catch (e) {
+			passError = reassignErrorText(e);
+		} finally {
+			passBusy = false;
+		}
+	}
+
+	// Pass only a confirmed session that has not started (the same rule as cancelling).
+	function passable(b: Booking) {
+		return canSeeAll && cancellable(b);
+	}
+
+	// Reprogramar: the server lets only the primary host move a session (PATCH .../reschedule
+	// 404s for anyone else), and only upcoming ones make sense.
+	function reschedulable(b: Booking) {
+		return b.status === 'confirmed' && !!$currentUser && b.host_id === $currentUser.id &&
+			new Date(b.start_at).getTime() > Date.now();
+	}
+
+	// ── Fork: attendance from the video room (list item "attendance") ──
+	// A chip in the WhatsApp notices' style, no emoji. Nothing for pending / not applicable.
+	const ATTENDANCE_CLS = {
+		ok: 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300',
+		warn: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300',
+		bad: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300',
+		live: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'
+	};
+	function attendanceChip(b: Booking): { label: string; cls: string } | null {
+		const a: Attendance | undefined = b.attendance;
+		if (!a) return null;
+		switch (a.status) {
+			case 'attended':
+				return {
+					label: a.minutes_together && a.minutes_together > 0 ? `Atendida · ${a.minutes_together} min` : 'Atendida',
+					cls: ATTENDANCE_CLS.ok
+				};
+			case 'attended_unverified':
+				return { label: 'Entraron 2 personas; no se identificó a quien atiende', cls: ATTENDANCE_CLS.warn };
+			case 'client_absent':
+				return { label: 'El cliente no entró', cls: ATTENDANCE_CLS.warn };
+			case 'host_absent':
+				return { label: `${b.host_name || 'Quien atiende'} no entró`, cls: ATTENDANCE_CLS.bad };
+			case 'in_progress':
+				return { label: 'En curso', cls: ATTENDANCE_CLS.live };
+			case 'nobody':
+				return { label: 'Nadie entró', cls: ATTENDANCE_CLS.bad };
+			default:
+				return null;
+		}
 	}
 
 	function startReschedule(b: Booking) {
@@ -416,13 +585,25 @@
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="Todos los tipos de atención">Todos los tipos de atención</Select.Item>
-					{#each eventTypes as et}
-						<Select.Item value={et.slug} label={et.name}>{et.name}</Select.Item>
+					{#each eventTypes as et (et.slug)}
+						<Select.Item value={et.slug} label={et.label}>{et.label}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
 
 			{#if canSeeAll && scope === 'all'}
+				<!-- Fork: área from the booking's type (Mentoría = the template and every copy). -->
+				<Select.Root type="single" bind:value={fArea} onValueChange={reload}>
+					<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por área">
+						{fArea === 'mentoria' || fArea === 'soporte' ? AREA_LABELS[fArea] : 'Todas las áreas'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="Todas las áreas">Todas las áreas</Select.Item>
+						<Select.Item value="mentoria" label="Mentoría">Mentoría</Select.Item>
+						<Select.Item value="soporte" label="Soporte">Soporte</Select.Item>
+					</Select.Content>
+				</Select.Root>
+
 				<Select.Root type="single" bind:value={fHost} onValueChange={reload}>
 					<Select.Trigger class="h-9 w-full sm:w-[150px]" aria-label="Filtrar por anfitrión">
 						{members.find((m) => m.id === fHost)?.name ?? 'Todos los anfitriones'}
@@ -452,7 +633,7 @@
 
 			<Select.Root type="single" bind:value={fStatus} onValueChange={reload}>
 				<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por estado">
-					{fStatus || 'Cualquier estado'}
+					{fStatus ? (statusLabel[fStatus] ?? fStatus) : 'Cualquier estado'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="Cualquier estado">Cualquier estado</Select.Item>
@@ -520,6 +701,13 @@
 								<dd class="break-words">{b.event_type_name || eventTypeName(b.event_type_slug)}</dd>
 								<dt class="text-muted-foreground">Atiende</dt>
 								<dd class="break-words">{b.host_name || '—'}</dd>
+								{#if attendanceChip(b)}
+									{@const chip = attendanceChip(b)!}
+									<dt class="text-muted-foreground">Asistencia</dt>
+									<dd class="min-w-0">
+										<span class="inline-flex max-w-full rounded-md border px-2 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
+									</dd>
+								{/if}
 								{#if b.status === 'cancelled' && b.cancellation_reason}
 									<dt class="text-muted-foreground">Motivo</dt>
 									<dd class="break-words text-muted-foreground">{b.cancellation_reason}</dd>
@@ -551,16 +739,24 @@
 										Cancelar reprogramación
 									</Button>
 								{:else}
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-											onclick={() => startReschedule(b)}
-											aria-label="Reprogramar"
-										>
-											<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-										</Tooltip.Trigger>
-										<Tooltip.Content>Reprogramar</Tooltip.Content>
-									</Tooltip.Root>
+									<!-- Fork: only the person who attends moves their own upcoming session. -->
+									{#if reschedulable(b)}
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+												onclick={() => startReschedule(b)}
+												aria-label="Reprogramar"
+											>
+												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+											</Tooltip.Trigger>
+											<Tooltip.Content>Reprogramar</Tooltip.Content>
+										</Tooltip.Root>
+									{/if}
+									{#if passable(b)}
+										<Button variant="outline" size="sm" onclick={() => openPass(b)}>
+											Pasar a otra persona
+										</Button>
+									{/if}
 									{#if cancellable(b)}
 										<Button
 											variant="outline"
@@ -633,6 +829,11 @@
 							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Respuestas del formulario</p>
 							{#if answersLoading[b.id]}
 								<p class="text-sm text-muted-foreground">Cargando…</p>
+							{:else if answersFailed[b.id]}
+								<div class="flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">
+									<p class="text-sm text-destructive">No se pudieron cargar las respuestas.</p>
+									<Button variant="outline" size="sm" onclick={() => loadAnswers(b.id)}>Reintentar</Button>
+								</div>
 							{:else if !answersCache[b.id] || answersCache[b.id].length === 0}
 								<p class="text-sm text-muted-foreground">No hay respuestas de formulario para esta reserva.</p>
 							{:else}
@@ -732,6 +933,68 @@
 	{/if}
 	{/if}
 {/if}
+
+<!-- Fork: "Pasar a otra persona" - one Dialog, sized for a phone (no edge-to-edge at 375 px). -->
+<Dialog.Root bind:open={passOpen}>
+	<Dialog.Content class="max-w-[calc(100%-2rem)] rounded-lg sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Pasar a otra persona</Dialog.Title>
+			<Dialog.Description>
+				{#if passBooking}
+					{passBooking.attendees?.[0]?.name || 'Sin nombre'} · {fmt(passBooking.start_at)}
+					{#if passBooking.host_name} · la atiende {passBooking.host_name}{/if}
+				{/if}
+			</Dialog.Description>
+		</Dialog.Header>
+
+		<div class="max-h-[50vh] space-y-3 overflow-y-auto">
+			{#if passLoading}
+				<p class="text-sm text-muted-foreground">Cargando personas…</p>
+			{:else if passLoadError}
+				<div class="flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">
+					<p class="text-sm text-destructive">No se pudo cargar la lista de personas.</p>
+					<Button variant="outline" size="sm" onclick={loadPassCandidates}>Reintentar</Button>
+				</div>
+			{:else if passCandidates.length === 0}
+				<p class="text-sm text-muted-foreground">No hay otra persona del área disponible. Puedes cancelar la reunión en su lugar.</p>
+			{:else}
+				<div class="space-y-1.5">
+					<Label for="pass-to">¿A quién?</Label>
+					<Select.Root type="single" bind:value={passChoice} disabled={passBusy}>
+						<Select.Trigger id="pass-to" class="w-full">
+							{passChosen?.name ?? 'Elige una persona…'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each passCandidates as c (c.id)}
+								<Select.Item value={c.id} label={c.name}>
+									{c.name}{#if c.area === 'mentoria' || c.area === 'soporte'}<span class="ml-1 text-xs text-muted-foreground">· {AREA_LABELS[c.area]}</span>{/if}
+								</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<p class="text-sm text-muted-foreground">
+					La fecha y la hora no cambian y la reunión pasa a la agenda de esa persona.
+					{#if passHasWhatsApp}
+						Se avisará al cliente por correo (si está configurado) y por WhatsApp, si tu webhook incluye los cambios de horario.
+					{:else}
+						Se avisará al cliente por correo, si está configurado.
+					{/if}
+				</p>
+			{/if}
+			{#if passError}
+				<p class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">{passError}</p>
+			{/if}
+		</div>
+
+		<Dialog.Footer class="gap-2">
+			<Button variant="outline" disabled={passBusy} onclick={() => (passOpen = false)}>Cancelar</Button>
+			<Button disabled={!passChosen || passBusy} onclick={confirmPass}>
+				{passBusy ? 'Pasando…' : passChosen ? `Pasar a ${passChosen.name}` : 'Pasar'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	bind:open={confirmOpen}

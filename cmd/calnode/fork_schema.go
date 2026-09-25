@@ -29,5 +29,10 @@ func migrateWithForkSchema(ctx context.Context, database *sql.DB) error {
 	if err := db.Migrate(database); err != nil {
 		return err
 	}
-	return webhook.EnsureForkSchema(database)
+	if err := webhook.EnsureForkSchema(database); err != nil {
+		return err
+	}
+	// The team feature's own fork_ tables (áreas, invite roles, attendance), same rule:
+	// idempotent, and a failure stops the boot (internal/webhook/fork_team.go).
+	return webhook.EnsureTeamSchema(database)
 }

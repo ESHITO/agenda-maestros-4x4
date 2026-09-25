@@ -6,17 +6,14 @@ import (
 	"time"
 )
 
-// ListUsers handles GET /v1/users — admin, or support. Returns all users.
+// ListUsers handles GET /v1/users — admin only. Returns all users.
 //
-// Support reads this list and nothing else on this route file: every mutation
-// below (DeleteUser, and the invite/archive/role endpoints elsewhere) keeps its
-// own admin/owner check, so read access here does not widen anything. It is the
-// lookup support needs to turn "a member wrote in" into the user id behind the
-// bookings it is allowed to cancel and reschedule. The payload carries no
-// secrets — name, email, tier, auth provider, teams.
+// Fork: each row also carries the person's área ("mentoria" | "soporte" | "") and their
+// personal booking link (fork_team_api.go). The fork's former is_support "desk" tier is
+// retired: it no longer opens this list, and no row reports it.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	admin, ok := userFromContext(r.Context())
-	if !ok || !(admin.IsAdmin || admin.IsSupport) {
+	if !ok || !admin.IsAdmin {
 		h.writeError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -51,8 +48,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		Timezone       string    `json:"timezone"`
 		IsAdmin        bool      `json:"is_admin"`
 		IsOwner        bool      `json:"is_owner"`
-		IsSupport      bool      `json:"is_support"`
-		Role           string    `json:"role"` // "owner" | "admin" | "support" | "member"
+		Role           string    `json:"role"` // "owner" | "admin" | "member"
 		EmailLogin     bool      `json:"email_login"`
 		Provider       string    `json:"provider,omitempty"`
 		AvatarURL      string    `json:"avatar_url,omitempty"`
@@ -62,12 +58,15 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		ArchivedBy     string    `json:"archived_by,omitempty"`
 		ArchivedByName string    `json:"archived_by_name,omitempty"`
 		Teams          []teamRef `json:"teams"`
+		// Fork: what the person attends and their own booking link (fork_team_api.go).
+		Area         string            `json:"area"`
+		PersonalLink *personalLinkJSON `json:"personal_link"`
 	}
 	out := []userRow{}
 	byID := map[string]*userRow{}
 	for rows.Next() {
 		var u userRow
-		var isAdmin, isOwner, isSupport, emailLogin int
+		var isAdmin, isOwner, isSupport, emailLogin int // is_support: retired, scanned and ignored
 		var archivedAt sql.NullString
 		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Timezone, &isAdmin, &isOwner, &isSupport, &emailLogin,
 			&u.Provider, &u.AvatarURL, &u.CreatedAt, &archivedAt, &u.ArchivedBy, &u.ArchivedByName); err != nil {
@@ -75,24 +74,16 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		u.IsAdmin = isAdmin != 0
 		u.IsOwner = isOwner != 0
-		u.IsSupport = isSupport != 0
 		u.EmailLogin = emailLogin != 0
 		u.Archived = archivedAt.Valid
 		u.ArchivedAt = archivedAt.String
 		u.Teams = []teamRef{}
-		// Same precedence as AuthUser.Role() (auth.go): Owner > Admin > Support >
-		// Member. Support MUST appear here: this list is the only place the owner
-		// sees who holds which tier, and it is what the members page binds the role
-		// selector to. Omitting it reported a support user as a plain "member",
-		// which both hid the privilege and made the selector's "Miembro" option a
-		// no-op change — leaving is_support = 1 set with no way to revoke it.
+		// Same precedence as AuthUser.Role() (auth.go): Owner > Admin > Member.
 		switch {
 		case u.IsOwner:
 			u.Role = "owner"
 		case u.IsAdmin:
 			u.Role = "admin"
-		case u.IsSupport:
-			u.Role = "support"
 		default:
 			u.Role = "member"
 		}
@@ -109,6 +100,10 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		h.logger.ErrorContext(r.Context(), "list users: rows", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	areas, links := h.teamPeople(r.Context()) // fork: áreas and personal links (cursor closed above)
+	for i := range out {
+		out[i].Area, out[i].PersonalLink = areas[out[i].ID], links[out[i].ID]
 	}
 
 	// Attach each member's teams (the Members↔Teams cross-reference).

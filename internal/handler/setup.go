@@ -121,7 +121,6 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 		"date_format":    user.DateFormat,
 		"is_admin":       user.IsAdmin,
 		"is_owner":       user.IsOwner,
-		"is_support":     user.IsSupport,
 		"role":           user.Role(),
 		// Notification preferences
 		"notify_confirmation":    user.NotifyConfirmation,
@@ -135,6 +134,7 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 	if user.AvatarURL != "" {
 		out["avatar_url"] = user.AvatarURL
 	}
+	out["area"], out["personal_link"] = h.teamInfoForUser(r.Context(), user.ID) // fork: fork_team_api.go
 	h.writeJSON(w, http.StatusOK, out)
 }
 
@@ -293,7 +293,6 @@ func (h *Handler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		"date_format":    current.DateFormat,
 		"is_admin":       user.IsAdmin,
 		"is_owner":       user.IsOwner,
-		"is_support":     user.IsSupport,
 		"role":           user.Role(),
 		// Notification preferences
 		"notify_confirmation":    current.NotifyConfirmation,
@@ -307,5 +306,6 @@ func (h *Handler) PatchMe(w http.ResponseWriter, r *http.Request) {
 	if user.AvatarURL != "" {
 		out["avatar_url"] = user.AvatarURL
 	}
+	out["area"], out["personal_link"] = h.teamInfoForUser(r.Context(), user.ID) // fork: fork_team_api.go
 	h.writeJSON(w, http.StatusOK, out)
 }

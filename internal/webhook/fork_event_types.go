@@ -87,6 +87,13 @@ func EnsureForkSchema(db *sql.DB) error {
 			return fmt.Errorf("webhook: fork schema: %w", err)
 		}
 	}
+	// The team's copy/holder links (fork_team.go): read by matchingWebhooks and
+	// whatsAppTemplate, so they belong here and not in EnsureTeamSchema.
+	for _, stmt := range forkTeamLinkSchema {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("webhook: fork schema: %w", err)
+		}
+	}
 	return nil
 }
 

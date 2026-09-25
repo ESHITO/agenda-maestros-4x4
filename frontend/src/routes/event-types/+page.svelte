@@ -1,13 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type EventType } from '$lib/api';
-	import { Button, buttonVariants } from '$lib/components/ui/button';
+	import { base } from '$app/paths';
+	import { api, teamApi, copyText, type EventType, type TeamSettings, type AvailabilityRule, type CopyLink } from '$lib/api';
+	import { currentUser } from '$lib/stores';
+	import { Button } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { toast } from 'svelte-sonner';
 
 	let items: EventType[] = $state([]);
@@ -22,10 +23,28 @@
 	// copies while the request is in flight.
 	let duplicating = $state('');
 
+	// Fork: predefined types. The team settings (admins) name the Soporte rotation and,
+	// for the owner, the mentors' links when the list item does not carry them. The
+	// availability rules tell a mentor / support person that nobody can book them yet.
+	let settings = $state<TeamSettings | null>(null);
+	let hasRules = $state<boolean | null>(null);
+	let openCopies = $state<Record<string, boolean>>({});
+
+	// A copy is owned by the template's owner, so the owner's list holds every copy: they
+	// are reached through the template card instead (one link per mentor). The mentor sees
+	// their own copy (owned = false) as a read-only predefined type.
+	const listed = $derived(items.filter((et) => !(et.team?.kind === 'mentoria_copy' && et.owned !== false)));
+
 	let filter = $state<'active' | 'archived'>('active');
-	const visible = $derived(items.filter((et) => (filter === 'archived' ? !!et.archived : !et.archived)));
-	const archivedCount = $derived(items.filter((et) => et.archived).length);
-	const activeCount = $derived(items.length - archivedCount);
+	const visible = $derived(listed.filter((et) => (filter === 'archived' ? !!et.archived : !et.archived)));
+	const archivedCount = $derived(listed.filter((et) => et.archived).length);
+	const activeCount = $derived(listed.length - archivedCount);
+
+	// A predefined type this person attends (their copy, the shared Soporte, or the
+	// template they own) is useless without availability: say so.
+	const attendsPredefined = $derived(
+		listed.some((et) => !et.archived && et.team && (et.owned === false || et.team.kind === 'mentoria_template'))
+	);
 
 	async function load() {
 		try {
@@ -38,7 +57,22 @@
 		}
 	}
 
-	onMount(load);
+	async function loadTeamContext() {
+		if ($currentUser?.is_admin) {
+			teamApi.getSettings().then((s) => (settings = s)).catch(() => {});
+		}
+		try {
+			const res = await api.get<{ items: AvailabilityRule[] }>('/v1/availability-rules');
+			hasRules = (res.items?.length ?? 0) > 0;
+		} catch {
+			hasRules = null; // unknown: say nothing rather than a false warning
+		}
+	}
+
+	onMount(() => {
+		load();
+		loadTeamContext();
+	});
 
 	async function create() {
 		if (!form.slug || !form.name || !form.duration_minutes) {
@@ -72,10 +106,42 @@
 		}
 	}
 
+	// Fork: archiving the Mentoría template switches off every mentor's copy (a copy is
+	// active only while its template is not archived), and archiving the Soporte type
+	// leaves nothing to book for Soporte. Both ask first.
+	let archiveOpen = $state(false);
+	let archiveTarget = $state<EventType | null>(null);
+	let archiveTitle = $state('');
+	let archiveDescription = $state('');
+
+	function askArchive(et: EventType) {
+		const kind = et.team?.kind;
+		const n = kind === 'mentoria_template' ? copiesOf(et) : 0;
+		if (!et.archived && kind === 'mentoria_template' && n > 0) {
+			archiveTitle = `¿Archivar la plantilla «${et.name}»?`;
+			archiveDescription = `${n === 1 ? 'La copia del mentor dejará' : `Las ${n} copias de los mentores dejarán`} de aceptar reservas: los enlaces personales se desactivan hasta que la restaures. Las reservas ya hechas se conservan.`;
+		} else if (!et.archived && kind === 'soporte_shared') {
+			archiveTitle = `¿Archivar «${et.name}»?`;
+			archiveDescription = 'Es el tipo de Soporte: nadie podrá reservar Soporte hasta que lo restaures. Las reservas ya hechas se conservan.';
+		} else {
+			archive(et, !et.archived);
+			return;
+		}
+		archiveTarget = et;
+		archiveOpen = true;
+	}
+
 	async function archive(et: EventType, archived: boolean) {
 		try {
 			await api.patch(`/v1/event-types/${et.slug}`, { archived });
-			toast.success(archived ? 'Tipo de atención archivado' : 'Tipo de atención restaurado');
+			const kind = et.team?.kind;
+			toast.success(
+				archived && kind === 'mentoria_template' && copiesOf(et) > 0
+					? 'Plantilla archivada: los enlaces de los mentores ya no aceptan reservas'
+					: archived && kind === 'soporte_shared'
+						? 'Tipo de Soporte archivado: nadie puede reservarlo'
+						: archived ? 'Tipo de atención archivado' : 'Tipo de atención restaurado'
+			);
 			await load();
 		} catch (e: any) {
 			toast.error(e.message || 'No se pudo actualizar el tipo de atención');
@@ -115,6 +181,26 @@
 	function bookLink(slug: string) {
 		return `${window.location.origin}/book/${slug}`;
 	}
+
+	async function copyLink(url: string) {
+		if (await copyText(url)) toast.success('Enlace copiado');
+		else toast.error('No se pudo copiar; mantén pulsado el enlace para copiarlo.');
+	}
+
+	// The mentors' links of the template: from the list item, else from the settings (both
+	// owner-only on the server).
+	function copyLinksOf(et: EventType): CopyLink[] {
+		if (et.team?.copy_links) return et.team.copy_links;
+		if (settings?.mentoria_template?.id === et.id) return settings.mentoria_template.copy_links ?? [];
+		return [];
+	}
+	function copiesOf(et: EventType): number {
+		return et.team?.copies ?? settings?.mentoria_template?.copies ?? copyLinksOf(et).length;
+	}
+	// S's rotation: from the list item (the server sends it to everyone who sees S), else the settings.
+	function soporteHostsOf(et: EventType): { id: string; name: string }[] {
+		return et.team?.hosts ?? settings?.soporte_shared?.hosts ?? [];
+	}
 </script>
 
 <ConfirmDialog
@@ -126,22 +212,32 @@
 	onConfirm={doDelete}
 />
 
+<ConfirmDialog
+	bind:open={archiveOpen}
+	title={archiveTitle}
+	description={archiveDescription}
+	confirmText="Archivar"
+	cancelText="Cancelar"
+	destructive
+	onConfirm={() => archiveTarget && archive(archiveTarget, true)}
+/>
+
 <svelte:head><title>Tipos de atención — Calnode</title></svelte:head>
 
-<div class="mb-8 flex items-center justify-between">
+<div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Tipos de atención</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Administra los tipos de reuniones que las personas pueden reservar contigo.</p>
 	</div>
-	<Button onclick={() => { showCreate = !showCreate; }}>
+	<Button class="self-start sm:self-auto" onclick={() => { showCreate = !showCreate; }}>
 		{showCreate ? 'Cancelar' : 'Nuevo tipo de atención'}
 	</Button>
 </div>
 
 {#if showCreate}
-	<div class="mb-6 rounded-lg border bg-card p-6">
+	<div class="mb-6 rounded-lg border bg-card p-4 sm:p-6">
 		<h2 class="mb-4 text-sm font-semibold">Nuevo tipo de atención</h2>
-		<div class="mb-4 grid grid-cols-2 gap-4">
+		<div class="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
 			<div class="space-y-1.5">
 				<Label for="et-name">Nombre</Label>
 				<Input id="et-name" bind:value={form.name} placeholder="Llamada de 30 minutos" />
@@ -165,9 +261,16 @@
 	</div>
 {/if}
 
+{#if !loading && attendsPredefined && hasRules === false}
+	<div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300" role="status">
+		Aún no tienes horarios de disponibilidad: nadie puede reservar contigo hasta que los definas.
+		<a href="{base}/availability" class="font-medium underline">Definir mi disponibilidad</a>
+	</div>
+{/if}
+
 {#if loading}
 	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
-{:else if items.length === 0}
+{:else if listed.length === 0}
 	<div class="rounded-lg border border-dashed bg-card p-12 text-center">
 		<p class="text-sm font-medium">Aún no hay tipos de atención</p>
 		<p class="mt-1 text-sm text-muted-foreground">Crea tu primer tipo de atención para empezar a aceptar reservas.</p>
@@ -182,106 +285,109 @@
 			<p class="text-sm text-muted-foreground">No hay tipos de atención {filter === 'archived' ? 'archivados' : 'activos'}.</p>
 		</div>
 	{:else}
-	<div class="rounded-lg border bg-card overflow-hidden">
-		<table class="w-full text-sm">
-			<thead>
-				<tr class="border-b">
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Nombre</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Duración</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Enlace de reserva</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Activo</th>
-					<th class="px-4 pb-3 pt-3"></th>
-				</tr>
-			</thead>
-			<tbody class="divide-y">
-				{#each visible as et}
-					<tr class="transition-colors hover:bg-muted/30">
-						<td class="px-4 py-3">
-							<div class="flex items-center gap-2">
-								<span class="font-medium">{et.name}</span>
-								{#if et.owned === false}
+	<!-- Fork: one card per type (the old 5-column table clipped the switch and the actions
+	     at 375 px). Actions carry text: a Tooltip does not open on touch. -->
+	<div class="overflow-hidden rounded-lg border bg-card">
+		<ul class="divide-y">
+			{#each visible as et (et.id)}
+				{@const kind = et.team?.kind}
+				{@const readOnly = et.owned === false}
+				<li class="space-y-3 p-4 transition-colors hover:bg-muted/20">
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+						<div class="min-w-0 flex-1 space-y-1">
+							<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+								<p class="min-w-0 break-words font-medium">{et.name}</p>
+								{#if kind && readOnly}
+									<Badge variant="secondary" class="text-[10px]">Predefinido por el propietario</Badge>
+								{:else if kind === 'mentoria_template'}
+									<Badge variant="secondary" class="text-[10px]">Plantilla de Mentoría</Badge>
+								{:else if kind === 'soporte_shared'}
+									<Badge variant="secondary" class="text-[10px]">Soporte compartido</Badge>
+								{:else if readOnly}
 									<Badge variant="secondary" class="text-[10px]">Eres anfitrión</Badge>
 								{/if}
+								{#if !et.is_active && !et.archived}
+									<Badge variant="outline" class="text-[10px] text-muted-foreground">Inactivo</Badge>
+								{/if}
 							</div>
-							<div class="text-xs text-muted-foreground">{et.slug}</div>
-						</td>
-						<td class="px-4 py-3 text-muted-foreground">{et.duration_minutes} min</td>
-						<td class="px-4 py-3">
-							<Tooltip.Provider>
-								<Tooltip.Root>
-									<Tooltip.Trigger
-										class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-										onclick={() => window.open(bookLink(et.slug), '_blank')}
-									>
-										<!-- External link icon -->
-										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-									</Tooltip.Trigger>
-									<Tooltip.Content>{bookLink(et.slug)}</Tooltip.Content>
-								</Tooltip.Root>
-							</Tooltip.Provider>
-						</td>
-						<td class="px-4 py-3">
-							<Switch bind:checked={et.is_active} onCheckedChange={(v) => saveActive(et, v)} disabled={et.owned === false || et.archived} />
-						</td>
-						<td class="px-4 py-3">
-							<Tooltip.Provider>
-								<div class="flex items-center justify-end gap-1">
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-											onclick={() => window.location.href = '/admin/event-types/' + et.slug}
-										>
-											<!-- Gear/Settings icon -->
-											<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-										</Tooltip.Trigger>
-										<Tooltip.Content>Configuración</Tooltip.Content>
-									</Tooltip.Root>
+							<p class="break-all text-xs text-muted-foreground">/book/{et.slug} · {et.duration_minutes} min</p>
 
-									{#if et.owned !== false}
-										<Tooltip.Root>
-											<Tooltip.Trigger
-												class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-												onclick={() => duplicateEventType(et)}
-												disabled={duplicating === et.slug}
-											>
-												<!-- Copy icon -->
-												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="14" height="14" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-											</Tooltip.Trigger>
-											<Tooltip.Content>Duplicar</Tooltip.Content>
-										</Tooltip.Root>
-										<Tooltip.Root>
-											<Tooltip.Trigger
-												class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-												onclick={() => archive(et, !et.archived)}
-											>
-												{#if et.archived}
-													<!-- Restore icon -->
-													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><path d="M12 12v6"/><path d="M9 15l3-3 3 3"/></svg>
-												{:else}
-													<!-- Archive box icon -->
-													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/></svg>
-												{/if}
-											</Tooltip.Trigger>
-											<Tooltip.Content>{et.archived ? 'Restaurar' : 'Archivar'}</Tooltip.Content>
-										</Tooltip.Root>
-										<Tooltip.Root>
-											<Tooltip.Trigger
-												class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-												onclick={() => del(et.slug)}
-											>
-												<!-- Trash icon -->
-												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-											</Tooltip.Trigger>
-											<Tooltip.Content>Eliminar</Tooltip.Content>
-										</Tooltip.Root>
+							{#if kind === 'mentoria_template' && !readOnly}
+								{@const n = copiesOf(et)}
+								{@const links = copyLinksOf(et)}
+								<p class="text-sm text-muted-foreground">
+									{n === 1 ? '1 copia (una por mentor)' : `${n} copias (una por mentor)`}. Las copias siguen los cambios de esta plantilla.
+								</p>
+								{#if links.length > 0}
+									<button type="button" class="text-xs font-medium text-primary underline-offset-2 hover:underline" aria-expanded={!!openCopies[et.id]} onclick={() => (openCopies = { ...openCopies, [et.id]: !openCopies[et.id] })}>
+										{openCopies[et.id] ? 'Ocultar enlaces de los mentores' : 'Ver enlaces de los mentores'}
+									</button>
+									{#if openCopies[et.id]}
+										<ul class="mt-1 space-y-1.5">
+											{#each links as l (l.slug)}
+												<li class="flex flex-col gap-1 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+													<div class="min-w-0">
+														<p class="text-sm font-medium">{l.mentor_name}{#if !l.active}<span class="ml-1.5 text-xs font-normal text-muted-foreground">(inactiva)</span>{/if}</p>
+														<p class="break-all text-xs text-muted-foreground">{l.url}</p>
+													</div>
+													<Button variant="outline" size="sm" class="self-start sm:self-auto" onclick={() => copyLink(l.url)}>Copiar enlace</Button>
+												</li>
+											{/each}
+										</ul>
 									{/if}
-								</div>
-							</Tooltip.Provider>
-						</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+								{/if}
+							{:else if kind === 'soporte_shared' && !readOnly}
+								{@const soporteHosts = soporteHostsOf(et)}
+								<p class="text-sm text-muted-foreground">
+									{#if !et.team?.hosts && !settings}
+										Se reparte entre el personal de soporte (se asigna en Miembros).
+									{:else if soporteHosts.length > 1}
+										Se reparte por turnos entre: {soporteHosts.map((h) => h.name).join(', ')}.
+									{:else if soporteHosts.length === 1}
+										Lo atiende {soporteHosts[0].name}.
+									{:else}
+										Nadie tiene el área Soporte: lo atiendes tú. Asígnala en Miembros.
+									{/if}
+								</p>
+							{:else if kind && readOnly}
+								<p class="text-sm text-muted-foreground">
+									{kind === 'soporte_shared'
+										? 'Se reparte por turnos entre el personal de soporte. Lo configura el propietario.'
+										: 'Tu enlace personal. Lo configura el propietario; tú defines tu disponibilidad.'}
+								</p>
+							{/if}
+						</div>
+
+						<!-- Active switch: only on what this person edits (a copy follows its template). -->
+						{#if !readOnly}
+							<label class="flex shrink-0 items-center gap-2 text-sm">
+								<Switch bind:checked={et.is_active} onCheckedChange={(v) => saveActive(et, v)} disabled={et.archived} aria-label="Activo" />
+								<span class="text-muted-foreground">Activo</span>
+							</label>
+						{/if}
+					</div>
+
+					<div class="flex flex-wrap items-center gap-1.5">
+						<Button variant="outline" size="sm" onclick={() => copyLink(bookLink(et.slug))}>Copiar enlace</Button>
+						<Button variant="ghost" size="sm" href={bookLink(et.slug)} target="_blank" rel="noopener noreferrer">Abrir página</Button>
+						<Button variant="ghost" size="sm" href="{base}/event-types/{et.slug}">{readOnly ? 'Ver detalles' : 'Configurar'}</Button>
+						{#if !readOnly}
+							<Button variant="ghost" size="sm" onclick={() => duplicateEventType(et)} disabled={duplicating === et.slug}>
+								{duplicating === et.slug ? 'Duplicando…' : 'Duplicar'}
+							</Button>
+							<Button variant="ghost" size="sm" onclick={() => askArchive(et)}>
+								{et.archived ? 'Restaurar' : 'Archivar'}
+							</Button>
+							<!-- Fork: the server refuses deleting T while it has copies and S while it is
+							     the Soporte type (409), so the button is not offered then. -->
+							{#if !(kind === 'mentoria_template' && copiesOf(et) > 0) && kind !== 'soporte_shared'}
+								<Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" onclick={() => del(et.slug)}>Eliminar</Button>
+							{/if}
+						{/if}
+					</div>
+				</li>
+			{/each}
+		</ul>
 	</div>
 	{/if}
 {/if}

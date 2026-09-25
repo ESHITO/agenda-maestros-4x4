@@ -547,6 +547,7 @@ func (h *Handler) LiveKitWebhook(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusForbidden, "invalid webhook signature")
 		return
 	}
+	h.recordAttendanceEvent(r.Context(), body) // fork: attendance (fork_attendance.go)
 	var ev struct {
 		Event string `json:"event"`
 		Room  struct {

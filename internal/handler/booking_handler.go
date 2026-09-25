@@ -1111,6 +1111,7 @@ func (h *Handler) mintMeetingLink(ctx context.Context, b *booking.Booking, in bo
 			attendeeURL := lk.BookingJoinURL(h.baseURL, room, "", exp)
 			meetURL = lk.BookingJoinURL(h.baseURL, room, "host", exp) // host calendar events
 			livekitHostURL = meetURL
+			h.recordTeamHostLink(ctx, b.ID, livekitHostURL) // fork: the current host link (fork_team_supervision.go)
 			b.LocationValue = attendeeURL
 			bData.LocationValue = attendeeURL
 			if _, err := h.db.ExecContext(ctx,
@@ -1390,9 +1391,8 @@ var errNoMatches = errors.New("filter matches nothing")
 
 // parseBookingListFilter turns the query string into a booking.ListFilter, applying
 // the visibility rule: members are pinned to bookings they host, and only an admin
-// or a support user may widen to the workspace with ?scope=all. Every other filter
-// narrows further, so a member passing host= or team= can never see more than their
-// own bookings.
+// may widen to the workspace with ?scope=all. Every other filter narrows further, so
+// a member passing host= or team= can never see more than their own bookings.
 func (h *Handler) parseBookingListFilter(ctx context.Context, q url.Values, user AuthUser) (booking.ListFilter, error) {
 	f := booking.ListFilter{
 		Now:    time.Now().UTC(),
@@ -1401,11 +1401,7 @@ func (h *Handler) parseBookingListFilter(ctx context.Context, q url.Values, user
 		TeamID: q.Get("team"),
 		Order:  q.Get("order"),
 	}
-	// Support may widen to the whole workspace: finding a member's booking is the
-	// first step of every support request. It stays opt-in via ?scope=all, exactly
-	// like an admin — the OR belongs INSIDE the parentheses, or support would be
-	// pinned to nothing / widened unconditionally.
-	if !(q.Get("scope") == "all" && (user.IsAdmin || user.IsSupport)) {
+	if !(q.Get("scope") == "all" && user.IsAdmin) {
 		f.ViewerID = user.ID
 	}
 
@@ -1457,6 +1453,10 @@ func (h *Handler) parseBookingListFilter(ctx context.Context, q url.Values, user
 			return f, errNoMatches
 		}
 		f.EventTypeID = id
+	}
+	// Fork: ?area= and a template's whole family (fork_team_bookings.go).
+	if err := h.forkBookingListFilter(ctx, q, &f); err != nil {
+		return f, err
 	}
 	return f, nil
 }
@@ -1647,12 +1647,9 @@ func (h *Handler) CancelBooking(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	// Admins (and the owner) may cancel any booking — needed to resolve a
-	// departing member's meetings. Support joins them because cancelling on a
-	// member's behalf is its core job; it crosses into the branch that already
-	// exists, so the side effects (emails, calendar cleanup, webhook) are the
-	// same ones an admin triggers. Other hosts can cancel only their own.
+	// departing member's meetings. Other hosts can cancel only their own.
 	var cancelErr error
-	if user.IsAdmin || user.IsSupport {
+	if user.IsAdmin {
 		cancelErr = h.bookingSvc.CancelByID(r.Context(), id, req.Reason)
 	} else {
 		cancelErr = h.bookingSvc.Cancel(r.Context(), user.ID, id, req.Reason)

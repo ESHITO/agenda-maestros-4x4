@@ -8,15 +8,14 @@ import (
 
 // SetUserRole handles PATCH /v1/users/{id}/role — owner only.
 //
-// Body: {"role": "admin" | "support" | "member"}. Moves a user between the
-// member, support and admin tiers. Per PRD §8.10 only the owner may grant or
-// revoke admin. The owner's own role cannot be changed here (use
-// transfer-ownership), and you cannot change your own role.
+// Body: {"role": "admin" | "member"}. Moves a user between the member and admin
+// tiers. Per PRD §8.10 only the owner may grant or revoke admin. The owner's own
+// role cannot be changed here (use transfer-ownership), and you cannot change your
+// own role.
 //
-// The tiers are mutually exclusive: is_admin and is_support are BOTH written on
-// every change, so a demoted support user cannot keep is_support = 1 (which
-// would leave them still seeing and cancelling every booking in the workspace
-// while the API reports them as a plain member).
+// Fork: the "support" tier is retired (400 with a hint): what someone attends is their
+// área, set with PUT /v1/users/{id}/team-role (fork_team_api.go), which also moves the
+// tier. is_support is still cleared on every change and never written as 1.
 func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 	actor, ok := userFromContext(r.Context())
 	if !ok || !actor.IsOwner {
@@ -37,8 +36,13 @@ func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.Role != "admin" && req.Role != "support" && req.Role != "member" {
-		h.writeError(w, http.StatusBadRequest, "role must be 'admin', 'support' or 'member'")
+	if req.Role == "support" {
+		h.writeError(w, http.StatusBadRequest,
+			"El rol «soporte» ya no existe: asigna el área Soporte a esta persona desde Miembros.")
+		return
+	}
+	if req.Role != "admin" && req.Role != "member" {
+		h.writeError(w, http.StatusBadRequest, "role must be 'admin' or 'member'")
 		return
 	}
 
@@ -59,17 +63,13 @@ func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Both flags are always written, never one conditionally: admin -> (1,0),
-	// support -> (0,1), member -> (0,0). That is what keeps the tiers exclusive.
-	isAdmin, isSupport := 0, 0
-	switch req.Role {
-	case "admin":
+	// is_support (the retired tier) is cleared on every change, never set.
+	isAdmin := 0
+	if req.Role == "admin" {
 		isAdmin = 1
-	case "support":
-		isSupport = 1
 	}
 	if _, err := h.db.ExecContext(r.Context(),
-		`UPDATE users SET is_admin = ?, is_support = ? WHERE id = ?`, isAdmin, isSupport, targetID); err != nil {
+		`UPDATE users SET is_admin = ?, is_support = 0 WHERE id = ?`, isAdmin, targetID); err != nil {
 		h.logger.ErrorContext(r.Context(), "set role: update", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return

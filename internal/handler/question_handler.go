@@ -381,7 +381,7 @@ func (h *Handler) GetBookingAnswers(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if hostID != user.ID {
+	if hostID != user.ID && !h.teamMayReadAnswers(r.Context(), user, id) { // fork: seats, owner, admins (fork_team_supervision.go)
 		h.writeError(w, http.StatusNotFound, "booking not found")
 		return
 	}

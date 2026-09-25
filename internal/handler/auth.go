@@ -25,7 +25,10 @@ type AuthUser struct {
 	AvatarURL  string
 	IsAdmin    bool
 	IsOwner    bool
-	IsSupport  bool
+	// IsSupport is the fork's retired "desk" tier: still scanned (the column stays, the
+	// scans are positional) but it grants nothing and Role() never reports it. The boot
+	// repair (RetireSupportTier) clears it and gives those users the área soporte.
+	IsSupport bool
 
 	// Notification preferences (all default true).
 	NotifyConfirmation   bool
@@ -42,18 +45,15 @@ func userFromContext(ctx context.Context) (AuthUser, bool) {
 	return u, ok
 }
 
-// Role returns the workspace role string ("owner" | "admin" | "support" | "member")
-// derived from the is_owner / is_admin / is_support flags. Owner implies admin.
-// Order matters: admin wins over support, so an admin who also carries
-// is_support=1 is still reported as "admin".
+// Role returns the workspace role string ("owner" | "admin" | "member") derived from
+// the is_owner / is_admin flags. Owner implies admin. Never "support": that fork tier is
+// retired (what someone attends is their área, fork_team.go), so is_support maps to member.
 func (u AuthUser) Role() string {
 	switch {
 	case u.IsOwner:
 		return "owner"
 	case u.IsAdmin:
 		return "admin"
-	case u.IsSupport:
-		return "support"
 	default:
 		return "member"
 	}

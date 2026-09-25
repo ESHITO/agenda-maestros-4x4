@@ -54,16 +54,7 @@ func (h *Handler) RescheduleBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Return 404 for unauthorized access to avoid leaking booking IDs.
-	//
-	// Support may reschedule any booking in the workspace — moving a member's
-	// meeting on their behalf is the other half of the job that CancelBooking
-	// already grants it, and it is strictly less destructive than the cancel it
-	// would otherwise have to use instead. Everything below still keys off the
-	// booking's own hostID (validateRescheduleTime, the side effects), so the
-	// meeting is re-validated against ITS host's availability, not the actor's.
-	// Admins are deliberately left as they were: upstream pins this endpoint to
-	// the host and widening it is not part of the support tier.
-	if hostID != user.ID && !user.IsSupport {
+	if hostID != user.ID {
 		h.writeError(w, http.StatusNotFound, "booking not found")
 		return
 	}

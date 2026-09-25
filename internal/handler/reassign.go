@@ -118,7 +118,7 @@ func (h *Handler) ReassignBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.bookingSvc.ReassignHost(r.Context(), id, req.HostID)
+	updated, hostLink, err := h.teamReassignHost(r.Context(), id, req.HostID) // fork: one tx with seat, event type, answers, host link (fork_team_supervision.go)
 	if errors.Is(err, booking.ErrDoubleBooked) {
 		h.writeError(w, http.StatusConflict, "the chosen host already has a booking at that time")
 		return
@@ -221,7 +221,7 @@ func (h *Handler) ReassignBooking(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if prefs.NotifyHostBooking {
-			if err := mailer.SendConfirmationToHost(ctx, h.mailer, d); err != nil {
+			if err := mailer.SendConfirmationToHost(ctx, h.mailer, withTeamHostLink(d, hostLink)); err != nil { // fork: the new host gets a fresh host link
 				h.logger.Error("reassign: email new host", "error", err, "booking_id", bCopy.ID)
 			}
 		}

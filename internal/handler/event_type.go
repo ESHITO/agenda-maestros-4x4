@@ -67,6 +67,8 @@ type eventTypeJSON struct {
 	// contact for changes. Populated only for the host (read-only) GET case.
 	OwnerName  string `json:"owner_name,omitempty"`
 	OwnerEmail string `json:"owner_email,omitempty"`
+	// Fork: a predefined type of the team (template, mentor's copy, Soporte) - fork_team_guards.go.
+	Team *eventTypeTeamJSON `json:"team,omitempty"`
 }
 
 type rowScanner interface {
@@ -399,6 +401,7 @@ func (h *Handler) ListEventTypes(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	items = h.withTeamInfo(r.Context(), user, items) // fork: team types (fork_team_guards.go)
 	h.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -429,6 +432,10 @@ func (h *Handler) GetEventType(w http.ResponseWriter, r *http.Request) {
 	if err := h.loadReminders(r.Context(), et.ID, et); err != nil {
 		h.logger.ErrorContext(r.Context(), "get event type: load reminders", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if h.decorateTeamEventType(r.Context(), user, et) { // fork: team types (fork_team_guards.go)
+		h.writeError(w, http.StatusNotFound, "event type not found")
 		return
 	}
 	h.writeJSON(w, http.StatusOK, et)
