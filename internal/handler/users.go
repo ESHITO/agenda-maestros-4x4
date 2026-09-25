@@ -61,6 +61,9 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		// Fork: what the person attends and their own booking link (fork_team_api.go).
 		Area         string            `json:"area"`
 		PersonalLink *personalLinkJSON `json:"personal_link"`
+		// Fork: whether their weekly rules can open hours on what they attend (Soporte:
+		// global or S; Mentoría: global or their copy; nothing: any) - fork_team_hours.go.
+		HasAvailability bool `json:"has_availability"`
 	}
 	out := []userRow{}
 	byID := map[string]*userRow{}
@@ -102,8 +105,10 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	areas, links := h.teamPeople(r.Context()) // fork: áreas and personal links (cursor closed above)
+	hasHours := h.teamHoursChecker(r.Context())
 	for i := range out {
 		out[i].Area, out[i].PersonalLink = areas[out[i].ID], links[out[i].ID]
+		out[i].HasAvailability = hasHours(out[i].ID, out[i].Area)
 	}
 
 	// Attach each member's teams (the Members↔Teams cross-reference).

@@ -38,10 +38,11 @@ package handler
 //     deactivated. Área rows of missing users and invite roles granted by missing users
 //     are purged. Holders are never deleted.
 //
-// Then, on every run (a single user's run too - their área or archive changes S's
-// rotation): S's hosts are its active soporte staff as 'rotation' (stable priority by
+// Then, on every run (a single user's run too - their área, archive or availability rules
+// change S's rotation): S's hosts are its active soporte staff WITH weekly hours for S (a
+// global rule or one for S; fork_team_hours.go) as 'rotation' (stable priority by
 // created_at) with round_robin routing, or its owner as the single required host when
-// there is nobody; a previously managed S is released back to its owner; T's hosts are
+// nobody qualifies; a previously managed S is released back to its owner; T's hosts are
 // locked to [T's owner, required] with fixed routing.
 //
 // Single-connection pool: every helper takes the transaction, drains each cursor before
@@ -785,32 +786,18 @@ func reconcileTeamHosts(ctx context.Context, tx *sql.Tx, st teamSettings, tmpl *
 	current := ""
 	if sup != nil {
 		current = sup.id
-		rows, err := tx.QueryContext(ctx, `
-			SELECT u.id FROM users u JOIN fork_member_areas a ON a.user_id = u.id
-			WHERE a.area = ? AND u.archived_at IS NULL
-			ORDER BY u.created_at, u.id`, areaSoporte)
+		// Only staff whose weekly hours reach S rotate (fork_team_hours.go): one host with
+		// no rules would leave the public page with no slot at all.
+		staff, _, err := loadSoporteStaff(ctx, tx, sup.id)
 		if err != nil {
-			return err
-		}
-		var staff []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close() // #nosec G104 -- already returning the scan error
-				return err
-			}
-			staff = append(staff, id)
-		}
-		rows.Close() // #nosec G104 -- drained
-		if err := rows.Err(); err != nil {
 			return err
 		}
 		hosts := []teamHost{{userID: sup.userID, role: "required"}}
 		mode := "fixed"
 		if len(staff) > 0 {
 			hosts = hosts[:0]
-			for i, id := range staff {
-				hosts = append(hosts, teamHost{userID: id, role: "rotation", priority: i})
+			for i, s := range staff {
+				hosts = append(hosts, teamHost{userID: s.id, role: "rotation", priority: i})
 			}
 			mode = "round_robin"
 		}

@@ -367,6 +367,9 @@ export type TeamMember = {
 	area?: Area;
 	/** Fork: their active copy's link (for the template's owner, the template). */
 	personal_link?: PersonalLink | null;
+	/** Fork: their weekly hours can open slots on what they attend (Soporte: a global rule
+	 *  or one for the Soporte type; Mentoría: global or their copy; nothing: any rule). */
+	has_availability?: boolean;
 	email_login: boolean;
 	provider?: string;
 	avatar_url?: string;
@@ -433,6 +436,8 @@ export type TeamSettings = {
 		slug: string;
 		name: string;
 		hosts: { id: string; name: string }[];
+		/** Área-soporte people left out of the rotation until they set their hours. */
+		waiting?: { id: string; name: string }[];
 	} | null;
 	can_edit: boolean;
 	/** PUT only: what the save changed or should draw attention to (teamWarnings in Go). */
@@ -451,6 +456,9 @@ export type TeamRoleResponse = {
 	tier: 'owner' | 'admin' | 'member';
 	area: Area;
 	upcoming_in_previous_area: number;
+	/** Their weekly hours reach what they now attend (false on soporte = waiting outside
+	 *  the rotation until they set them). */
+	has_availability?: boolean;
 };
 
 export type AvailabilityRule = {

@@ -210,6 +210,23 @@ func (h *Handler) TeamReconcileAfter(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// TeamReconcileAfterCaller wraps a mutation of the signed-in user's own data - POST, PATCH
+// and DELETE /v1/availability-rules ({id} there is the rule, and a rule always belongs to
+// its caller) - with a reconcile for the caller after a 2xx: their hours decide whether
+// they rotate on the Soporte shared type (fork_team_hours.go).
+func (h *Handler) TeamReconcileAfterCaller(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sw := &teamStatusWriter{ResponseWriter: w}
+		next(sw, r)
+		if !sw.ok() {
+			return
+		}
+		if user, ok := userFromContext(r.Context()); ok && user.ID != "" {
+			h.reconcileTeamAfter(r.Context(), user.ID)
+		}
+	}
+}
+
 // TeamWebhookGuard wraps POST /v1/webhooks and PATCH /v1/webhooks/{id}, on CHANGE only
 // (a PATCH re-sends what is stored):
 //   - only the owner may select the whatsapp_message field: a member's webhook would send

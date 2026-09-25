@@ -186,6 +186,9 @@ type teamSoporteJSON struct {
 	Slug  string           `json:"slug"`
 	Name  string           `json:"name"`
 	Hosts []teamPersonJSON `json:"hosts"`
+	// Waiting: active área-soporte people left out of the rotation because their weekly
+	// hours do not reach S yet (fork_team_hours.go). They join when they set them.
+	Waiting []teamPersonJSON `json:"waiting"`
 }
 
 // teamWarnings accompany a PUT: what the change did and what the owner may still need to
@@ -219,7 +222,14 @@ func (h *Handler) teamSettingsFor(ctx context.Context, user AuthUser) (*teamSett
 		if err != nil {
 			return nil, err
 		}
-		out.SoporteShared = &teamSoporteJSON{ID: s.id, Slug: s.slug, Name: s.name, Hosts: hosts}
+		_, waiting, err := loadSoporteStaff(ctx, h.db, s.id)
+		if err != nil {
+			return nil, err
+		}
+		out.SoporteShared = &teamSoporteJSON{ID: s.id, Slug: s.slug, Name: s.name, Hosts: hosts, Waiting: []teamPersonJSON{}}
+		for _, p := range waiting {
+			out.SoporteShared.Waiting = append(out.SoporteShared.Waiting, teamPersonJSON{ID: p.id, Name: p.name})
+		}
 	}
 	return out, nil
 }
@@ -540,6 +550,9 @@ func (h *Handler) SetTeamRole(w http.ResponseWriter, r *http.Request) {
 	h.reconcileTeamAfter(r.Context(), targetID)
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"id": targetID, "tier": tier, "area": req.Area, "upcoming_in_previous_area": upcoming,
+		// Fork: whether their weekly hours reach what they now attend; false on soporte =
+		// they wait outside the rotation until they set them (fork_team_hours.go).
+		"has_availability": h.teamHoursChecker(r.Context())(targetID, req.Area),
 	})
 }
 

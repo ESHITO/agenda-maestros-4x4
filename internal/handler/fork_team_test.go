@@ -442,6 +442,8 @@ func TestTeamReconcile_soporteRotationFallbackAndRelease(t *testing.T) {
 	addMember(t, f.db, "s2", "UTC")
 	mustExec(t, f.db, `UPDATE users SET created_at = '2000-01-02' WHERE id = 's1'`)
 	mustExec(t, f.db, `UPDATE users SET created_at = '2000-01-01' WHERE id = 's2'`) // s2 joined first
+	seedFullAvailabilityDB(t, f.db, "s1") // soporte rotates only with weekly hours
+	seedFullAvailabilityDB(t, f.db, "s2")
 	f.mustRole("s1", "member", "soporte")
 	f.mustRole("s2", "member", "soporte")
 	if got := f.hosts(f.sID); !slices.Equal(got, []string{"s2:rotation:0", "s1:rotation:1"}) || routing(f.sID) != "round_robin" {
@@ -477,6 +479,7 @@ func TestTeamGuards(t *testing.T) {
 	h := f.h
 	addMember(t, f.db, "m1", "UTC")
 	addMember(t, f.db, "s1", "UTC")
+	seedFullAvailabilityDB(t, f.db, "s1") // soporte rotates only with weekly hours
 	f.mustRole("m1", "member", "mentoria")
 	f.mustRole("s1", "member", "soporte")
 	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)

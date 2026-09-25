@@ -353,6 +353,12 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   `TestTeamSyncColumns_classified` until you classify it.** Questions sync in place through
   `fork_question_links`; a retired question with answers is parked on a hidden **holder** type. Copies are
   deactivated, never deleted (bookings are RESTRICT).
+- **S rotates only among staff with weekly hours** (`fork_team_hours.go`: a global rule or one for S that holds
+  at least one slot of S's duration, aligned like `hostsByStart`; overrides never count; ONE unparseable
+  rule in that scope disqualifies the person, since POST accepts it and it makes GetSlots 500 for all of S),
+  else S's owner alone - one host with no rules once took S from 319 slots to 0.
+  POST/PATCH/DELETE `/v1/availability-rules` reconcile the caller (`TeamReconcileAfterCaller`); the rest
+  shows up as `has_availability` (`GET /v1/users`) and `soporte_shared.waiting` (`GET /v1/team/settings`).
 - **Guards** (`fork_team_guards.go`, Spanish 409s): copies and holders are read-only (edit T); T and S
   refuse transfer, hosts PUT, routing changes and leaving `livekit`; ownership transfer is refused while
   either setting is set. Webhook filters list T, never a copy: `matchingWebhooks` also matches a copy's

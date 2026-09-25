@@ -467,10 +467,10 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/event-types/{slug}/whatsapp-messages/preview", h.RequireAuth(h.TeamEventTypeGuard(handler.TeamOpWhatsAppWrite, h.PreviewWhatsAppMessages)))
 
 	// Availability rules
-	mux.HandleFunc("POST /v1/availability-rules", h.RequireAuth(h.CreateAvailabilityRule))
+	mux.HandleFunc("POST /v1/availability-rules", h.RequireAuth(h.TeamReconcileAfterCaller(h.CreateAvailabilityRule))) // fork: hours decide the Soporte rotation
 	mux.HandleFunc("GET /v1/availability-rules", h.RequireAuth(h.ListAvailabilityRules))
-	mux.HandleFunc("PATCH /v1/availability-rules/{id}", h.RequireAuth(h.UpdateAvailabilityRule))
-	mux.HandleFunc("DELETE /v1/availability-rules/{id}", h.RequireAuth(h.DeleteAvailabilityRule))
+	mux.HandleFunc("PATCH /v1/availability-rules/{id}", h.RequireAuth(h.TeamReconcileAfterCaller(h.UpdateAvailabilityRule)))
+	mux.HandleFunc("DELETE /v1/availability-rules/{id}", h.RequireAuth(h.TeamReconcileAfterCaller(h.DeleteAvailabilityRule)))
 
 	// Availability overrides
 	mux.HandleFunc("POST /v1/availability-overrides", h.RequireAuth(h.CreateAvailabilityOverride))

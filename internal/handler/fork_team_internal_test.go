@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/calnode/calnode/internal/booking"
 	"github.com/calnode/calnode/internal/db"
@@ -152,6 +153,57 @@ func TestScopedWebhooks_mirrorTemplateAwareMatching(t *testing.T) {
 					t.Errorf("filter %v, %s, %s: list says %v, delivery says %v", filter, b.ID, ev, mirror, delivery)
 				}
 			}
+		}
+	}
+}
+
+// teamRuleOpens accepts what the slot engine can turn into a window, and nothing else.
+func TestTeamRuleOpens(t *testing.T) {
+	for _, c := range []struct {
+		start, end string
+		want       bool
+	}{
+		{"09:00", "17:00", true},
+		{"9:00", "17:00", true}, // parseWallClock takes an unpadded hour too
+		{"00:00", "23:59", true},
+		{"17:00", "09:00", false},
+		{"09:00", "09:00", false},
+		{"24:00", "25:00", false},
+		{"09:60", "10:00", false},
+		{"", "10:00", false},
+		{"nueve", "10:00", false},
+	} {
+		if got := teamRuleOpens(c.start, c.end); got != c.want {
+			t.Errorf("teamRuleOpens(%q, %q) = %v; want %v", c.start, c.end, got, c.want)
+		}
+	}
+}
+
+// teamRuleFits aligns the first start in UTC the way slots.hostsByStart does, so a
+// half-hour zone with an hourly interval loses a one-hour window that looks full.
+func TestTeamRuleFits_alignsLikeTheSlotEngine(t *testing.T) {
+	kolkata, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.Skip("no tzdata:", err)
+	}
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	hour := teamSlotShape{dur: time.Hour, interval: time.Hour}
+	for _, c := range []struct {
+		loc        *time.Location
+		start, end string
+		shape      teamSlotShape
+		want       bool
+	}{
+		{time.UTC, "09:00", "10:00", hour, true},
+		{time.UTC, "09:00", "09:59", hour, false},
+		{kolkata, "09:00", "10:00", hour, false}, // 03:30-04:30 UTC: first aligned start 04:00
+		{kolkata, "09:00", "10:30", hour, true},
+		{time.UTC, "09:05", "09:35", teamSlotShape{dur: 30 * time.Minute, interval: 30 * time.Minute}, false},
+		{time.UTC, "09:05", "09:35", teamSlotShape{dur: 30 * time.Minute, interval: 5 * time.Minute}, true},
+	} {
+		r := teamRule{dow: 1, start: c.start, end: c.end}
+		if got := teamRuleFits(c.loc, r, c.shape, now); got != c.want {
+			t.Errorf("%s %s-%s %v: fits = %v; want %v", c.loc, c.start, c.end, c.shape, got, c.want)
 		}
 	}
 }

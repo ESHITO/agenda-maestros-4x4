@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { base } from '$app/paths';
 	import {
 		api,
 		teamApi,
@@ -304,7 +305,11 @@
 					: body.area === ''
 						? (m.is_admin ? 'deja de ser administrador y no atiende Mentoría ni Soporte' : 'ya no atiende Mentoría ni Soporte')
 						: `ahora es ${UI_ROLE_LABELS[body.area].toLowerCase()}`;
-			toast.success(`${m.name} ${label}`);
+			// An área-soporte person without weekly hours waits outside the rotation
+			// (fork_team_hours.go): say so, or the owner expects them to get bookings. Only
+			// while a Soporte type is set: with none there is no rotation to promise.
+			const waits = body.area === 'soporte' && !!settings?.soporte_shared && res?.has_availability === false;
+			toast.success(`${m.name} ${label}${waits ? '. Entrará a la rotación de Soporte cuando ponga su disponibilidad.' : ''}`);
 			if (res?.upcoming_in_previous_area && res.upcoming_in_previous_area > 0) {
 				const n = res.upcoming_in_previous_area;
 				toast.warning(`${m.name} tiene ${n} ${n === 1 ? 'sesión próxima' : 'sesiones próximas'} del área anterior: pásalas a otra persona desde Reservas.`);
@@ -530,6 +535,16 @@
 		if (m.area === 'mentoria') return { label: 'Mentor', variant: 'outline' };
 		if (m.area === 'soporte') return { label: 'Soporte', variant: 'outline' };
 		return { label: 'Sin área', variant: 'outline' };
+	}
+
+	// "Sin horario" note on a card: only when the missing hours cost something - a Soporte
+	// person (any tier) while a Soporte type is set, or a mentor who has a personal link.
+	function noHoursNote(m: TeamMember): string {
+		if (m.archived || m.has_availability !== false) return '';
+		if (m.area === 'soporte' && settings?.soporte_shared)
+			return 'Sin horario: entra a la rotación de Soporte cuando ponga su disponibilidad';
+		if (m.area === 'mentoria' && m.personal_link) return 'Sin horario: su enlace aún no muestra horarios';
+		return '';
 	}
 
 	function authBadge(m: TeamMember): string[] {
@@ -761,6 +776,12 @@
 								</div>
 							</div>
 
+							{#if noHoursNote(m)}
+								<p class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+									{noHoursNote(m)}{#if m.id === $currentUser?.id}. <a href="{base}/availability" class="font-medium underline">Poner mi disponibilidad</a>{/if}
+								</p>
+							{/if}
+
 							{#if m.personal_link && !m.archived}
 								<div class="flex flex-col gap-1.5 rounded-md border bg-background px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
 									<div class="min-w-0">
@@ -908,10 +929,16 @@
 							{/if}
 							{#if settings.soporte_shared}
 								{@const hosts = settings.soporte_shared.hosts ?? []}
+								{@const waiting = settings.soporte_shared.waiting ?? []}
 								<p class="text-xs text-muted-foreground">
 									{hosts.length > 0 ? `Lo atienden: ${hosts.map((h) => h.name).join(', ')}` : 'Nadie tiene el área Soporte'} ·
 									<a href={bookUrl(settings.soporte_shared.slug)} target="_blank" rel="noopener noreferrer" class="underline">/book/{settings.soporte_shared.slug}</a>
 								</p>
+								{#if waiting.length > 0}
+									<p class="text-xs text-amber-700 dark:text-amber-400">
+										Esperando horario: {waiting.map((w) => w.name).join(', ')} (entran a la rotación cuando pongan su disponibilidad)
+									</p>
+								{/if}
 							{/if}
 						</div>
 					</div>

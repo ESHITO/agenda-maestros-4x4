@@ -191,6 +191,8 @@ func newTeamReassignFixture(t *testing.T) *teamReassignFixture {
 	for _, id := range []string{"m1", "m2", "m4", "m5", "m6"} {
 		addMember(t, f.db, id, "UTC")
 	}
+	seedFullAvailabilityDB(t, f.db, "m5") // soporte rotates only with weekly hours
+	seedFullAvailabilityDB(t, f.db, "m6")
 	f.mustRole("m1", "member", "mentoria")
 	f.mustRole("m2", "member", "mentoria")
 	f.mustRole("m5", "member", "soporte")
