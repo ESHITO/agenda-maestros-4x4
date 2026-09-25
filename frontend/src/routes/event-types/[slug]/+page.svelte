@@ -17,6 +17,8 @@
 	import { saveOnCmdS } from '$lib/save-shortcut';
 	import QuestionsPanel from '$lib/components/event-types/QuestionsPanel.svelte';
 	import EmbedPanel from '$lib/components/event-types/EmbedPanel.svelte';
+	// Fork: WhatsApp texts per moment (saved on their own, see the component).
+	import WhatsAppMessagesPanel from '$lib/components/event-types/WhatsAppMessagesPanel.svelte';
 
 	// Ordered by expected usage. 'custom_video' is retired from the picker but the
 	// backend still renders any legacy event types that use it.
@@ -56,9 +58,11 @@
 		{ id: 'hosts', label: 'Anfitriones' },
 		{ id: 'notifications', label: 'Notificaciones' },
 		{ id: 'questions', label: 'Preguntas' },
+		{ id: 'whatsapp', label: 'WhatsApp' }, // fork
 		{ id: 'embed', label: 'Insertar' }
 	] as const;
 	let activeTab = $state<(typeof TABS)[number]['id']>('general');
+	let waPanel = $state<{ saveFromShortcut: () => void } | undefined>(); // fork: Ctrl/Cmd+S on the WhatsApp tab
 	let etLoading = $state(true);
 	let etError = $state('');
 	let etSaving = $state(false);
@@ -509,7 +513,13 @@
 {/snippet}
 
 <svelte:head><title>{et?.name ?? slug} — Tipo de atención — Calnode</title></svelte:head>
-<svelte:window onkeydown={saveOnCmdS(saveET, () => !etSaving)} />
+<!-- Fork: on the WhatsApp tab the shortcut saves the texts (they have their own save). -->
+<svelte:window
+	onkeydown={saveOnCmdS(
+		() => (activeTab === 'whatsapp' ? waPanel?.saveFromShortcut() : saveET()),
+		() => activeTab === 'whatsapp' || !etSaving
+	)}
+/>
 
 <div class="mb-8">
 	<a href="{base}/event-types" class="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
@@ -1111,6 +1121,11 @@
 {#if activeTab === 'embed'}
 	<EmbedPanel slug={et?.slug ?? ''} />
 {/if}
+
+<!-- Fork: kept mounted (only hidden) so unsaved texts survive a trip to another tab. -->
+<div class:hidden={activeTab !== 'whatsapp'}>
+	<WhatsAppMessagesPanel bind:this={waPanel} slug={et?.slug ?? slug ?? ''} />
+</div>
 
 {#if activeTab === 'general' || activeTab === 'hosts' || activeTab === 'notifications'}
 	<div class="sticky bottom-0 mt-4 flex justify-end border-t bg-background/90 py-3 backdrop-blur">

@@ -80,6 +80,9 @@ type managePageData struct {
 	I18NJSON template.JS
 	// LocaleForced (FORCE_LOCALE) hides the language switcher in the shared footer.
 	LocaleForced bool
+	// Rebookable (fork): the event type is still active and public, so /book/{slug} opens
+	// (BookPage 404s otherwise). Gates the "choose another date" links after a cancellation.
+	Rebookable bool
 }
 
 // ManagePage renders the attendee manage page for a booking (reschedule / cancel).
@@ -100,12 +103,14 @@ func (h *Handler) ManagePage(w http.ResponseWriter, r *http.Request) {
 	var etName, etSlug, locType, locValue string
 	var durMins, maxDays, minNotice int
 	var hostName, accentColor string
+	var rebookable bool
 	if err := h.db.QueryRowContext(r.Context(), `
 		SELECT et.name, et.slug, et.duration_minutes, et.max_future_days, et.min_notice_minutes,
-		       et.location_type, COALESCE(et.location_value,''), u.name, u.booking_accent
+		       et.location_type, COALESCE(et.location_value,''), u.name, u.booking_accent,
+		       (et.is_active = 1 AND et.is_public = 1)
 		FROM event_types et JOIN users u ON u.id = et.user_id
 		WHERE et.id = ?`, b.EventTypeID).
-		Scan(&etName, &etSlug, &durMins, &maxDays, &minNotice, &locType, &locValue, &hostName, &accentColor); err != nil {
+		Scan(&etName, &etSlug, &durMins, &maxDays, &minNotice, &locType, &locValue, &hostName, &accentColor, &rebookable); err != nil {
 		h.logger.ErrorContext(r.Context(), "manage page: load event type", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -151,6 +156,7 @@ func (h *Handler) ManagePage(w http.ResponseWriter, r *http.Request) {
 		BookingID:        b.ID,
 		EventTypeName:    etName,
 		EventTypeSlug:    etSlug,
+		Rebookable:       rebookable && etSlug != "",
 		HostName:         hostName,
 		HostInitial:      hostInitial,
 		AvatarURL:        avatarURL,

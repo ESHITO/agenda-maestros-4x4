@@ -64,6 +64,13 @@ type Config struct {
 	// meeting, in the ATTENDEE's zone. Validate refuses a malformed value.
 	ReminderMorningHour string
 
+	// ReminderMorningTimezone (fork, REMINDER_MORNING_TIMEZONE, IANA name, default "") pins
+	// the morning reminder to one zone: the meeting's day in THAT zone, at
+	// ReminderMorningHour in that zone (e.g. 07:00 America/Lima for every client). "" keeps
+	// each attendee's own zone. The owner can override both from the panel (saved in the
+	// fork_settings table, which wins over these two). Validate refuses an unknown zone.
+	ReminderMorningTimezone string
+
 	// CookieSecure sets the Secure flag on session cookies. Defaults to true
 	// when BASE_URL starts with https://, but can be overridden explicitly via
 	// COOKIE_SECURE=false for HTTPS-terminated-at-proxy setups where the binary
@@ -149,6 +156,10 @@ func Load() *Config {
 		ForceLocale:         strings.TrimSpace(getEnv("FORCE_LOCALE", "")),
 		ReminderMorningHour: strings.TrimSpace(getEnv("REMINDER_MORNING_HOUR", DefaultReminderMorningHour)),
 		TrustedProxyCIDRs:   splitCSV(getEnv("TRUSTED_PROXY_CIDRS", "")),
+
+		// Fork: "" = each attendee's zone.
+		ReminderMorningTimezone: strings.TrimSpace(getEnv("REMINDER_MORNING_TIMEZONE", "")),
+
 		// Space-separated, not comma: the value goes into a CSP source list verbatim, so
 		// it reads the same in the env var as it does in the header.
 		FrameAncestors: strings.Fields(getEnv("FRAME_ANCESTORS", "")),
@@ -183,6 +194,12 @@ func (c *Config) Validate() error {
 	// A typo here would otherwise silently move every client's morning WhatsApp.
 	if c.ReminderMorningHour != "" && !ValidClockTime(c.ReminderMorningHour) {
 		return fmt.Errorf("REMINDER_MORNING_HOUR: %q must be a 24-hour HH:MM time, e.g. 08:00", c.ReminderMorningHour)
+	}
+	// Same reason: an unknown zone would silently fall back to each client's own.
+	if tz := c.ReminderMorningTimezone; tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil || tz == "Local" {
+			return fmt.Errorf("REMINDER_MORNING_TIMEZONE: %q is not an IANA time zone, e.g. America/Lima (leave it empty for each client's own zone)", tz)
+		}
 	}
 	return nil
 }

@@ -77,6 +77,7 @@ func (s *Service) enrichForkFields(bd *enrichedBooking, in forkInputs) {
 	bd.startLocalDate = loc.FormatDate(local)
 	bd.startLocalTime = loc.FormatTimeOfDay(local)
 	bd.startLocalLong = longDateTime(loc, local)
+	bd.startLocalDay = longDay(loc, local) // {dia} of the WhatsApp message (fork_whatsapp.go)
 	// The zone the start_local* texts are really in. attendee_timezone is the raw stored
 	// value and may say "UTC" when the zone was unknown and the host's was used instead.
 	bd.startLocalTZ = zone.String()
@@ -196,11 +197,17 @@ func NormalizePhone(raw string) (e164, digits string) {
 // signature is computed at send time, so trimming the stored copy afterwards breaks
 // nothing. A delivery still retrying keeps the link: its next attempt needs it.
 // Called by the worker at both terminal transitions.
+//
+// The same link can also travel INSIDE data.whatsapp_message (the {cancelar} marker, see
+// fork_whatsapp.go), so that text is redacted in the same pass.
 func (s *Service) ScrubManageURL(ctx context.Context, deliveryID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE webhook_deliveries SET payload = json_remove(payload, '$.data.manage_url')
 		WHERE id = ? AND status IN ('success', 'failed')
 		  AND json_valid(payload) AND json_extract(payload, '$.data.manage_url') IS NOT NULL`,
 		deliveryID)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.scrubWhatsAppManageLinks(ctx, deliveryID)
 }

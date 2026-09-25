@@ -74,6 +74,13 @@ func EnsureForkSchema(db *sql.DB) error {
 			return fmt.Errorf("webhook: fork schema: %w", err)
 		}
 	}
+	// The WhatsApp messages per event type and the fork's key/value settings
+	// (fork_whatsapp.go): plain tables, no trigger, same idempotent rule.
+	for _, stmt := range forkWhatsAppSchema {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("webhook: fork schema: %w", err)
+		}
+	}
 	return nil
 }
 

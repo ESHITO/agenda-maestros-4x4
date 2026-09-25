@@ -64,6 +64,23 @@ body {
   font-size: .9375rem; font-weight: 600; cursor: pointer; transition: border-color .12s, background .12s;
 }
 .btn-secondary:hover { border-color: #fca5a5; background: #fef2f2; }
+/* Fork (Agenda Maestros 4x4): the cancel-with-reason flow and the "reschedule?" question.
+   Larger type and full-width buttons: the audience is older and mostly on phones. 16px
+   in the textarea also stops iOS from zooming the page on focus. */
+/* .field label (booking.css) is small and grey; this one is the question itself. */
+.field label.cancel-question { font-size: 1.0625rem; font-weight: 600; color: #111827; margin-bottom: .25rem; display: block; }
+#cancel-reason { font-size: 1rem; line-height: 1.5; min-height: 6rem; }
+#cancel-reason[aria-invalid="true"] { border-color: #dc2626; }
+a.btn-primary { display: block; box-sizing: border-box; text-align: center; text-decoration: none; }
+.btn-neutral {
+  display: block; width: 100%; max-width: 340px; padding: .675rem 1rem; margin-top: .5rem;
+  background: #fff; color: #374151; border: 1.5px solid #e5e7eb; border-radius: 8px;
+  font-size: .9375rem; font-weight: 600; cursor: pointer; transition: border-color .12s, background .12s;
+}
+.btn-neutral:hover { border-color: #d1d5db; background: #f9fafb; }
+.rebook-question { font-size: 1.0625rem !important; font-weight: 600; color: #111827 !important; margin-top: 1rem; }
+.rebook-actions { display: flex; flex-direction: column; align-items: center; width: 100%; margin-top: .75rem; }
+.rebook-actions .btn-primary { max-width: 340px; width: 100%; }
 
 .confirm-times { display: flex; flex-direction: column; gap: .5rem; margin: 0 0 1.25rem; }
 .confirm-times .row { display: flex; gap: .75rem; align-items: baseline; }
@@ -76,9 +93,11 @@ body {
 .state-icon { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: .875rem; }
 .state-icon.check { background: #dcfce7; }
 .state-icon.warn  { background: #fef3c7; }
-.state-icon.info  { background: #f3f4f6; }
+.state-icon.neutral { background: #f3f4f6; } /* not "info": booking.css's .info is the side panel (240px, padding, border) */
 .state-page h2 { font-size: 1rem; font-weight: 700; margin-bottom: .375rem; }
 .state-page p  { font-size: .8125rem; color: #6b7280; line-height: 1.6; max-width: 320px; }
+/* Fork: headings that receive focus from script (after cancelling) - no ring on a heading. */
+.state-page h2[tabindex="-1"]:focus { outline: none; }
 
 /* Mobile back-to-calendar button inside the reschedule picker; hidden on desktop. */
 .cal-back { display: none; }
@@ -156,11 +175,12 @@ body {
   {{if eq .Status "cancelled"}}
   <section class="right-col">
     <div class="state-page">
-      <div class="state-icon info" aria-hidden="true">
+      <div class="state-icon neutral" aria-hidden="true">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </div>
       <h2>{{call .T "booking_already_cancelled_title"}}</h2>
       <p>{{call .T "booking_already_cancelled_text"}}</p>
+      {{if .Rebookable}}<div class="rebook-actions"><a class="btn-primary" href="/book/{{.EventTypeSlug}}">{{call .T "book_new_date"}}</a></div>{{end}}
     </div>
   </section>
 
@@ -209,20 +229,20 @@ body {
       <button class="btn-primary" id="confirm-reschedule-btn">{{call .T "confirm_reschedule"}}</button>
     </div>
 
-    <!-- Cancel confirm -->
+    <!-- Cancel confirm. Fork: the reason is required here (the owner wants to know why);
+         POST /manage/{token}/cancel itself still accepts none, as upstream's API does. -->
     <div id="cancel-confirm-view" class="hidden">
       <button class="back-btn" id="back-to-main-from-cancel-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         {{call .T "back"}}
       </button>
-      <p class="section-title">{{call .T "cancel_this_booking_question"}}</p>
-      <p class="hint" style="margin-bottom:1rem">{{call .T "cancel_booking_notice"}}</p>
       <div class="field">
-        <label for="cancel-reason">{{call .T "reason_optional_label"}}</label>
-        <input id="cancel-reason" type="text" placeholder="{{call .T "reason_placeholder"}}" maxlength="200">
+        <label for="cancel-reason" class="cancel-question">{{call .T "cancel_reason_question"}}</label>
+        <textarea id="cancel-reason" rows="3" maxlength="300" required aria-required="true" aria-describedby="cancel-error" placeholder="{{call .T "cancel_reason_placeholder"}}"></textarea>
       </div>
+      <p class="hint" style="margin-bottom:.75rem">{{call .T "cancel_booking_notice"}}</p>
       <p id="cancel-error" class="form-error" role="alert" aria-live="assertive"></p>
-      <button class="btn-secondary" id="confirm-cancel-btn" style="margin-top:0">{{call .T "yes_cancel_booking"}}</button>
+      <button class="btn-secondary" id="confirm-cancel-btn" style="margin-top:0">{{call .T "confirm_cancellation"}}</button>
     </div>
 
     <!-- Success: rescheduled -->
@@ -234,12 +254,32 @@ body {
       </div>
     </div>
 
-    <!-- Success: cancelled -->
+    <!-- Success: cancelled. Fork: then "¿Deseas reprogramar?" - yes books a NEW session of
+         the same type (this one is cancelled; the same-booking reschedule is the main view's
+         "Reprogramar"), no shows a friendly close. -->
     <div id="success-cancel-view" class="hidden">
       <div class="state-page">
         <div class="state-icon check" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
-        <h2>{{call .T "booking_cancelled_title"}}</h2>
-        <p>{{call .T "booking_cancelled_text"}} {{call .T "confirmation_email_sent"}}</p>
+        <h2 tabindex="-1">{{call .T "session_cancelled_title"}}</h2>
+        <p>{{call .T "confirmation_email_sent"}}</p>
+        {{if .Rebookable}}
+        <p class="rebook-question">{{call .T "rebook_question"}}</p>
+        <div class="rebook-actions">
+          <a class="btn-primary" id="rebook-yes" href="/book/{{.EventTypeSlug}}">{{call .T "rebook_yes"}}</a>
+          <button type="button" class="btn-neutral" id="rebook-no">{{call .T "rebook_no"}}</button>
+        </div>
+        {{else}}
+        <p>{{call .T "goodbye_text"}}</p>
+        {{end}}
+      </div>
+    </div>
+
+    <!-- Fork: the friendly close after "No, cerrar". -->
+    <div id="goodbye-view" class="hidden">
+      <div class="state-page">
+        <div class="state-icon neutral" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+        <h2 tabindex="-1">{{call .T "goodbye_title"}}</h2>
+        <p>{{call .T "goodbye_text"}}</p>
       </div>
     </div>
 
@@ -305,7 +345,7 @@ body {
   function toDateStr(y, m, d) { return `${y}-${pad(m+1)}-${pad(d)}`; }
 
   const TEXT_VIEWS = ['main-view', 'reschedule-view', 'confirm-reschedule-view',
-    'cancel-confirm-view', 'success-reschedule-view', 'success-cancel-view'];
+    'cancel-confirm-view', 'success-reschedule-view', 'success-cancel-view', 'goodbye-view'];
   const card = document.querySelector('.card');
   // Mobile reschedule step-flow: within the picker, show the calendar step OR the
   // slots step (toggled classes; CSS gates them to ≤700px). On desktop the calendar
@@ -559,7 +599,18 @@ body {
     }
     loadMonthAvailability(navYear, navMonth);
   });
-  $('cancel-btn').addEventListener('click', () => showView('cancel-confirm-view'));
+  $('cancel-btn').addEventListener('click', () => {
+    showView('cancel-confirm-view');
+    $('cancel-reason').focus();
+  });
+  // Fork: "No, cerrar" after a cancellation - a friendly close, nothing else to do.
+  // Focus moves to the new view's heading, or a keyboard / screen-reader user would be
+  // left on the hidden button (document.body) and start again from the top of the page.
+  // Absent when the type can no longer be booked (Rebookable = false): no question then.
+  if ($('rebook-no')) $('rebook-no').addEventListener('click', () => {
+    showView('goodbye-view');
+    $('goodbye-view').querySelector('h2').focus();
+  });
   // In the reschedule slots step on mobile, "Back" returns to the calendar step;
   // otherwise (desktop, or calendar step) it exits to the main view.
   $('back-to-main-btn').addEventListener('click', () => {
@@ -608,24 +659,45 @@ body {
   });
 
   // ── Confirm cancel ──────────────────────────────────────────────────────────
+  // Fork: a reason is required - at least MIN_REASON_LETTERS letters, so "." or "   "
+  // does not pass, while a short honest answer ("viaje") does.
+  const MIN_REASON_LETTERS = 3;
+  function reasonLetters(s) { return (s.match(/\p{L}/gu) || []).length; }
+  $('cancel-reason').addEventListener('input', () => {
+    if (reasonLetters($('cancel-reason').value) >= MIN_REASON_LETTERS) {
+      $('cancel-reason').removeAttribute('aria-invalid');
+      $('cancel-error').textContent = '';
+    }
+  });
   $('confirm-cancel-btn').addEventListener('click', async () => {
-    const btn = $('confirm-cancel-btn'), errEl = $('cancel-error');
+    const btn = $('confirm-cancel-btn'), errEl = $('cancel-error'), reasonEl = $('cancel-reason');
+    const reason = reasonEl.value.trim();
+    if (reasonLetters(reason) < MIN_REASON_LETTERS) {
+      reasonEl.setAttribute('aria-invalid', 'true');
+      errEl.textContent = t('cancel_reason_required');
+      reasonEl.focus();
+      return;
+    }
     btn.disabled = true; btn.textContent = t('cancelling'); errEl.textContent = '';
     try {
       const r = await fetch(`/manage/${TOKEN}/cancel`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: $('cancel-reason').value.trim() }),
+        body: JSON.stringify({ reason: reason }),
       });
       if (r.status === 409) {
         errEl.textContent = t('already_cancelled_error');
-        btn.disabled = false; btn.textContent = t('yes_cancel_booking'); return;
+        btn.disabled = false; btn.textContent = t('confirm_cancellation'); return;
       }
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         errEl.textContent = data.error || t('cancellation_failed_error');
-        btn.disabled = false; btn.textContent = t('yes_cancel_booking'); return;
+        btn.disabled = false; btn.textContent = t('confirm_cancellation'); return;
       }
       showView('success-cancel-view');
+      // Focus the heading: it keeps keyboard / screen-reader users in place (the button
+      // they pressed is now hidden) and scrolls the question into view on a phone, where
+      // it can sit below the fold after the info panel.
+      $('success-cancel-view').querySelector('h2').focus();
       if (window.__CALNODE_DL && typeof calnodePush === 'function') {
         calnodePush('calnode_booking_cancelled', {
           booking_id: {{.BookingID}},
@@ -639,7 +711,7 @@ body {
       }
     } catch {
       errEl.textContent = t('network_error');
-      btn.disabled = false; btn.textContent = t('yes_cancel_booking');
+      btn.disabled = false; btn.textContent = t('confirm_cancellation');
     }
   });
 

@@ -94,7 +94,7 @@ export type Booking = {
 	event_type_slug: string;
 	start_at: string;
 	end_at: string;
-	status: 'confirmed' | 'cancelled';
+	status: 'confirmed' | 'cancelled' | 'rescheduled';
 	attendees: { name: string; email: string }[];
 	created_at: string;
 	host_name?: string; // populated only in the admin "All bookings" view
@@ -103,6 +103,53 @@ export type Booking = {
 	payment_status?: 'pending' | 'paid' | 'refunded';
 	amount_paid_cents?: number;
 	amount_paid_currency?: string;
+	cancellation_reason?: string;
+	/** Fork, GET /v1/bookings only: the event type's name. */
+	event_type_name?: string;
+	/** Fork, GET /v1/bookings only: the four WhatsApp notices, in order (1-4). */
+	whatsapp?: WhatsAppNotice[];
+};
+
+/** Fork: one of a booking's four WhatsApp notices (booking_whatsapp_status.go). */
+export type WhatsAppNotice = {
+	kind: 'created' | 'morning' | '1h' | '5m';
+	/** missed = the job ran too late and dropped it (worker down / instance asleep);
+	 *  unknown = older than the 30-day record retention, nothing left to tell. */
+	status: 'sent' | 'sending' | 'pending' | 'failed' | 'cancelled' | 'missed' | 'unknown' | 'not_applicable';
+	/** RFC3339 UTC: when it was sent / last tried, planned (pending), or dropped (missed). */
+	at?: string;
+};
+
+/** Fork: the WhatsApp text moments of an event type (fork_whatsapp.go). */
+export type WhatsAppMoment =
+	| 'created'
+	| 'reminder_morning'
+	| 'reminder_1h'
+	| 'reminder_5m'
+	| 'cancelled'
+	| 'rescheduled';
+
+/** GET/PUT /v1/event-types/{slug}/whatsapp-messages: saved texts ("" = default) + defaults. */
+export type WhatsAppMessages = Record<WhatsAppMoment, string> & {
+	defaults: Record<WhatsAppMoment, string>;
+};
+
+/** POST /v1/event-types/{slug}/whatsapp-messages/preview. */
+export type WhatsAppPreview = Record<WhatsAppMoment, string> & {
+	timezone: string;
+	has_text_question: boolean;
+};
+
+/** Fork: GET/PUT /v1/webhooks/settings. */
+export type WebhookSettings = {
+	reminder_morning_hour: string;
+	/** "" = each client's own zone. */
+	reminder_morning_timezone: string;
+	team_scope: boolean;
+	can_edit: boolean;
+	/** PUT only: upcoming bookings re-planned right after saving. */
+	resynced_bookings?: number;
+	resync_ok?: boolean;
 };
 
 export type APIKey = {

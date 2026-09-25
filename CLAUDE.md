@@ -189,12 +189,16 @@ The owner sends WhatsApp through **FunnelChat**: each webhook points at its own 
 flow, which maps JSON keys (`data.attendee_phone`, ...). FunnelChat **cannot branch on
 `event`**, so every moment is a separate event and the operator creates one webhook per
 message. No goose migration was added for any of this - keep it that way (this fork's goose
-numbers 00066/00067 already collide with upstream's); the one fork table is made in code (below).
+numbers 00066/00067 already collide with upstream's); the fork's tables are made in code by
+`webhook.EnsureForkSchema` (below): `webhook_event_type_filters` (+ its trigger),
+`event_type_whatsapp_messages`, `fork_settings`, and the index `idx_fork_webhook_deliveries_booking`
+on the upstream `webhook_deliveries`. **No new trigger may name another table** (an upstream
+`CREATE x_new / DROP x / RENAME` rebuild would fail on it); plain tables and indexes are safe.
 
 - **Events.** `booking.created` is the confirmation. Fork adds `booking.reminder_morning`
-  (the meeting's day at `REMINDER_MORNING_HOUR` in the **attendee's** zone),
-  `booking.reminder_1h` and `booking.reminder_5m` (constants in `internal/webhook/fork_fields.go`,
-  accepted by `validWebhookEvents`). Payload = the booking.created shape.
+  (the meeting's day at the morning hour - in the **attendee's** zone, or in the owner's
+  fixed zone, see below), `booking.reminder_1h` and `booking.reminder_5m` (constants in
+  `internal/webhook/fork_fields.go`, accepted by `validWebhookEvents`). Payload = the booking.created shape.
 - **Job `webhook.reminder`** (`internal/handler/webhook_reminders.go`, registered in
   `server.go`): one `jobs` row per moment, payload `{"booking_id","kind","start_at"}`
   (kind `morning|1h|5m`, start_at = the start it was planned for, RFC3339 UTC), `INSERT OR
@@ -217,9 +221,40 @@ numbers 00066/00067 already collide with upstream's); the one fork table is made
   `run_at` is deliberately NOT in the payload, or each change would add a duplicate). The
   worker is in-process: a host that sleeps when idle sends reminders late or drops them -
   keep the instance always on.
-- **`REMINDER_MORNING_HOUR`** (`HH:MM`, default `08:00`): `config.Validate` refuses a bad
-  value at boot. Exposed to the panel via `GET /v1/webhooks/settings`
-  (`{reminder_morning_hour, team_scope}`).
+- **Morning hour and zone** (`handler/fork_settings.go`). Env defaults: `REMINDER_MORNING_HOUR`
+  (`HH:MM`, default `08:00`) and `REMINDER_MORNING_TIMEZONE` (IANA, default `""` = each attendee's
+  zone); `config.Validate` refuses a bad value of either at boot. The owner can override both from
+  the Webhooks page: saved in `fork_settings` (`reminder_morning_hour`, `reminder_morning_timezone`),
+  which wins over the env; a saved value that stopped being valid is ignored (`loadMorningSetting`,
+  read from the DB on every planning pass - never cached, so a `calnode mcp` process agrees). With a
+  fixed zone the reminder is that hour on the meeting's day **as seen in that zone** (07:00
+  America/Lima = 14:00 in Madrid in summer): `morningReminderZone` just swaps the zone fed to the
+  unchanged pure planner, so the ordering rules still decide (a Madrid 10:00 meeting gets no morning
+  reminder at 07:00 Lima). `GET /v1/webhooks/settings` = `{reminder_morning_hour,
+  reminder_morning_timezone, team_scope, can_edit}`; **`PUT` is owner-only** (403 otherwise),
+  validates `HH:MM` and IANA (`Local` refused), saves, then runs `BackfillWebhookReminders` right
+  away (moves/drops/adds pending morning jobs, never re-plans one that ran) and answers
+  `resynced_bookings` / `resync_ok`. The default reminder texts avoid "hoy"/"buenos días" for this
+  reason (a fixed-zone reminder can reach someone in the afternoon or the day before).
+- **`whatsapp_message`** (`internal/webhook/fork_whatsapp.go`): the finished WhatsApp text, composed
+  by the agenda because FunnelChat cannot compute times, branch or drop lines. One text per event
+  type and moment (`created`, `reminder_morning`, `reminder_1h`, `reminder_5m`, `cancelled`,
+  `rescheduled`; `WhatsAppMomentForEvent` maps the six events, others carry none) in
+  `event_type_whatsapp_messages` (CASCADE on the event type; moment validated in Go, no CHECK); no
+  row = the Go default (`defaultWhatsAppMessages`). Markers `{nombre} {mentor} {tipo} {tema} {fecha}
+  {dia} {hora} {enlace} {cancelar} {motivo}` (case-insensitive, `{día}` too); `{tema}` = the answer
+  to the event type's **first** `text` question (not the first answered one); `{fecha}` =
+  start_local_long, `{dia}`/`{hora}` in the client's zone; `{motivo}` only in `cancelled`. **A line
+  with any known marker that resolves empty is dropped whole**; unknown markers stay as written;
+  values are squeezed to one line and never re-scanned (a name typed as `{cancelar}` stays text).
+  Rendered only when a receiving webhook explicitly selected the field (it is appended to
+  `AllFields`, never in `defaultFields`), in `Enqueue` right after `enrich`. API (owner of the event
+  type, `eventTypeIDForOwner` - same rule as editing it): `GET/PUT /v1/event-types/{slug}/whatsapp-messages`
+  (six strings, `""` = default; PUT: omitted = unchanged; plus `defaults` in the answer) and
+  `POST .../preview` (renders the given texts with sample data **in Go** - `RenderWhatsApp` is the
+  only renderer; the panel never fills markers). Panel: event type → tab **WhatsApp**
+  (`WhatsAppMessagesPanel.svelte`, saved on its own; kept mounted so unsaved texts survive a tab
+  switch). The Webhooks page offers "Añadir mensaje de WhatsApp" on webhooks created before the field.
 - **Owner scope.** `webhook.Service.Enqueue` sends to the host's webhooks **and** those of
   the workspace owner (`is_owner = 1`, not archived) - one query with an OR, so no
   duplicates. The owner configures the team's notices once; mentors still get only their own.
@@ -238,12 +273,49 @@ numbers 00066/00067 already collide with upstream's); the one fork table is made
   stays the raw stored value and can say `UTC`), `manage_url` (`/manage/{token}`; the
   caller fills `BookingPayload.ManageURL`, reusing the e-mail's token when there is one, else
   an **additive** `IssueManageToken` - never Rotate - and only when a receiving webhook
-  selected the field, via `WantsField`). `location_value` is unchanged: it is already the
-  attendee's join link.
+  selected the field, via `WantsField`, **or** selected `whatsapp_message` and that text uses
+  `{cancelar}` (`WhatsAppNeedsManageURL`); `booking.cancelled` mints only for the latter
+  (`whatsAppManageURL`), since its payload never carried manage_url upstream). `location_value`
+  is unchanged: it is already the attendee's join link (a Meet/Teams link generated while booking
+  is also copied onto `b` in `createHostEventsAndNotify`, as Zoom/LiveKit do, so booking.created and
+  its `{enlace}` carry it).
 - **`manage_url` is the only credential kept in clear in the database** (manage tokens are
   stored as hashes). It sits in `webhook_deliveries.payload` only while the delivery is in
   flight: the worker calls `webhook.Service.ScrubManageURL` when it succeeds or runs out of
-  attempts. Keep it that way if you add a delivery path.
+  attempts, which also replaces any `/manage/<token>` link **inside** `whatsapp_message` with
+  `[enlace retirado]` (the stored payload is what gets signed and sent, so it must hold the live
+  link until then; the rest of the text stays as a record). Keep it that way if you add a delivery path.
+- **Cancelling from `{cancelar}`** (`manage.html`): the page requires a reason (≥ 3 letters,
+  `textarea`), then shows "Tu sesión fue cancelada · ¿Deseas reprogramar?" with "Sí, elegir otra
+  fecha" (`/book/{slug}`: a NEW booking of the same type) and "No, cerrar" (a friendly close); an
+  already-cancelled booking offers the same link. Both only when the type is still active and public
+  (`managePageData.Rebookable`: `BookPage` 404s otherwise), else the friendly close comes right away.
+  Focus moves to the new view's heading (the pressed button is hidden). Its icons use
+  `state-icon neutral`, never `info` (booking.css's `.info` is the side panel). `POST /manage/{token}/cancel` itself still
+  accepts no reason (upstream's contract and test). The same-booking "Reprogramar" is untouched.
+  New strings are keys in all nine locale files.
+- **Bookings list** (`handler/booking_whatsapp_status.go`): `GET /v1/bookings` items gain
+  `event_type_name`, `host_name` in every view, and `whatsapp` = the four notices (created,
+  morning, 1h, 5m) as `sent | sending | pending (+ at = run_at) | failed | cancelled | missed |
+  unknown | not_applicable`, from the latest delivery per webhook and the reminder jobs planned for the
+  booking's **current** start (a pending job no active webhook would receive = not_applicable; a
+  cancelled booking's leftover pending/running jobs are ignored - `cancelSideEffects` deletes them
+  only after `CancelBooking` answers; `missed` = the job finished only once `reminderSuperseded`
+  held, with no delivery: dropped as late, the sleeping-instance symptom; `unknown` = no record and
+  old enough that the worker's 30-day purge of deliveries and jobs may have taken it -
+  `noticeRecordRetention` mirrors that purge, change both together).
+  Same page and visibility as the list; fixed queries per page (names, one UNION ALL over
+  deliveries + jobs, the active webhooks); best effort - a failure drops `whatsapp`, never the
+  list. The panel shows cards (stack at 375 px; the notices span the card and take 4 columns only
+  from a 42rem-wide card, a `@container` query, since the viewport ignores the desktop sidebar) and
+  "Cancelar reunión" (future confirmed only,
+  `ConfirmDialog` with an optional reason sent as typed - it used to send the English "cancelled
+  by admin"). `ConfirmDialog` takes an optional `children` snippet for that field.
+- **Admin shell on phones** (`routes/+layout.svelte`): below `md` the sidebar is a menu opened from
+  a top bar (shadcn `Dialog`, closed on navigation and when the screen reaches `md` - its overlay
+  is not `md:hidden`); from `md` up it is the old fixed column. In the event-type editor, Ctrl/Cmd+S
+  on the WhatsApp tab saves the texts (`saveFromShortcut`), not the event type. The Webhooks page
+  shows "No se pudo cargar" + Reintentar when `GET /v1/webhooks/settings` fails, never the defaults.
 - **Event-type filter** (`internal/webhook/fork_event_types.go`): `event_type_ids` on POST/PATCH/GET
   `/v1/webhooks` (PATCH: null/omitted = unchanged); **empty = every type**, else only bookings of those
   types, for every event (one `NOT EXISTS`/`EXISTS` in `matchingWebhooks`; no booking id = no match).

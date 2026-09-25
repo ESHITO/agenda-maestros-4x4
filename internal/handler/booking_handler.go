@@ -1194,6 +1194,9 @@ func (h *Handler) createHostEventsAndNotify(ctx context.Context, b *booking.Book
 					if link != "" {
 						meetURL = link
 						bData.LocationValue = link
+						// Fork: b too, as Zoom/LiveKit do - booking.created's location_value
+						// and its whatsapp_message {enlace} are built from b below.
+						b.LocationValue = link
 						if _, err := h.db.ExecContext(ctx,
 							`UPDATE bookings SET location_value = ? WHERE id = ?`, link, b.ID); err != nil {
 							h.logger.Error("save meet link", "error", err, "booking_id", b.ID)
@@ -1514,7 +1517,9 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, map[string]any{
-		"items":  items,
+		// Fork: + event_type_name, host_name in every view, and the four WhatsApp notices
+		// (booking_whatsapp_status.go). Same page, same visibility, fixed queries per page.
+		"items":  h.withWhatsAppNotices(r.Context(), bookings, items),
 		"total":  counts.Total(),
 		"counts": map[string]int{"upcoming": counts.Upcoming, "past": counts.Past},
 		"limit":  f.Limit,
@@ -1782,6 +1787,8 @@ func (h *Handler) cancelSideEffects(b booking.Booking) {
 			PaymentStatus:      paymentStatusForWebhook(payStatus),
 			AmountPaidCents:    payAmt,
 			AmountPaidCurrency: payCur,
+			// Fork: only when the cancelled WhatsApp text uses {cancelar} (webhook_reminders.go).
+			ManageURL: h.whatsAppManageURL(ctx, "booking.cancelled", b.HostID, b.ID),
 		}); err != nil {
 			h.logger.Error("enqueue booking.cancelled webhook", "error", err, "booking_id", b.ID)
 		}

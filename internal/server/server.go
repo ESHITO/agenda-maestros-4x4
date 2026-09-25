@@ -55,6 +55,11 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 	if cfg.ReminderMorningHour != "" && !h.SetReminderMorningHour(cfg.ReminderMorningHour) {
 		logger.Warn("REMINDER_MORNING_HOUR ignored: not HH:MM; using 08:00", "value", cfg.ReminderMorningHour)
 	}
+	// Fork: REMINDER_MORNING_TIMEZONE ("" = each attendee's zone). The panel's saved
+	// setting (fork_settings) wins over both env vars when present.
+	if !h.SetReminderMorningTimezone(cfg.ReminderMorningTimezone) {
+		logger.Warn("REMINDER_MORNING_TIMEZONE ignored: unknown zone; using each client's own", "value", cfg.ReminderMorningTimezone)
+	}
 	// DATA_DIR, defaulting to the relative "data" every deployment has always used.
 	// The fallback is repeated here because tests build a Config literal that skips
 	// Load, and an empty dir would put uploads beside the binary.
@@ -443,6 +448,10 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("PUT /v1/event-types/{slug}/hosts", h.RequireAuth(h.SetEventTypeHosts))
 	testEmailRL := RateLimit(10, time.Minute)
 	mux.HandleFunc("POST /v1/event-types/{slug}/test-email", testEmailRL(h.RequireAuth(h.SendTestEmail)))
+	// Fork: the WhatsApp texts of an event type, per moment (whatsapp_messages.go).
+	mux.HandleFunc("GET /v1/event-types/{slug}/whatsapp-messages", h.RequireAuth(h.GetWhatsAppMessages))
+	mux.HandleFunc("PUT /v1/event-types/{slug}/whatsapp-messages", h.RequireAuth(h.PutWhatsAppMessages))
+	mux.HandleFunc("POST /v1/event-types/{slug}/whatsapp-messages/preview", h.RequireAuth(h.PreviewWhatsAppMessages))
 
 	// Availability rules
 	mux.HandleFunc("POST /v1/availability-rules", h.RequireAuth(h.CreateAvailabilityRule))
@@ -539,6 +548,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/webhooks", h.RequireAuth(h.CreateWebhook))
 	mux.HandleFunc("GET /v1/webhooks", h.RequireAuth(h.ListWebhooks))
 	mux.HandleFunc("GET /v1/webhooks/settings", h.RequireAuth(h.GetWebhookSettings)) // fork: reminder hour + team scope
+	// Fork: the owner sets the morning reminder's hour and zone (fork_settings.go).
+	mux.HandleFunc("PUT /v1/webhooks/settings", settingsRL(h.RequireAuth(h.PutWebhookSettings)))
 	// Fork: the event types a webhook may be limited to (webhook_event_types.go).
 	mux.HandleFunc("GET /v1/webhooks/event-types", h.RequireAuth(h.ListWebhookEventTypes))
 	mux.HandleFunc("PATCH /v1/webhooks/{id}", h.RequireAuth(h.PatchWebhook))

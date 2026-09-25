@@ -221,6 +221,28 @@ func TestLoad_reminderMorningHourDefault(t *testing.T) {
 	}
 }
 
+// Fork: REMINDER_MORNING_TIMEZONE pins the morning reminder to one zone ("" = each client's).
+func TestValidate_reminderMorningTimezone(t *testing.T) {
+	t.Setenv("REMINDER_MORNING_HOUR", "")
+	for _, ok := range []string{"", "America/Lima", "Europe/Madrid", "UTC"} {
+		t.Setenv("REMINDER_MORNING_TIMEZONE", ok)
+		cfg := config.Load()
+		if cfg.ReminderMorningTimezone != ok {
+			t.Errorf("ReminderMorningTimezone = %q; want %q", cfg.ReminderMorningTimezone, ok)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() = %v for %q; want nil", err, ok)
+		}
+	}
+	// A typo would silently fall back to each client's zone: refuse it at boot.
+	for _, bad := range []string{"Lima", "America/Lim", "Local", "../../etc/passwd"} {
+		t.Setenv("REMINDER_MORNING_TIMEZONE", bad)
+		if err := config.Load().Validate(); err == nil {
+			t.Errorf("Validate() = nil for %q; want an error", bad)
+		}
+	}
+}
+
 func TestValidate_reminderMorningHour(t *testing.T) {
 	for _, ok := range []string{"07:30", "00:00", "23:59"} {
 		t.Setenv("REMINDER_MORNING_HOUR", ok)

@@ -5,7 +5,8 @@ package handler
 // The owner sends WhatsApp messages through FunnelChat, one FunnelChat flow per webhook.
 // FunnelChat cannot branch on the envelope's "event", so each moment is its own event and
 // its own webhook: booking.reminder_morning (the day of the meeting at REMINDER_MORNING_HOUR
-// in the attendee's zone), booking.reminder_1h and booking.reminder_5m.
+// in the attendee's zone - or in the owner's fixed zone, see fork_settings.go),
+// booking.reminder_1h and booking.reminder_5m.
 //
 // Mechanics: one "webhook.reminder" row in the jobs table per moment, payload
 // {"booking_id","kind","start_at"} - start_at is the start the reminder was planned for,
@@ -98,9 +99,10 @@ func parseClock(s string) (hour, minute int, ok bool) {
 }
 
 // morningReminderAt returns the morning reminder's moment for a meeting starting at start
-// - morningHour:morningMinute on the attendee's LOCAL calendar day of the start, built
-// with time.Date in that zone (so DST is the zone's business, not ours) - and whether the
-// ordering rule allows one at all, whatever the time now.
+// - morningHour:morningMinute on the LOCAL calendar day of the start in zone (the
+// attendee's, or the owner's fixed zone: morningReminderZone), built with time.Date in
+// that zone (so DST is the zone's business, not ours) - and whether the ordering rule
+// allows one at all, whatever the time now.
 //
 // The rule: the morning reminder must come strictly BEFORE the 1 h one, so the attendee
 // always hears morning → 1 h → 5 min, as the owner asked. With 08:00, a meeting at 08:30
@@ -149,11 +151,26 @@ func (h *Handler) webhookReminderZone(ctx context.Context, bookingID string) *ti
 	return webhook.AttendeeZone(attendeeTZ, hostTZ)
 }
 
+// morningReminderZone is the zone the morning reminder's day and hour are read in: the
+// owner's fixed zone when one is set (fork_settings.go, e.g. 07:00 America/Lima for
+// everyone), else the attendee's own (webhookReminderZone).
+func (h *Handler) morningReminderZone(ctx context.Context, bookingID string, ms morningSetting) *time.Location {
+	if ms.zone != nil {
+		return ms.zone
+	}
+	return h.webhookReminderZone(ctx, bookingID)
+}
+
 // planForBooking reads what planWebhookReminders needs and returns the job rows to write.
-// Runs its query BEFORE any transaction is opened: the pool is a single connection.
+// Runs its queries BEFORE any transaction is opened: the pool is a single connection.
 func (h *Handler) planForBooking(ctx context.Context, bookingID string, start time.Time) []plannedWebhookReminder {
-	hour, minute, _ := parseClock(h.reminderMorningHour())
-	return planWebhookReminders(start, h.webhookReminderZone(ctx, bookingID), hour, minute, time.Now())
+	return h.planForBookingWith(ctx, bookingID, start, h.loadMorningSetting(ctx))
+}
+
+// planForBookingWith is planForBooking with the morning setting already loaded (the
+// backfill loads it once for every booking).
+func (h *Handler) planForBookingWith(ctx context.Context, bookingID string, start time.Time, ms morningSetting) []plannedWebhookReminder {
+	return planWebhookReminders(start, h.morningReminderZone(ctx, bookingID, ms), ms.hour, ms.minute, time.Now())
 }
 
 // reminderJobPayload is the exact jobs.payload for one reminder (see webhookReminderJob).
@@ -198,8 +215,12 @@ func insertWebhookReminders(ctx context.Context, exec func(ctx context.Context, 
 // passed today (sending at the old time beats sending none). 1h/5m never depend on the
 // setting or the zone, so they need no such pass.
 func (h *Handler) syncMorningReminder(ctx context.Context, bookingID string, start time.Time) error {
-	hour, minute, _ := parseClock(h.reminderMorningHour())
-	morning, allowed := morningReminderAt(start, h.webhookReminderZone(ctx, bookingID), hour, minute)
+	return h.syncMorningReminderWith(ctx, bookingID, start, h.loadMorningSetting(ctx))
+}
+
+// syncMorningReminderWith is syncMorningReminder with the morning setting already loaded.
+func (h *Handler) syncMorningReminderWith(ctx context.Context, bookingID string, start time.Time, ms morningSetting) error {
+	morning, allowed := morningReminderAt(start, h.morningReminderZone(ctx, bookingID, ms), ms.hour, ms.minute)
 	payload, err := reminderJobPayload(bookingID, reminderKindMorning, start)
 	if err != nil {
 		return err
@@ -227,7 +248,13 @@ func (h *Handler) syncMorningReminder(ctx context.Context, bookingID string, sta
 // (booking page, REST API, embed, MCP and the chat assistant via createBookingForSlug,
 // Group bookings, and paid bookings once Stripe confirms payment).
 func (h *Handler) scheduleWebhookReminders(ctx context.Context, bookingID string, start time.Time) error {
-	plan := h.planForBooking(ctx, bookingID, start)
+	return h.scheduleWebhookRemindersWith(ctx, bookingID, start, h.loadMorningSetting(ctx))
+}
+
+// scheduleWebhookRemindersWith is scheduleWebhookReminders with the morning setting
+// already loaded.
+func (h *Handler) scheduleWebhookRemindersWith(ctx context.Context, bookingID string, start time.Time, ms morningSetting) error {
+	plan := h.planForBookingWith(ctx, bookingID, start, ms)
 	return insertWebhookReminders(ctx, func(ctx context.Context, q string, args ...any) error {
 		_, err := h.db.ExecContext(ctx, q, args...)
 		return err
@@ -248,6 +275,10 @@ func (h *Handler) scheduleWebhookReminders(ctx context.Context, bookingID string
 // side effects are.
 func (h *Handler) BackfillWebhookReminders(ctx context.Context) (int, error) {
 	now := time.Now().UTC()
+	// Fork: the morning hour/zone as saved from the panel (else the env), read once and
+	// before the cursor below opens (single-connection pool). PUT /v1/webhooks/settings
+	// calls this function right after saving, which is what re-syncs pending jobs.
+	ms := h.loadMorningSetting(ctx)
 	rows, err := h.db.QueryContext(ctx, `
 		SELECT id, start_at FROM bookings
 		WHERE status = 'confirmed' AND payment_status != 'pending' AND start_at >= ?`,
@@ -276,10 +307,10 @@ func (h *Handler) BackfillWebhookReminders(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("webhook reminder backfill: scan: %w", err)
 	}
 	for _, p := range todo {
-		if err := h.scheduleWebhookReminders(ctx, p.id, p.start); err != nil {
+		if err := h.scheduleWebhookRemindersWith(ctx, p.id, p.start, ms); err != nil {
 			return 0, fmt.Errorf("webhook reminder backfill: %s: %w", p.id, err)
 		}
-		if err := h.syncMorningReminder(ctx, p.id, p.start); err != nil {
+		if err := h.syncMorningReminderWith(ctx, p.id, p.start, ms); err != nil {
 			return 0, fmt.Errorf("webhook reminder backfill: %s: %w", p.id, err)
 		}
 	}
@@ -332,8 +363,9 @@ func (h *Handler) deleteWebhookReminders(ctx context.Context, bookingID string) 
 // existing (a link already minted for this moment, e.g. the one in the confirmation or
 // reschedule e-mail) is reused as is. Otherwise a NEW token is issued - additive
 // IssueManageToken, never Rotate, so links already sent by e-mail or WhatsApp keep
-// working - and only when some webhook receiving event selected manage_url, since each
-// call writes a token row.
+// working - and only when some webhook receiving event selected manage_url, or selected
+// whatsapp_message and that text uses {cancelar} (webhook.WhatsAppNeedsManageURL), since
+// each call writes a token row.
 func (h *Handler) webhookManageURL(ctx context.Context, event, hostID, bookingID, existing string) string {
 	if existing != "" {
 		return existing
@@ -347,8 +379,34 @@ func (h *Handler) webhookManageURL(ctx context.Context, event, hostID, bookingID
 		return ""
 	}
 	if !want {
+		return h.whatsAppManageURL(ctx, event, hostID, bookingID)
+	}
+	return h.issueWebhookManageURL(ctx, bookingID)
+}
+
+// whatsAppManageURL mints the manage link only for the {cancelar} marker of the
+// whatsapp_message (webhook.WhatsAppNeedsManageURL), never merely because a webhook
+// selected manage_url. booking.cancelled uses it directly: its payload never carried a
+// manage_url upstream, and a webhook with every field ticked must not start minting a
+// token per cancellation for a link nobody reads.
+func (h *Handler) whatsAppManageURL(ctx context.Context, event, hostID, bookingID string) string {
+	if h.webhookSvc == nil {
 		return ""
 	}
+	need, err := h.webhookSvc.WhatsAppNeedsManageURL(ctx, event, hostID, bookingID)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "webhook manage url: check whatsapp text", "error", err, "booking_id", bookingID)
+		return ""
+	}
+	if !need {
+		return ""
+	}
+	return h.issueWebhookManageURL(ctx, bookingID)
+}
+
+// issueWebhookManageURL issues an additional manage token (never Rotate: links already
+// sent keep working) and returns its public link, or "" on failure (logged).
+func (h *Handler) issueWebhookManageURL(ctx context.Context, bookingID string) string {
 	tok, err := h.bookingSvc.IssueManageToken(ctx, bookingID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "webhook manage url: issue token", "error", err, "booking_id", bookingID)
@@ -443,15 +501,16 @@ func (h *Handler) JobWebhookReminder(ctx context.Context, payload string) error 
 	return nil
 }
 
-// GetWebhookSettings handles GET /v1/webhooks/settings (any signed-in user): read-only
-// facts the webhooks page shows next to the fork's reminder events.
-//   - reminder_morning_hour: REMINDER_MORNING_HOUR as applied ("08:00").
+// GetWebhookSettings handles GET /v1/webhooks/settings (any signed-in user): the facts
+// the webhooks page shows next to the fork's reminder events (webhookSettingsJSON).
+//   - reminder_morning_hour: the morning reminder's hour as applied ("08:00"): the one
+//     saved from the panel, else REMINDER_MORNING_HOUR.
+//   - reminder_morning_timezone: the fixed zone it is read in ("America/Lima"), or "" for
+//     each client's own zone; saved from the panel, else REMINDER_MORNING_TIMEZONE.
 //   - team_scope: whether this user's webhooks also receive the whole team's bookings
 //     (true for the workspace owner; see webhook.Service matchingWebhooks).
+//   - can_edit: whether PUT /v1/webhooks/settings is open to this user (the owner only).
 func (h *Handler) GetWebhookSettings(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())
-	h.writeJSON(w, http.StatusOK, map[string]any{
-		"reminder_morning_hour": h.reminderMorningHour(),
-		"team_scope":            user.IsOwner,
-	})
+	h.writeJSON(w, http.StatusOK, h.webhookSettingsJSON(r.Context(), user))
 }

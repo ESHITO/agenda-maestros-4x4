@@ -1,25 +1,92 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type Webhook, type WebhookDelivery, type WebhookEventType } from '$lib/api';
+	import { api, type Webhook, type WebhookDelivery, type WebhookEventType, type WebhookSettings } from '$lib/api';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Combobox } from '$lib/components/ui/combobox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { currentUser } from '$lib/stores';
+	import { timezoneItems } from '$lib/prefs';
+	import { toast } from 'svelte-sonner';
 
 	let items: Webhook[] = $state([]);
 	let loading = $state(true);
 	let error = $state('');
 	let showCreate = $state(false);
 
-	// GET /v1/webhooks/settings (fork): the morning reminder hour (REMINDER_MORNING_HOUR)
-	// and whether this user's webhooks receive the whole team's bookings (the owner).
+	// GET /v1/webhooks/settings (fork): the morning reminder hour and zone (saved by the
+	// owner here, else REMINDER_MORNING_HOUR / REMINDER_MORNING_TIMEZONE) and whether this
+	// user's webhooks receive the whole team's bookings (the owner).
 	let morningHour = $state('08:00');
+	let morningZone = $state(''); // "" = each client's own zone
 	let teamScope = $state(false);
+	let canEditSettings = $state(false);
 	let settingsLoaded = $state(false);
+	// A failed load must not show the 08:00 defaults as if they were saved, nor tell the
+	// owner "only the owner can change it": the block says it could not load, with a retry.
+	let settingsError = $state('');
+	let retryingSettings = $state(false);
+
+	// The "Recordatorio de la mañana" form (owner only). America/Lima is the suggestion:
+	// most of the team and clients are there.
+	const SUGGESTED_ZONE = 'America/Lima';
+	let mHour = $state('08:00');
+	let mMode = $state<'client' | 'fixed'>('client');
+	let mZone = $state(SUGGESTED_ZONE);
+	let savingMorning = $state(false);
+	const zoneItems = $derived(timezoneItems(mZone));
+	const morningDirty = $derived(
+		mHour !== morningHour || (mMode === 'client' ? morningZone !== '' : mZone !== morningZone)
+	);
+	const zoneName = (z: string) => z.replaceAll('_', ' ');
+	const morningSummary = $derived(
+		morningZone
+			? `A las ${morningHour} de ${zoneName(morningZone)} para todos los clientes, el día de la sesión según esa zona.`
+			: `A las ${morningHour} en la hora de cada cliente, el día de su sesión.`
+	);
+
+	function applySettings(s: WebhookSettings) {
+		if (s.reminder_morning_hour) morningHour = s.reminder_morning_hour;
+		morningZone = s.reminder_morning_timezone ?? '';
+		teamScope = !!s.team_scope;
+		canEditSettings = !!s.can_edit;
+		mHour = morningHour;
+		mMode = morningZone ? 'fixed' : 'client';
+		mZone = morningZone || SUGGESTED_ZONE;
+	}
+
+	async function saveMorning() {
+		if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(mHour)) {
+			toast.error('Escribe la hora con el formato HH:MM, por ejemplo 07:00.');
+			return;
+		}
+		if (mMode === 'fixed' && !mZone) {
+			toast.error('Elige la zona horaria.');
+			return;
+		}
+		savingMorning = true;
+		try {
+			const s = await api.put<WebhookSettings>('/v1/webhooks/settings', {
+				reminder_morning_hour: mHour,
+				reminder_morning_timezone: mMode === 'fixed' ? mZone : ''
+			});
+			applySettings(s);
+			if (s.resync_ok === false) {
+				toast.warning('Guardado, pero no se pudieron reprogramar todos los recordatorios ya planificados. Se completará al reiniciar el servidor.');
+			} else {
+				const n = s.resynced_bookings ?? 0;
+				toast.success(n > 0 ? `Guardado. Se revisaron los recordatorios de ${n} ${n === 1 ? 'reserva próxima' : 'reservas próximas'}.` : 'Guardado.');
+			}
+		} catch (e: any) {
+			toast.error(e.message || 'No se pudo guardar');
+		} finally {
+			savingMorning = false;
+		}
+	}
 
 	// Event catalog (keys must match the backend's validWebhookEvents). The three
 	// reminders are separate events on purpose: FunnelChat can't branch on "event",
@@ -29,7 +96,9 @@
 		{ key: 'booking.created', label: 'Cita agendada', description: 'confirmación en cuanto se reserva' },
 		{ key: 'booking.cancelled', label: 'Cita cancelada' },
 		{ key: 'booking.rescheduled', label: 'Cita reprogramada' },
-		{ key: 'booking.reminder_morning', label: 'Recordatorio de la mañana', description: `el mismo día a las ${morningHour}, hora del cliente; solo si la cita es más de 1 hora después` },
+		{ key: 'booking.reminder_morning', label: 'Recordatorio de la mañana', description: morningZone
+			? `el día de la cita a las ${morningHour} de ${zoneName(morningZone)}; solo si la cita es más de 1 hora después`
+			: `el mismo día a las ${morningHour}, hora del cliente; solo si la cita es más de 1 hora después` },
 		{ key: 'booking.reminder_1h', label: 'Recordatorio 1 hora antes' },
 		{ key: 'booking.reminder_5m', label: 'Recordatorio 5 minutos antes' },
 		{ key: 'recording.completed', label: 'Grabación lista' },
@@ -41,6 +110,11 @@
 	// `pii` flags personal data so the operator chooses consciously what leaves the system.
 	type FieldDef = { key: string; label: string; pii?: boolean };
 	const fieldGroups: { group: string; pii?: boolean; fields: FieldDef[] }[] = [
+		// Fork: the finished text, per event type and moment (event type → pestaña WhatsApp).
+		// It holds the client's name and, with {cancelar}, their cancel link.
+		{ group: 'WhatsApp', pii: true, fields: [
+			{ key: 'whatsapp_message', label: 'Mensaje de WhatsApp (texto listo, se edita en cada tipo de atención)', pii: true },
+		] },
 		{ group: 'Reserva', fields: [
 			{ key: 'id', label: 'Referencia de la reserva' },
 			{ key: 'status', label: 'Estado' },
@@ -133,17 +207,46 @@
 		}
 	}
 
-	// Best-effort: on failure the page keeps the 08:00 default and falls back to the
-	// signed-in user's owner flag for the team note.
+	// On failure the team note falls back to the signed-in user's owner flag, and the
+	// morning block shows the error and a retry instead of made-up values.
 	async function loadSettings() {
 		try {
-			const s = await api.get<{ reminder_morning_hour: string; team_scope: boolean }>('/v1/webhooks/settings');
-			if (s.reminder_morning_hour) morningHour = s.reminder_morning_hour;
-			teamScope = !!s.team_scope;
-		} catch {
+			applySettings(await api.get<WebhookSettings>('/v1/webhooks/settings'));
+			settingsError = '';
+		} catch (e: any) {
 			teamScope = !!$currentUser?.is_owner;
+			settingsError = e?.message || 'Error de conexión';
 		} finally {
 			settingsLoaded = true;
+		}
+	}
+
+	async function retrySettings() {
+		retryingSettings = true;
+		try {
+			await loadSettings();
+		} finally {
+			retryingSettings = false;
+		}
+	}
+
+	// Fork: a webhook created before whatsapp_message existed does not send it. One click
+	// adds it to its fields (PATCH keeps every other field as it was).
+	const WA_EVENTS = ['booking.created', 'booking.cancelled', 'booking.rescheduled',
+		'booking.reminder_morning', 'booking.reminder_1h', 'booking.reminder_5m'];
+	let addingWA = $state<string | null>(null);
+	const sendsWhatsApp = (wh: Webhook) => (wh.fields ?? []).includes('whatsapp_message');
+	const carriesMessage = (wh: Webhook) => (wh.events ?? []).some((e) => WA_EVENTS.includes(e));
+	async function addWhatsAppField(wh: Webhook) {
+		addingWA = wh.id;
+		try {
+			await api.patch(`/v1/webhooks/${wh.id}`, { fields: [...(wh.fields ?? []), 'whatsapp_message'] });
+			toast.success('Listo: este webhook ahora envía el mensaje de WhatsApp (data.whatsapp_message).');
+			await load();
+		} catch (e: any) {
+			toast.error(e.message || 'No se pudo actualizar el webhook');
+		} finally {
+			addingWA = null;
 		}
 	}
 
@@ -290,6 +393,67 @@
 	</Button>
 </div>
 
+<!-- Fork: the morning reminder's hour and zone. One rule for the whole team (the owner's
+     webhooks send every mentor's reminders), so only the owner edits it. -->
+{#if settingsLoaded}
+	<div class="mb-6 rounded-lg border bg-card p-4 sm:p-6">
+		<h2 class="text-sm font-semibold">Recordatorio de la mañana</h2>
+		<p class="mt-1 text-sm text-muted-foreground">
+			Se envía el día de la sesión a esta hora, siempre antes del aviso de 1 hora. Si la sesión es
+			demasiado temprano (menos de 1 hora después), ese día no se envía.
+		</p>
+		{#if settingsError}
+			<div class="mt-3 flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">
+				<p class="text-sm text-destructive">No se pudo cargar la configuración del recordatorio. Lo que tengas guardado sigue igual.</p>
+				<Button variant="outline" size="sm" onclick={retrySettings} disabled={retryingSettings}>
+					{retryingSettings ? 'Cargando…' : 'Reintentar'}
+				</Button>
+			</div>
+		{:else if canEditSettings}
+			<div class="mt-4 grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)]">
+				<div class="space-y-1.5">
+					<Label for="morning-hour">Hora</Label>
+					<Input id="morning-hour" type="time" step="300" bind:value={mHour} class="h-10 w-36 text-base sm:text-sm" />
+				</div>
+				<div class="min-w-0 space-y-2">
+					<p class="text-sm font-medium">¿Hora de dónde?</p>
+					<div class="flex flex-col gap-2 sm:flex-row" role="radiogroup" aria-label="¿Hora de dónde?">
+						{#each [{ value: 'client', label: 'Hora de cada cliente', hint: `a las ${mHour || '08:00'} de su país` }, { value: 'fixed', label: 'Una zona fija', hint: 'la misma para todos' }] as opt (opt.value)}
+							<label class="flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring {mMode === opt.value ? 'border-primary bg-primary/5' : 'bg-background hover:bg-accent/50'}">
+								<input type="radio" name="morning-mode" bind:group={mMode} value={opt.value} class="sr-only" />
+								<span class="font-medium">{opt.label}</span>
+								<span class="text-xs text-muted-foreground">({opt.hint})</span>
+							</label>
+						{/each}
+					</div>
+					{#if mMode === 'fixed'}
+						<div class="space-y-1.5">
+							<Label>Zona horaria</Label>
+							<Combobox items={zoneItems} bind:value={mZone} placeholder="Elige una zona" searchPlaceholder="Busca una ciudad, p. ej. Lima" class="h-10" />
+							{#if mZone !== SUGGESTED_ZONE}
+								<button type="button" class="text-xs text-primary underline-offset-2 hover:underline" onclick={() => (mZone = SUGGESTED_ZONE)}>Usar America/Lima</button>
+							{/if}
+							<p class="text-xs text-muted-foreground">
+								Ejemplo: con 07:00 de Lima, un cliente de Madrid lo recibe a las 14:00 (en verano) y uno de
+								Ciudad de México a las 06:00. Si para alguien esa hora cae después de su aviso de 1 hora, no lo recibe.
+							</p>
+						</div>
+					{/if}
+				</div>
+			</div>
+			<div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+				<p class="text-xs text-muted-foreground">Ahora: {morningSummary}</p>
+				<Button onclick={saveMorning} disabled={savingMorning || !morningDirty}>
+					{savingMorning ? 'Guardando…' : 'Guardar recordatorio'}
+				</Button>
+			</div>
+		{:else}
+			<p class="mt-3 text-sm">{morningSummary}</p>
+			<p class="mt-1 text-xs text-muted-foreground">Solo el dueño del equipo puede cambiarlo.</p>
+		{/if}
+	</div>
+{/if}
+
 {#if showCreate}
 	<div class="mb-6 rounded-lg border bg-card p-6">
 		<h2 class="mb-4 text-sm font-semibold">Nuevo webhook</h2>
@@ -417,7 +581,16 @@
 							<td class="max-w-56 overflow-hidden text-ellipsis whitespace-nowrap px-4 py-3 font-mono text-xs" title={wh.url}>{wh.url}</td>
 							<td class="px-4 py-3 text-xs text-muted-foreground">{(wh.events ?? []).join(', ')}</td>
 							<td class="min-w-36 px-4 py-3 text-xs">{typesLabel(wh)}</td>
-							<td class="px-4 py-3 text-xs text-muted-foreground">{(wh.fields ?? []).length} campos</td>
+							<td class="px-4 py-3 text-xs text-muted-foreground">
+								<span class="whitespace-nowrap">{(wh.fields ?? []).length} campos</span>
+								{#if sendsWhatsApp(wh)}
+									<span class="mt-1 block whitespace-nowrap text-green-700">incluye mensaje de WhatsApp</span>
+								{:else if carriesMessage(wh)}
+									<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addWhatsAppField(wh)}>
+										{addingWA === wh.id ? 'Añadiendo…' : 'Añadir mensaje de WhatsApp'}
+									</Button>
+								{/if}
+							</td>
 							<td class="px-4 py-3">
 								{#if wh.is_active}
 									<Badge class="bg-green-50 text-green-700 border-green-200">Activo</Badge>

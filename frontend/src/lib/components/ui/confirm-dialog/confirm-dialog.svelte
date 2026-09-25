@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils.js';
@@ -10,7 +11,8 @@
 		confirmText = 'Confirm',
 		cancelText = 'Cancel',
 		destructive = false,
-		onConfirm
+		onConfirm,
+		children
 	}: {
 		open?: boolean;
 		title?: string;
@@ -19,6 +21,8 @@
 		cancelText?: string;
 		destructive?: boolean;
 		onConfirm?: () => void;
+		/** Optional extra content between the description and the buttons (e.g. a reason field). */
+		children?: Snippet;
 	} = $props();
 </script>
 
@@ -50,6 +54,9 @@
 					</AlertDialogPrimitive.Description>
 				{/if}
 			</div>
+			{#if children}
+				{@render children()}
+			{/if}
 			<div class="flex justify-end gap-2">
 				<AlertDialogPrimitive.Cancel class={buttonVariants({ variant: 'outline' })}>
 					{cancelText}

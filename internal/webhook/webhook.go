@@ -69,6 +69,7 @@ const (
 	FieldManageURL        = "manage_url"           // reschedule/cancel link; filled by the caller (BookingPayload.ManageURL)
 	FieldStartLocalLong   = "start_local_long"     // "martes 9 de marzo de 2027, 09:00": no "mar" (martes/marzo) ambiguity
 	FieldStartLocalTZ     = "start_local_timezone" // the zone start_local* is really in (attendee's, else host's)
+	FieldWhatsAppMessage  = "whatsapp_message"     // the finished WhatsApp text for this moment (fork_whatsapp.go)
 )
 
 // AllFields is every selectable field, in payload order. Used to validate config
@@ -86,6 +87,7 @@ var AllFields = []string{
 	FieldStartLocal, FieldStartLocalDate, FieldStartLocalTime,
 	FieldManageURL,
 	FieldStartLocalLong, FieldStartLocalTZ,
+	FieldWhatsAppMessage,
 }
 
 // defaultFields reproduces the original payload (no PII, no answers) so a webhook with no
@@ -347,6 +349,8 @@ type enrichedBooking struct {
 	attendeePhone, attendeeWhatsApp            string
 	startLocal, startLocalDate, startLocalTime string
 	startLocalLong, startLocalTZ               string
+	startLocalDay                              string // {dia}: "martes 30 de septiembre" (fork_whatsapp.go)
+	whatsappMessage                            string // data.whatsapp_message, rendered in Enqueue (fork_whatsapp.go)
 }
 
 // enrich loads the data not carried in BookingPayload (host name/email, event-type
@@ -442,6 +446,7 @@ func buildData(bd enrichedBooking, fields []string) map[string]any {
 		FieldManageURL:        bd.core.ManageURL,
 		FieldStartLocalLong:   bd.startLocalLong,
 		FieldStartLocalTZ:     bd.startLocalTZ,
+		FieldWhatsAppMessage:  bd.whatsappMessage,
 	}
 	out := make(map[string]any, len(fields))
 	for _, f := range fields {
@@ -562,6 +567,9 @@ func (s *Service) Enqueue(ctx context.Context, event string, p BookingPayload) e
 
 	// Gather all available data once; each webhook gets its own field-filtered copy.
 	bd := s.enrich(ctx, p)
+	// Fork: the WhatsApp text for this moment, only when a receiving webhook selected it.
+	// Before the tx below: it reads, and the pool is a single connection.
+	s.enrichWhatsApp(ctx, event, &bd, matching)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 
 	// booking_id is a nullable FK; use NULL when empty so callers without a real

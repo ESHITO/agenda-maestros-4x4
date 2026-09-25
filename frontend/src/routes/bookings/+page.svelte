@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type Booking } from '$lib/api';
+	import { api, type Booking, type WhatsAppNotice } from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { prefs, fmtDateTime, fmtTime } from '$lib/prefs';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
@@ -9,6 +9,9 @@
 	import * as Select from '$lib/components/ui/select';
 	import { DatePicker } from '$lib/components/ui/date-picker';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { Label } from '$lib/components/ui/label';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import { toast } from 'svelte-sonner';
 
 	let items: Booking[] = $state([]);
 	let loading = $state(true);
@@ -203,9 +206,16 @@
 
 	let confirmOpen = $state(false);
 	let pendingCancelId = $state<string | null>(null);
+	let pendingCancelName = $state('');
+	// Optional, and sent as typed: it reaches the client in the cancellation e-mail and in
+	// the WhatsApp {motivo}. Empty sends "" - that line is then dropped from the message
+	// (it used to send the English "cancelled by admin" to Spanish-speaking clients).
+	let cancelReason = $state('');
 
-	function requestCancel(id: string) {
-		pendingCancelId = id;
+	function requestCancel(b: Booking) {
+		pendingCancelId = b.id;
+		pendingCancelName = b.attendees?.[0]?.name ?? '';
+		cancelReason = '';
 		confirmOpen = true;
 	}
 
@@ -213,7 +223,8 @@
 		const id = pendingCancelId;
 		if (!id) return;
 		try {
-			await api.post(`/v1/bookings/${id}/cancel`, { reason: 'cancelled by admin' });
+			await api.post(`/v1/bookings/${id}/cancel`, { reason: cancelReason.trim() });
+			toast.success('Reunión cancelada. Los avisos pendientes se detuvieron.');
 			await load();
 		} catch (e: any) {
 			error = e.message;
@@ -221,6 +232,66 @@
 			confirmOpen = false;
 			pendingCancelId = null;
 		}
+	}
+
+	// A confirmed meeting that has not started yet: the only kind worth cancelling.
+	function cancellable(b: Booking) {
+		return b.status === 'confirmed' && new Date(b.start_at).getTime() > Date.now();
+	}
+
+	// ── Fork: the four WhatsApp notices of each booking (GET /v1/bookings "whatsapp") ──
+	const NOTICE_LABELS: Record<WhatsAppNotice['kind'], string> = {
+		created: 'Confirmación',
+		morning: 'Mañana',
+		'1h': '1 hora',
+		'5m': '5 min'
+	};
+	const NOTICE_STATES: Record<WhatsAppNotice['status'], { label: string; cls: string }> = {
+		sent: { label: 'Enviado', cls: 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300' },
+		pending: { label: 'Pendiente', cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300' },
+		sending: { label: 'Enviando…', cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300' },
+		failed: { label: 'Falló', cls: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300' },
+		cancelled: { label: 'Cancelado', cls: 'border-border bg-muted/50 text-muted-foreground line-through decoration-1' },
+		missed: { label: 'No salió', cls: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300' },
+		unknown: { label: 'Sin registro', cls: 'border-dashed border-border bg-background text-muted-foreground' },
+		not_applicable: { label: 'No aplica', cls: 'border-dashed border-border bg-background text-muted-foreground' }
+	};
+
+	// Short "when" for a notice, in the viewer's own zone: "hoy 07:00", "mañana 07:00",
+	// or "30/09 07:00" (day/month order follows the user's date preference).
+	function shortWhen(iso?: string): string {
+		if (!iso) return '';
+		const d = new Date(iso);
+		if (isNaN(d.getTime())) return '';
+		const time = fmtTime(iso, $prefs);
+		const dayKey = (x: Date) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+		const today = new Date();
+		const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+		const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+		if (dayKey(d) === dayKey(today)) return `hoy ${time}`;
+		if (dayKey(d) === dayKey(tomorrow)) return `mañana ${time}`;
+		if (dayKey(d) === dayKey(yesterday)) return `ayer ${time}`;
+		const dd = String(d.getDate()).padStart(2, '0');
+		const mm = String(d.getMonth() + 1).padStart(2, '0');
+		return `${$prefs.date_format === 'mdy' || $prefs.date_format === 'ymd' ? `${mm}/${dd}` : `${dd}/${mm}`} ${time}`;
+	}
+
+	function noticeDetail(n: WhatsAppNotice): string {
+		if (n.status === 'pending' || n.status === 'sent' || n.status === 'missed') return shortWhen(n.at);
+		return '';
+	}
+
+	// Full sentence for screen readers and the hover title.
+	function noticeText(n: WhatsAppNotice, i: number): string {
+		const base = `Aviso ${i + 1}, ${NOTICE_LABELS[n.kind]}: ${(NOTICE_STATES[n.status] ?? NOTICE_STATES.not_applicable).label}`;
+		if (n.status === 'pending' && n.at) return `${base}, programado para ${fmt(n.at)}`;
+		if (n.status === 'sent' && n.at) return `${base} el ${fmt(n.at)}`;
+		if (n.status === 'failed') return `${base}: el webhook no respondió bien tras varios intentos`;
+		if (n.status === 'not_applicable') return `${base}: no se programó (por la hora de la cita o porque no hay webhook para este tipo)`;
+		if (n.status === 'cancelled') return `${base}: la reunión se canceló antes de enviarlo`;
+		if (n.status === 'missed') return `${base}: no se envió a su hora (el servidor estaba detenido o dormido) y se descartó para no llegar tarde`;
+		if (n.status === 'unknown') return `${base}: sin registro (los registros de envío se borran a los 30 días)`;
+		return base;
 	}
 
 	function startReschedule(b: Booking) {
@@ -294,14 +365,15 @@
 
 <svelte:head><title>Reservas — Calnode</title></svelte:head>
 
-<div class="mb-8 flex items-start justify-between gap-4">
+<!-- Stacks on a phone: the scope toggle beside the title overflowed 375 px. -->
+<div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Reservas</h1>
 		<p class="mt-1 text-sm text-muted-foreground">
 			{scope === 'all' ? 'Todas las reuniones del equipo de trabajo.' : 'Reuniones de las que eres anfitrión.'}
 		</p>
 	</div>
-	<div class="flex shrink-0 items-center gap-2">
+	<div class="flex flex-wrap items-center gap-2 sm:shrink-0">
 		<Button variant="outline" size="sm" onclick={refresh} disabled={refreshing} aria-label="Actualizar reservas">
 			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class={refreshing ? 'animate-spin' : ''}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
 			Actualizar
@@ -337,9 +409,9 @@
 			<button type="button" class="rounded px-3 py-1 transition-colors {timeFilter === 'past' ? 'bg-muted font-medium' : 'text-muted-foreground hover:text-foreground'}" onclick={() => setTimeFilter('past')}>Pasadas ({counts.past})</button>
 		</div>
 
-		<div class="ml-auto flex flex-wrap items-center gap-2">
+		<div class="grid w-full grid-cols-1 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
 			<Select.Root type="single" bind:value={fEventType} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-[170px]" aria-label="Filtrar por tipo de atención">
+				<Select.Trigger class="h-9 w-full sm:w-[170px]" aria-label="Filtrar por tipo de atención">
 					{fEventType ? eventTypeName(fEventType) : 'Todos los tipos de atención'}
 				</Select.Trigger>
 				<Select.Content>
@@ -352,7 +424,7 @@
 
 			{#if canSeeAll && scope === 'all'}
 				<Select.Root type="single" bind:value={fHost} onValueChange={reload}>
-					<Select.Trigger class="h-9 w-[150px]" aria-label="Filtrar por anfitrión">
+					<Select.Trigger class="h-9 w-full sm:w-[150px]" aria-label="Filtrar por anfitrión">
 						{members.find((m) => m.id === fHost)?.name ?? 'Todos los anfitriones'}
 					</Select.Trigger>
 					<Select.Content>
@@ -365,7 +437,7 @@
 
 				{#if teams.length > 0}
 					<Select.Root type="single" bind:value={fTeam} onValueChange={reload}>
-						<Select.Trigger class="h-9 w-[140px]" aria-label="Filtrar por equipo">
+						<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por equipo">
 							{teams.find((tm) => tm.id === fTeam)?.name ?? 'Todos los equipos'}
 						</Select.Trigger>
 						<Select.Content>
@@ -379,7 +451,7 @@
 			{/if}
 
 			<Select.Root type="single" bind:value={fStatus} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-[140px]" aria-label="Filtrar por estado">
+				<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por estado">
 					{fStatus || 'Cualquier estado'}
 				</Select.Trigger>
 				<Select.Content>
@@ -408,34 +480,21 @@
 			{/if}
 		</div>
 	{:else}
-	<div class="rounded-lg border bg-card overflow-hidden">
-		<table class="w-full text-sm">
-			<thead>
-				<tr class="border-b">
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Asistente</th>
-					{#if scope === 'all'}<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Anfitrión</th>{/if}
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Tipo de atención</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Hora de inicio</th>
-					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Estado</th>
-					<th class="px-4 pb-3 pt-3"></th>
-				</tr>
-			</thead>
-			<tbody class="divide-y">
-				{#each items as b}
-					<tr class="transition-colors hover:bg-muted/30">
-						<td class="px-4 py-3">
-							{#if b.attendees && b.attendees.length > 0}
-								<div class="font-medium">{b.attendees[0].name}</div>
-								<div class="text-xs text-muted-foreground">{b.attendees[0].email}</div>
-							{:else}
-								<span class="text-muted-foreground">—</span>
-							{/if}
-						</td>
-						{#if scope === 'all'}<td class="px-4 py-3 text-muted-foreground">{b.host_name || '—'}</td>{/if}
-						<td class="px-4 py-3 font-mono text-xs text-muted-foreground">{b.event_type_slug ?? '—'}</td>
-						<td class="px-4 py-3 text-muted-foreground">{fmt(b.start_at)}</td>
-						<td class="px-4 py-3">
-							<div class="flex flex-wrap items-center gap-1.5">
+	<!-- Fork: one card per booking instead of a table row, so it stacks on a phone (375 px)
+	     without overflowing. The client's NAME leads; then when, what and who attends, the
+	     four WhatsApp notices, and the actions. -->
+	<div class="overflow-hidden rounded-lg border bg-card">
+		<Tooltip.Provider>
+		<ul class="divide-y">
+			{#each items as b (b.id)}
+				<li class="transition-colors hover:bg-muted/20">
+					<div class="space-y-3 p-4">
+					<div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-6">
+						<div class="min-w-0 flex-1 space-y-2">
+							<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+								<p class="min-w-0 break-words text-base font-semibold leading-snug">
+									{b.attendees?.[0]?.name || 'Sin nombre'}
+								</p>
 								{#if b.status === 'confirmed'}
 									<Badge class="bg-green-50 text-green-700 border-green-200">{statusLabel[b.status] ?? b.status}</Badge>
 								{:else if b.status === 'cancelled'}
@@ -451,178 +510,212 @@
 									<Badge class="border-amber-200 bg-amber-50 text-amber-700">no pagado</Badge>
 								{/if}
 							</div>
-						</td>
-						<td class="px-4 py-3">
-							<Tooltip.Provider>
-								<div class="flex items-center justify-end gap-1">
+							{#if b.attendees?.[0]?.email}
+								<p class="-mt-1 break-all text-xs text-muted-foreground">{b.attendees[0].email}</p>
+							{/if}
+							<dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-sm">
+								<dt class="text-muted-foreground">Fecha</dt>
+								<dd class="font-medium">{fmt(b.start_at)}</dd>
+								<dt class="text-muted-foreground">Tipo</dt>
+								<dd class="break-words">{b.event_type_name || eventTypeName(b.event_type_slug)}</dd>
+								<dt class="text-muted-foreground">Atiende</dt>
+								<dd class="break-words">{b.host_name || '—'}</dd>
+								{#if b.status === 'cancelled' && b.cancellation_reason}
+									<dt class="text-muted-foreground">Motivo</dt>
+									<dd class="break-words text-muted-foreground">{b.cancellation_reason}</dd>
+								{/if}
+							</dl>
+						</div>
+
+						<div class="flex shrink-0 flex-wrap items-center gap-1 md:justify-end">
+							<Tooltip.Root>
+								<Tooltip.Trigger
+									class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+									onclick={() => toggleExpand(b.id)}
+									aria-expanded={expandedId === b.id}
+									aria-label={expandedId === b.id ? 'Ocultar respuestas' : 'Ver respuestas'}
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+										viewBox="0 0 24 24" fill="none" stroke="currentColor"
+										stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+										style="transition:transform .15s;transform:rotate({expandedId === b.id ? 180 : 0}deg)"
+									><polyline points="6 9 12 15 18 9"/></svg>
+								</Tooltip.Trigger>
+								<Tooltip.Content>{expandedId === b.id ? 'Ocultar respuestas' : 'Ver respuestas'}</Tooltip.Content>
+							</Tooltip.Root>
+
+							{#if b.status === 'confirmed'}
+								{#if reschedulingId === b.id}
+									<Button variant="outline" size="sm" onclick={cancelReschedule}>
+										Cancelar reprogramación
+									</Button>
+								{:else}
 									<Tooltip.Root>
 										<Tooltip.Trigger
 											class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-											onclick={() => toggleExpand(b.id)}
-											aria-expanded={expandedId === b.id}
+											onclick={() => startReschedule(b)}
+											aria-label="Reprogramar"
 										>
-											<svg
-												xmlns="http://www.w3.org/2000/svg" width="16" height="16"
-												viewBox="0 0 24 24" fill="none" stroke="currentColor"
-												stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-												style="transition:transform .15s;transform:rotate({expandedId === b.id ? 180 : 0}deg)"
-											><polyline points="6 9 12 15 18 9"/></svg>
+											<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
 										</Tooltip.Trigger>
-										<Tooltip.Content>{expandedId === b.id ? 'Ocultar respuestas' : 'Ver respuestas'}</Tooltip.Content>
+										<Tooltip.Content>Reprogramar</Tooltip.Content>
 									</Tooltip.Root>
-
-									{#if b.status === 'confirmed'}
-										{#if reschedulingId === b.id}
-											<Button variant="outline" size="sm" onclick={cancelReschedule}>
-												Cancelar reprogramación
-											</Button>
-										{:else}
-											<Tooltip.Root>
-												<Tooltip.Trigger
-													class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-													onclick={() => startReschedule(b)}
-												>
-													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-												</Tooltip.Trigger>
-												<Tooltip.Content>Reprogramar</Tooltip.Content>
-											</Tooltip.Root>
-
-											<Tooltip.Root>
-												<Tooltip.Trigger
-													class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-													onclick={() => requestCancel(b.id)}
-												>
-													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-												</Tooltip.Trigger>
-												<Tooltip.Content>Cancelar reserva</Tooltip.Content>
-											</Tooltip.Root>
-										{/if}
+									{#if cancellable(b)}
+										<Button
+											variant="outline"
+											size="sm"
+											class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+											onclick={() => requestCancel(b)}
+										>
+											Cancelar reunión
+										</Button>
 									{/if}
-								</div>
-							</Tooltip.Provider>
-						</td>
-					</tr>
+								{/if}
+							{/if}
+						</div>
+					</div>
+					{#if b.whatsapp && b.whatsapp.length > 0}
+						<!-- Full card width, and four columns only once the card itself is wide
+						     (@container): the viewport says nothing about the room left beside the
+						     desktop sidebar, which squeezed four columns to "C…" at 768-1024 px. -->
+						<div class="@container">
+							<p class="mb-1 text-xs font-medium text-muted-foreground">Avisos de WhatsApp</p>
+							<ul class="grid grid-cols-2 gap-1.5 @2xl:grid-cols-4" aria-label="Avisos de WhatsApp">
+								{#each b.whatsapp as n, i (n.kind)}
+									{@const st = NOTICE_STATES[n.status] ?? NOTICE_STATES.not_applicable}
+									{@const detail = noticeDetail(n)}
+									<li
+										class="flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs {st.cls}"
+										title={noticeText(n, i)}
+										aria-label={noticeText(n, i)}
+									>
+										<span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-background/80 text-[11px] font-semibold text-foreground no-underline" aria-hidden="true">{i + 1}</span>
+										<span class="min-w-0 leading-tight" aria-hidden="true">
+											<span class="block truncate font-medium">{NOTICE_LABELS[n.kind] ?? n.kind}</span>
+											<span class="block truncate">{st.label}</span>
+											{#if detail}<span class="block truncate tabular-nums">{detail}</span>{/if}
+										</span>
+									</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+					</div>
 
 					{#if expandedId === b.id}
-						<tr>
-							<td colspan={scope === 'all' ? 6 : 5} class="p-0">
-								<div class="border-t bg-muted/20 px-4 py-3">
-									<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Detalles</p>
-									<dl class="mb-3 space-y-1.5 text-sm">
-										<div class="flex gap-4">
-											<dt class="w-48 shrink-0 font-medium text-foreground">Reservado el</dt>
-											<dd class="text-muted-foreground">{fmt(b.created_at)}</dd>
-										</div>
-										{#if b.payment_status}
-											<div class="flex gap-4">
-												<dt class="w-48 shrink-0 font-medium text-foreground">Pago</dt>
-												<dd class="text-muted-foreground">
-													{payLabel[b.payment_status] ?? b.payment_status}{#if b.amount_paid_cents} · {fmtMoney(b.amount_paid_cents, b.amount_paid_currency)}{/if}
-												</dd>
-											</div>
-										{/if}
-										{#if b.location_value}
-											<div class="flex gap-4">
-												<dt class="w-48 shrink-0 font-medium text-foreground">Ubicación</dt>
-												<dd class="break-all text-muted-foreground">
-													{#if /^https?:/.test(b.location_value)}
-														<a href={b.location_value} target="_blank" rel="noopener noreferrer" class="text-primary underline">{b.location_value}</a>
-													{:else}{b.location_value}{/if}
-												</dd>
-											</div>
-										{/if}
-									</dl>
-									<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Respuestas del formulario</p>
-									{#if answersLoading[b.id]}
-										<p class="text-sm text-muted-foreground">Cargando…</p>
-									{:else if !answersCache[b.id] || answersCache[b.id].length === 0}
-										<p class="text-sm text-muted-foreground">No hay respuestas de formulario para esta reserva.</p>
-									{:else}
-										<dl class="space-y-2">
-											{#each answersCache[b.id] as a}
-												<div class="flex gap-4 text-sm">
-													<dt class="w-48 shrink-0 font-medium text-foreground">{a.label}</dt>
-													<dd class="text-muted-foreground {a.type !== 'checkbox' ? 'whitespace-pre-wrap' : ''}">
-														{#if a.type === 'checkbox'}
-															<!-- Liberal comparison on purpose. Checkbox answers are canonicalised to
-															     "yes"/"no" on the way in now, but rows created before that landed hold
-															     whatever the surface sent - the embed widget sent "Yes". A strict
-															     === 'yes' renders those as "No", i.e. the opposite of what the guest
-															     ticked, which matters when the question is a consent checkbox. -->
-															{['yes', 'true', '1', 'on', 'checked'].includes(String(a.value).trim().toLowerCase()) ? 'Sí' : 'No'}
-														{:else}
-															{a.value || '—'}
-														{/if}
-													</dd>
-												</div>
-											{/each}
-										</dl>
-									{/if}
+						<div class="border-t bg-muted/20 px-4 py-3">
+							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Detalles</p>
+							<dl class="mb-3 space-y-1.5 text-sm">
+								<div class="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
+									<dt class="shrink-0 font-medium text-foreground sm:w-48">Reservado el</dt>
+									<dd class="text-muted-foreground">{fmt(b.created_at)}</dd>
 								</div>
-							</td>
-						</tr>
+								{#if b.payment_status}
+									<div class="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
+										<dt class="shrink-0 font-medium text-foreground sm:w-48">Pago</dt>
+										<dd class="text-muted-foreground">
+											{payLabel[b.payment_status] ?? b.payment_status}{#if b.amount_paid_cents} · {fmtMoney(b.amount_paid_cents, b.amount_paid_currency)}{/if}
+										</dd>
+									</div>
+								{/if}
+								{#if b.location_value}
+									<div class="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
+										<dt class="shrink-0 font-medium text-foreground sm:w-48">Ubicación</dt>
+										<dd class="break-all text-muted-foreground">
+											{#if /^https?:/.test(b.location_value)}
+												<a href={b.location_value} target="_blank" rel="noopener noreferrer" class="text-primary underline">{b.location_value}</a>
+											{:else}{b.location_value}{/if}
+										</dd>
+									</div>
+								{/if}
+							</dl>
+							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Respuestas del formulario</p>
+							{#if answersLoading[b.id]}
+								<p class="text-sm text-muted-foreground">Cargando…</p>
+							{:else if !answersCache[b.id] || answersCache[b.id].length === 0}
+								<p class="text-sm text-muted-foreground">No hay respuestas de formulario para esta reserva.</p>
+							{:else}
+								<dl class="space-y-2">
+									{#each answersCache[b.id] as a}
+										<div class="flex flex-col gap-0.5 text-sm sm:flex-row sm:gap-4">
+											<dt class="shrink-0 font-medium text-foreground sm:w-48">{a.label}</dt>
+											<dd class="break-words text-muted-foreground {a.type !== 'checkbox' ? 'whitespace-pre-wrap' : ''}">
+												{#if a.type === 'checkbox'}
+													<!-- Liberal comparison on purpose. Checkbox answers are canonicalised to
+													     "yes"/"no" on the way in now, but rows created before that landed hold
+													     whatever the surface sent - the embed widget sent "Yes". A strict
+													     === 'yes' renders those as "No", i.e. the opposite of what the guest
+													     ticked, which matters when the question is a consent checkbox. -->
+													{['yes', 'true', '1', 'on', 'checked'].includes(String(a.value).trim().toLowerCase()) ? 'Sí' : 'No'}
+												{:else}
+													{a.value || '—'}
+												{/if}
+											</dd>
+										</div>
+									{/each}
+								</dl>
+							{/if}
+						</div>
 					{/if}
 
 					{#if reschedulingId === b.id}
-						<tr>
-							<td colspan={scope === 'all' ? 6 : 5} class="p-0">
-								<div class="border-t bg-muted/30 px-4 py-4">
-									<p class="mb-3 text-sm font-medium">Reprogramar — {b.attendees?.[0]?.name ?? 'asistente'}</p>
+						<div class="border-t bg-muted/30 px-4 py-4">
+							<p class="mb-3 text-sm font-medium">Reprogramar — {b.attendees?.[0]?.name ?? 'asistente'}</p>
 
-									<div class="flex flex-wrap items-end gap-3">
-										<div class="space-y-1.5">
-											<p class="text-sm font-medium">Nueva fecha</p>
-											<DatePicker
-												bind:value={rescheduleDate}
-												placeholder="Elige una fecha"
-												minToday
-												class="w-[180px]"
-											/>
-										</div>
-
-										{#if slotsLoading}
-											<p class="pb-1 text-sm text-muted-foreground">Cargando horarios…</p>
-										{:else if slotsError}
-											<p class="rounded-md bg-destructive/10 px-3 py-1.5 text-sm text-destructive">{slotsError}</p>
-										{:else if rescheduleDate && slots.length === 0}
-											<p class="pb-1 text-sm text-muted-foreground">No hay horarios disponibles en esta fecha.</p>
-										{/if}
-									</div>
-
-									{#if slots.length > 0}
-										<div class="mt-3 flex flex-wrap gap-2">
-											{#each slots as slot}
-												<button
-													onclick={() => (selectedSlot = slot.start)}
-													class="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectedSlot === slot.start ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'border bg-background hover:bg-accent hover:text-accent-foreground'}"
-												>
-													{fmtSlotTime(slot.start)}
-												</button>
-											{/each}
-										</div>
-									{/if}
-
-									{#if rescheduleError}
-										<p class="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{rescheduleError}</p>
-									{/if}
-
-									{#if selectedSlot}
-										<div class="mt-4 flex gap-2">
-											<Button onclick={confirmReschedule} disabled={rescheduling}>
-												{rescheduling ? 'Reprogramando…' : `Confirmar — ${fmtSlotTime(selectedSlot)}`}
-											</Button>
-											<Button variant="outline" onclick={cancelReschedule}>
-												Cancelar
-											</Button>
-										</div>
-									{/if}
+							<div class="flex flex-wrap items-end gap-3">
+								<div class="space-y-1.5">
+									<p class="text-sm font-medium">Nueva fecha</p>
+									<DatePicker
+										bind:value={rescheduleDate}
+										placeholder="Elige una fecha"
+										minToday
+										class="w-[180px]"
+									/>
 								</div>
-							</td>
-						</tr>
+
+								{#if slotsLoading}
+									<p class="pb-1 text-sm text-muted-foreground">Cargando horarios…</p>
+								{:else if slotsError}
+									<p class="rounded-md bg-destructive/10 px-3 py-1.5 text-sm text-destructive">{slotsError}</p>
+								{:else if rescheduleDate && slots.length === 0}
+									<p class="pb-1 text-sm text-muted-foreground">No hay horarios disponibles en esta fecha.</p>
+								{/if}
+							</div>
+
+							{#if slots.length > 0}
+								<div class="mt-3 flex flex-wrap gap-2">
+									{#each slots as slot}
+										<button
+											onclick={() => (selectedSlot = slot.start)}
+											class="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectedSlot === slot.start ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'border bg-background hover:bg-accent hover:text-accent-foreground'}"
+										>
+											{fmtSlotTime(slot.start)}
+										</button>
+									{/each}
+								</div>
+							{/if}
+
+							{#if rescheduleError}
+								<p class="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{rescheduleError}</p>
+							{/if}
+
+							{#if selectedSlot}
+								<div class="mt-4 flex flex-wrap gap-2">
+									<Button onclick={confirmReschedule} disabled={rescheduling}>
+										{rescheduling ? 'Reprogramando…' : `Confirmar — ${fmtSlotTime(selectedSlot)}`}
+									</Button>
+									<Button variant="outline" onclick={cancelReschedule}>
+										Cancelar
+									</Button>
+								</div>
+							{/if}
+						</div>
 					{/if}
-				{/each}
-			</tbody>
-		</table>
+				</li>
+			{/each}
+		</ul>
+		</Tooltip.Provider>
 	</div>
 	{#if total > PAGE_SIZE}
 		<div class="mt-4 flex items-center justify-between gap-4">
@@ -642,10 +735,15 @@
 
 <ConfirmDialog
 	bind:open={confirmOpen}
-	title="¿Cancelar esta reserva?"
-	description="Se notificará al asistente y el horario quedará libre. Esta acción no se puede deshacer."
-	confirmText="Cancelar reserva"
-	cancelText="Mantener reserva"
+	title={pendingCancelName ? `¿Cancelar la reunión con ${pendingCancelName}?` : '¿Cancelar esta reunión?'}
+	description="Se avisará al cliente y el horario quedará libre. Los recordatorios de WhatsApp pendientes se detienen. Esta acción no se puede deshacer."
+	confirmText="Cancelar reunión"
+	cancelText="Mantener reunión"
 	destructive
 	onConfirm={cancel}
-/>
+>
+	<div class="space-y-1.5">
+		<Label for="cancel-reason">Motivo <span class="font-normal text-muted-foreground">(opcional — el cliente lo verá en el aviso de cancelación)</span></Label>
+		<Textarea id="cancel-reason" bind:value={cancelReason} rows={3} maxlength={300} placeholder="Por ejemplo: el mentor tuvo un imprevisto" class="text-base sm:text-sm" />
+	</div>
+</ConfirmDialog>

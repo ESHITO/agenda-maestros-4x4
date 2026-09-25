@@ -7,7 +7,7 @@
 	import { currentUser, authStatus, type AuthStatus } from '$lib/stores';
 	import { prefs, prefsFromUser } from '$lib/prefs';
 	import { Toaster } from '$lib/components/ui/sonner';
-	import { buttonVariants } from '$lib/components/ui/button';
+	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import DemoBanner from '$lib/components/demo-banner.svelte';
 	import type { Snippet } from 'svelte';
@@ -16,6 +16,23 @@
 
 	let checking = $state(true);
 	let reportOpen = $state(false);
+	// Fork (Agenda Maestros 4x4): below md the sidebar is a menu opened from a top bar -
+	// the fixed 224 px column left a phone 151 px for the page. Closed on every navigation.
+	let navOpen = $state(false);
+	$effect(() => {
+		void $page.url.pathname;
+		navOpen = false;
+	});
+	// ...and when the screen reaches md (a phone turned sideways): the menu's content is
+	// md:hidden, but the Dialog's own dark overlay is not, and would stay over the page.
+	$effect(() => {
+		const mq = window.matchMedia('(min-width: 768px)');
+		const closeOnDesktop = () => {
+			if (mq.matches) navOpen = false;
+		};
+		mq.addEventListener('change', closeOnDesktop);
+		return () => mq.removeEventListener('change', closeOnDesktop);
+	});
 	let recordingsConfigured = $state(false);
 	let version = $state('');
 
@@ -138,6 +155,13 @@
 		)
 	);
 
+	// The phone top bar names the current section.
+	const activeLabel = $derived(
+		visibleNavItems.find((item) =>
+			item.exact ? $page.url.pathname === item.href || $page.url.pathname === base : $page.url.pathname.startsWith(item.href)
+		)?.label ?? 'Agenda'
+	);
+
 	onMount(async () => {
 		if (isPublicRoute) {
 			checking = false;
@@ -188,6 +212,87 @@
 	}
 </script>
 
+{#snippet sidebarContent()}
+	<!-- User section -->
+	<a href="{base}/settings/profile" class="flex items-center gap-3 border-b border-sidebar-border px-4 py-3 hover:bg-sidebar-accent/60 transition-colors">
+		<!-- Fixed-size clip container: the image fills it and is clipped by the
+		     parent's overflow-hidden (not its own border-radius). A rounded,
+		     object-cover image on its own composited layer gets mis-painted by
+		     Chrome — a smeared tile over the sidebar — when the main panel
+		     repaints on scroll; clipping via the parent box prevents that. -->
+		<span class="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+			{#if $currentUser?.avatar_url}
+				<img src={$currentUser.avatar_url} alt={$currentUser.name} class="h-full w-full object-cover" />
+			{:else}
+				{initials($currentUser?.name ?? 'U')}
+			{/if}
+		</span>
+		<div class="min-w-0 flex-1">
+			<p class="truncate text-sm font-medium text-sidebar-foreground">{$currentUser?.name ?? ''}</p>
+		</div>
+	</a>
+
+	<!-- Nav -->
+	<nav class="flex-1 space-y-0.5 p-2">
+		{#each visibleNavItems as item, i}
+			{#if item.section && item.section !== visibleNavItems[i - 1]?.section}
+				<p class="mb-1 px-2.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/40 first:mt-0 mt-4">
+					{item.section}
+				</p>
+			{:else if !item.section && visibleNavItems[i - 1]?.section}
+				<div class="my-2 border-t border-sidebar-border"></div>
+			{/if}
+			{@const active = item.exact
+				? $page.url.pathname === item.href || $page.url.pathname === base
+				: $page.url.pathname.startsWith(item.href)}
+			<a
+				href={item.href}
+				class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors
+					{active
+						? 'bg-sidebar-accent text-sidebar-accent-foreground'
+						: 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'}"
+			>
+				<span class="shrink-0 {active ? 'opacity-100' : 'opacity-60'}">{@html item.icon}</span>
+				{item.label}
+			</a>
+		{/each}
+	</nav>
+
+	<!-- Footer -->
+	<div class="border-t border-sidebar-border p-2">
+		<button
+			onclick={() => { navOpen = false; reportOpen = true; }}
+			class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-sidebar-foreground/45 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/70"
+		>
+			<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
+				<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+			</svg>
+			Reportar un problema
+		</button>
+		<button
+			onclick={logout}
+			class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+		>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
+				<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+				<polyline points="16 17 21 12 16 7"/>
+				<line x1="21" y1="12" x2="9" y2="12"/>
+			</svg>
+			Cerrar sesión
+		</button>
+		{#if version}
+			<a
+				href={RELEASES_URL}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="mt-1 block px-2.5 py-1 text-xs text-sidebar-foreground/35 transition-colors hover:text-sidebar-foreground/60"
+			>
+				{version}
+			</a>
+		{/if}
+	</div>
+{/snippet}
+
 <Toaster position="bottom-right" />
 
 {#if isPublicRoute}
@@ -203,95 +308,35 @@
 	{/if}
 	<div class="flex flex-1 overflow-hidden">
 		<!-- Sidebar -->
-		<aside class="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
-			<!-- User section -->
-			<a href="{base}/settings/profile" class="flex items-center gap-3 border-b border-sidebar-border px-4 py-3 hover:bg-sidebar-accent/60 transition-colors">
-				<!-- Fixed-size clip container: the image fills it and is clipped by the
-				     parent's overflow-hidden (not its own border-radius). A rounded,
-				     object-cover image on its own composited layer gets mis-painted by
-				     Chrome — a smeared tile over the sidebar — when the main panel
-				     repaints on scroll; clipping via the parent box prevents that. -->
-				<span class="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-					{#if $currentUser?.avatar_url}
-						<img src={$currentUser.avatar_url} alt={$currentUser.name} class="h-full w-full object-cover" />
-					{:else}
-						{initials($currentUser?.name ?? 'U')}
-					{/if}
-				</span>
-				<div class="min-w-0 flex-1">
-					<p class="truncate text-sm font-medium text-sidebar-foreground">{$currentUser?.name ?? ''}</p>
-				</div>
-			</a>
-
-			<!-- Nav -->
-			<nav class="flex-1 space-y-0.5 p-2">
-				{#each visibleNavItems as item, i}
-					{#if item.section && item.section !== visibleNavItems[i - 1]?.section}
-						<p class="mb-1 px-2.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/40 first:mt-0 mt-4">
-							{item.section}
-						</p>
-					{:else if !item.section && visibleNavItems[i - 1]?.section}
-						<div class="my-2 border-t border-sidebar-border"></div>
-					{/if}
-					{@const active = item.exact
-						? $page.url.pathname === item.href || $page.url.pathname === base
-						: $page.url.pathname.startsWith(item.href)}
-					<a
-						href={item.href}
-						class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors
-							{active
-								? 'bg-sidebar-accent text-sidebar-accent-foreground'
-								: 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'}"
-					>
-						<span class="shrink-0 {active ? 'opacity-100' : 'opacity-60'}">{@html item.icon}</span>
-						{item.label}
-					</a>
-				{/each}
-			</nav>
-
-			<!-- Footer -->
-			<div class="border-t border-sidebar-border p-2">
-				<button
-					onclick={() => (reportOpen = true)}
-					class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-sidebar-foreground/45 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/70"
-				>
-					<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-						<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-					</svg>
-					Reportar un problema
-				</button>
-				<button
-					onclick={logout}
-					class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-				>
-					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-						<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-						<polyline points="16 17 21 12 16 7"/>
-						<line x1="21" y1="12" x2="9" y2="12"/>
-					</svg>
-					Cerrar sesión
-				</button>
-				{#if version}
-					<a
-						href={RELEASES_URL}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="mt-1 block px-2.5 py-1 text-xs text-sidebar-foreground/35 transition-colors hover:text-sidebar-foreground/60"
-					>
-						{version}
-					</a>
-				{/if}
-			</div>
+		<aside class="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+			{@render sidebarContent()}
 		</aside>
 
-		<!-- Main content -->
-		<main class="flex-1 overflow-y-auto bg-background">
-			<div class="mx-auto max-w-4xl px-8 py-8">
-				{@render children()}
-			</div>
-		</main>
+		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+			<!-- Fork: phone top bar with the menu button (hidden from md up). -->
+			<header class="flex items-center gap-2 border-b border-sidebar-border bg-sidebar px-2 py-1.5 md:hidden">
+				<Button variant="ghost" size="icon" aria-label="Abrir menú" onclick={() => (navOpen = true)}>
+					<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+				</Button>
+				<span class="truncate text-sm font-medium">{activeLabel}</span>
+			</header>
+			<!-- Main content -->
+			<main class="flex-1 overflow-y-auto bg-background">
+				<div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
+					{@render children()}
+				</div>
+			</main>
+		</div>
 	</div>
 	</div>
+
+	<!-- Fork: the sidebar as a left-hand menu on phones (shadcn Dialog, no animation). -->
+	<Dialog.Root bind:open={navOpen}>
+		<Dialog.Content class="left-0 top-0 flex h-full w-72 max-w-[85vw] translate-x-0 translate-y-0 flex-col gap-0 overflow-y-auto rounded-none border-r border-sidebar-border bg-sidebar p-0 sm:rounded-none md:hidden data-[state=open]:animate-none! data-[state=closed]:animate-none!">
+			<Dialog.Title class="sr-only">Menú</Dialog.Title>
+			{@render sidebarContent()}
+		</Dialog.Content>
+	</Dialog.Root>
 
 	<Dialog.Root bind:open={reportOpen}>
 		<Dialog.Content class="max-w-md">
