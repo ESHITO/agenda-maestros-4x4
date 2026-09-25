@@ -125,8 +125,21 @@ export type Webhook = {
 	url: string;
 	events: string[];
 	fields?: string[];
+	/** Fork: event types this webhook is limited to; empty = every event type. */
+	event_type_ids?: string[];
 	is_active: boolean;
 	created_at: string;
+};
+
+/** Fork: GET /v1/webhooks/event-types - the event types a webhook may be limited to. */
+export type WebhookEventType = {
+	id: string;
+	slug: string;
+	name: string;
+	is_active: boolean;
+	archived: boolean;
+	owned: boolean;
+	owner_name: string;
 };
 
 export type WebhookDelivery = {

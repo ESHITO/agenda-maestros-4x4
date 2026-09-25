@@ -30,6 +30,8 @@ func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
 		URL    string   `json:"url"`
 		Events []string `json:"events"`
 		Fields []string `json:"fields"` // optional payload field selection; nil = default set
+		// Fork: limit to these event types (webhook_event_types.go); omitted/[] = every type.
+		EventTypeIDs []string `json:"event_type_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -59,7 +61,19 @@ func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	wh, secret, err := h.webhookSvc.Create(r.Context(), user.ID, req.URL, req.Events)
+	eventTypeIDs, msg, err := h.validateWebhookEventTypes(r.Context(), user, req.EventTypeIDs)
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "create webhook: check event types", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if msg != "" {
+		h.writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	// Fork: CreateWithEventTypes writes the filter in the webhook's own transaction.
+	wh, secret, err := h.webhookSvc.CreateWithEventTypes(r.Context(), user.ID, req.URL, req.Events, eventTypeIDs)
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "create webhook", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
@@ -83,19 +97,23 @@ func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
 		"secret":     secret,
 		"is_active":  wh.IsActive,
 		"created_at": wh.CreatedAt.UTC().Format(time.RFC3339),
+		// Fork: [] = every event type.
+		"event_type_ids": eventTypeIDsJSON(wh.EventTypeIDs),
 	})
 }
 
 // PatchWebhook handles PATCH /v1/webhooks/{id} — update events and/or the payload
-// field selection of an existing webhook.
+// field selection of an existing webhook. Fork: and/or its event-type filter
+// ("event_type_ids": null/omitted = unchanged, [] = every type).
 func (h *Handler) PatchWebhook(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())
 	id := r.PathValue("id")
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 
 	var req struct {
-		Events *[]string `json:"events"`
-		Fields *[]string `json:"fields"`
+		Events       *[]string `json:"events"`
+		Fields       *[]string `json:"fields"`
+		EventTypeIDs *[]string `json:"event_type_ids"` // fork
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -111,6 +129,29 @@ func (h *Handler) PatchWebhook(w http.ResponseWriter, r *http.Request) {
 				h.writeError(w, http.StatusBadRequest, "unknown event: "+e)
 				return
 			}
+		}
+	}
+	// Fork: validate the whole request before writing anything, then replace the filter
+	// (one transaction of its own) before the upstream update.
+	if req.EventTypeIDs != nil {
+		ids, msg, err := h.validateWebhookEventTypes(r.Context(), user, *req.EventTypeIDs)
+		if err != nil {
+			h.logger.ErrorContext(r.Context(), "update webhook: check event types", "error", err)
+			h.writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if msg != "" {
+			h.writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		if err := h.webhookSvc.SetEventTypes(r.Context(), user.ID, id, ids); err != nil {
+			if errors.Is(err, webhook.ErrNotFound) {
+				h.writeError(w, http.StatusNotFound, "webhook not found")
+				return
+			}
+			h.logger.ErrorContext(r.Context(), "update webhook: event types", "error", err)
+			h.writeError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 	}
 	if err := h.webhookSvc.Update(r.Context(), user.ID, id, req.Events, req.Fields); err != nil {
@@ -144,6 +185,8 @@ func (h *Handler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 			"fields":     wh.Fields,
 			"is_active":  wh.IsActive,
 			"created_at": wh.CreatedAt.UTC().Format(time.RFC3339),
+			// Fork: [] = every event type.
+			"event_type_ids": eventTypeIDsJSON(wh.EventTypeIDs),
 		}
 	}
 	h.writeJSON(w, http.StatusOK, map[string]any{"items": items})

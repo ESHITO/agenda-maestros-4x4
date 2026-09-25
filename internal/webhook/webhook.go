@@ -30,6 +30,9 @@ type Webhook struct {
 	Fields    []string // payload field keys; nil means the default set
 	IsActive  bool
 	CreatedAt time.Time
+	// EventTypeIDs (fork, fork_event_types.go) limits the webhook to bookings of these
+	// event types. Empty = every event type. Filled by List.
+	EventTypeIDs []string
 }
 
 // Payload field keys (the JSON keys in a delivery's "data" object).
@@ -171,6 +174,17 @@ func New(db *sql.DB, encKeyHex string) (*Service, error) {
 			return nil, fmt.Errorf("webhook: generate ephemeral key: %w", err)
 		}
 	}
+	// Fork: the event-type filter table is created in code, not by goose (see
+	// EnsureForkSchema). The boot path (cmd/calnode/fork_schema.go) already applied it
+	// with db.Migrate and exits if it cannot; this best-effort call serves the callers
+	// that skip that path (handler.New, tests). Its error is deliberately NOT returned: server.BuildHandler
+	// starts the worker only when New succeeds, so failing here would stop every
+	// background job (reminder e-mails, notetaker, all deliveries) over one optional
+	// table. If the table really is missing, matchingWebhooks errors and Enqueue delivers
+	// nothing - never to the wrong clients.
+	if db != nil {
+		_ = EnsureForkSchema(db)
+	}
 	return s, nil
 }
 
@@ -179,6 +193,12 @@ func New(db *sql.DB, encKeyHex string) (*Service, error) {
 // Create registers a webhook (fields default to the unset/original-payload set;
 // callers set field selection via Update).
 func (s *Service) Create(ctx context.Context, userID, url string, events []string) (*Webhook, string, error) {
+	return s.create(ctx, userID, url, events, nil)
+}
+
+// create is Create plus the fork's event-type filter (CreateWithEventTypes), both written
+// in one transaction. nil eventTypeIDs = every event type, exactly what Create did before.
+func (s *Service) create(ctx context.Context, userID, url string, events, eventTypeIDs []string) (*Webhook, string, error) {
 	rawSecret := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, rawSecret); err != nil {
 		return nil, "", fmt.Errorf("webhook: generate secret: %w", err)
@@ -196,21 +216,34 @@ func (s *Service) Create(ctx context.Context, userID, url string, events []strin
 	}
 
 	id := uid.New()
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("webhook: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO webhooks (id, user_id, url, events, secret_enc)
 		VALUES (?, ?, ?, ?, ?)`,
 		id, userID, url, string(eventsJSON), encSecret)
 	if err != nil {
 		return nil, "", fmt.Errorf("webhook: insert: %w", err)
 	}
+	// Fork: same transaction, so Enqueue never sees this webhook without its filter.
+	if err := insertEventTypeFilter(ctx, tx, id, eventTypeIDs); err != nil {
+		return nil, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, "", fmt.Errorf("webhook: commit: %w", err)
+	}
 
 	wh := &Webhook{
-		ID:        id,
-		UserID:    userID,
-		URL:       url,
-		Events:    events,
-		IsActive:  true,
-		CreatedAt: time.Now().UTC(),
+		ID:           id,
+		UserID:       userID,
+		URL:          url,
+		Events:       events,
+		IsActive:     true,
+		CreatedAt:    time.Now().UTC(),
+		EventTypeIDs: uniqueNonEmpty(eventTypeIDs),
 	}
 	return wh, plainSecret, nil
 }
@@ -278,7 +311,15 @@ func (s *Service) List(ctx context.Context, userID string) ([]Webhook, error) {
 		}
 		out = append(out, wh)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Fork: free the pool's single connection before the filter query below.
+	rows.Close() // #nosec G104 -- rows already fully consumed above; nothing actionable on close error
+	if err := s.attachEventTypeFilters(ctx, userID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Delete removes a webhook owned by userID. Returns ErrNotFound if it doesn't exist.
@@ -421,8 +462,8 @@ type matchedWebhook struct {
 	fields []string // nil = default set
 }
 
-// matchingWebhooks returns the active webhooks that should receive event for a booking
-// hosted by hostID.
+// matchingWebhooks returns the active webhooks that should receive event for the booking
+// bookingID hosted by hostID.
 //
 // Scope - FORK BEHAVIOUR (Agenda Maestros 4x4), deliberately wider than upstream: a
 // booking reaches its host's own webhooks AND the webhooks of the workspace owner(s)
@@ -430,12 +471,21 @@ type matchedWebhook struct {
 // notices once and receives every mentor's appointments; mentors still receive only
 // their own. It is ONE query with an OR, so an owner who is also the host gets each of
 // their webhooks once, never twice. Upstream keys on user_id = host only.
-func (s *Service) matchingWebhooks(ctx context.Context, event, hostID string) ([]matchedWebhook, error) {
+//
+// Event-type filter - FORK (fork_event_types.go): after event and scope, a webhook with
+// rows in webhook_event_type_filters is kept only when one of them is the booking's
+// bookings.event_type_id. Same query, no extra round trip. No rows = every type; an
+// unknown booking (bookingID "" or gone) never matches a filtered webhook.
+func (s *Service) matchingWebhooks(ctx context.Context, event, hostID, bookingID string) ([]matchedWebhook, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, events, fields FROM webhooks
-		WHERE is_active = 1
-		  AND (user_id = ?
-		       OR user_id IN (SELECT id FROM users WHERE is_owner = 1 AND archived_at IS NULL))`, hostID)
+		SELECT w.id, w.events, w.fields FROM webhooks w
+		WHERE w.is_active = 1
+		  AND (w.user_id = ?
+		       OR w.user_id IN (SELECT id FROM users WHERE is_owner = 1 AND archived_at IS NULL))
+		  AND (NOT EXISTS (SELECT 1 FROM webhook_event_type_filters f WHERE f.webhook_id = w.id)
+		       OR EXISTS (SELECT 1 FROM webhook_event_type_filters f
+		                  JOIN bookings b ON b.event_type_id = f.event_type_id
+		                  WHERE f.webhook_id = w.id AND b.id = ?))`, hostID, bookingID)
 	if err != nil {
 		return nil, fmt.Errorf("webhook: list for enqueue: %w", err)
 	}
@@ -473,12 +523,13 @@ func (s *Service) matchingWebhooks(ctx context.Context, event, hostID string) ([
 	return matching, nil
 }
 
-// WantsField reports whether any webhook that would receive event for a booking hosted
-// by hostID has field selected (an unconfigured webhook means defaultFields). Callers use
-// it before paying for a value that has a side effect - FieldManageURL mints a manage
-// token row per call - so nothing is minted when nobody asked for the link.
-func (s *Service) WantsField(ctx context.Context, event, hostID, field string) (bool, error) {
-	matching, err := s.matchingWebhooks(ctx, event, hostID)
+// WantsField reports whether any webhook that would receive event for the booking
+// bookingID hosted by hostID has field selected (an unconfigured webhook means
+// defaultFields). Callers use it before paying for a value that has a side effect -
+// FieldManageURL mints a manage token row per call - so nothing is minted when nobody
+// asked for the link. bookingID lets the fork's event-type filter count too.
+func (s *Service) WantsField(ctx context.Context, event, hostID, bookingID, field string) (bool, error) {
+	matching, err := s.matchingWebhooks(ctx, event, hostID, bookingID)
 	if err != nil {
 		return false, err
 	}
@@ -497,11 +548,11 @@ func (s *Service) WantsField(ctx context.Context, event, hostID, field string) (
 }
 
 // Enqueue finds all active webhooks in scope for p.HostID (its own plus the workspace
-// owner's - see matchingWebhooks) that subscribe to event, and creates a
-// webhook_deliveries + jobs row pair for each. Failures are soft-errors (caller logs;
-// a booking is already committed).
+// owner's - see matchingWebhooks) that subscribe to event and whose event-type filter, if
+// any, includes the booking's type, and creates a webhook_deliveries + jobs row pair for
+// each. Failures are soft-errors (caller logs; a booking is already committed).
 func (s *Service) Enqueue(ctx context.Context, event string, p BookingPayload) error {
-	matching, err := s.matchingWebhooks(ctx, event, p.HostID)
+	matching, err := s.matchingWebhooks(ctx, event, p.HostID, p.ID)
 	if err != nil {
 		return err
 	}

@@ -37,6 +37,9 @@ import (
 // MCP server over stdio. The returned drain func blocks until the background worker
 // has finished its current poll cycle.
 func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) (*handler.Handler, func()) {
+	// Fork: the webhook event-type filter table (webhook.EnsureForkSchema) is applied by the
+	// callers together with db.Migrate (cmd/calnode/fork_schema.go), which exit if it
+	// fails, exactly like a failed migration.
 	h := handler.New(db, logger)
 	h.SetBaseURL(cfg.BaseURL)
 	h.SetPublicBaseURL(cfg.PublicBaseURL)
@@ -536,6 +539,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/webhooks", h.RequireAuth(h.CreateWebhook))
 	mux.HandleFunc("GET /v1/webhooks", h.RequireAuth(h.ListWebhooks))
 	mux.HandleFunc("GET /v1/webhooks/settings", h.RequireAuth(h.GetWebhookSettings)) // fork: reminder hour + team scope
+	// Fork: the event types a webhook may be limited to (webhook_event_types.go).
+	mux.HandleFunc("GET /v1/webhooks/event-types", h.RequireAuth(h.ListWebhookEventTypes))
 	mux.HandleFunc("PATCH /v1/webhooks/{id}", h.RequireAuth(h.PatchWebhook))
 	mux.HandleFunc("DELETE /v1/webhooks/{id}", h.RequireAuth(h.DeleteWebhook))
 	mux.HandleFunc("GET /v1/webhooks/{id}/deliveries", h.RequireAuth(h.ListWebhookDeliveries))

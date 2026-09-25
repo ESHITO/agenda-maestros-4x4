@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type Webhook, type WebhookDelivery } from '$lib/api';
+	import { api, type Webhook, type WebhookDelivery, type WebhookEventType } from '$lib/api';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { Input } from '$lib/components/ui/input';
@@ -87,11 +87,31 @@
 	];
 	const allFieldKeys = fieldGroups.flatMap((g) => g.fields.map((f) => f.key));
 
+	// Event types a webhook may be limited to (fork: GET /v1/webhooks/event-types). For the
+	// owner that is every type of the team, since the owner's webhooks get every booking.
+	// Inactive ones are kept only to name the filters already saved.
+	let eventTypes: WebhookEventType[] = $state([]);
+	let eventTypesLoaded = $state(false);
+	let eventTypesFailed = $state(false);
+	const activeEventTypes = $derived(eventTypes.filter((t) => t.is_active && !t.archived));
+	// id → how the list names a type, by the same rule as the checkboxes: the name, plus
+	// "— de <dueño>" for someone else's, plus the slug when two would still read the same
+	// (names are not unique: two mentors can each have a «Mentoría privada»).
+	const eventTypeLabels = $derived.by(() => {
+		const base = (t: WebhookEventType) => t.name + (!t.owned && t.owner_name ? ` — de ${t.owner_name}` : '');
+		const seen = new Map<string, number>();
+		for (const t of eventTypes) seen.set(base(t), (seen.get(base(t)) ?? 0) + 1);
+		return new Map(eventTypes.map((t) => [t.id, (seen.get(base(t)) ?? 0) > 1 ? `${base(t)} (${t.slug})` : base(t)]));
+	});
+
 	// No event pre-selected: each FunnelChat flow gets its own webhook, and a default like
 	// "created + cancelled" would also fire a "5 minutes before" flow at booking time.
-	let form = $state<{ url: string; events: string[]; fields: string[] }>({
-		url: '', events: [], fields: [...allFieldKeys]
+	// typeMode 'all' = every event type (event_type_ids []), 'some' = only the ticked ones.
+	type WebhookForm = { url: string; events: string[]; fields: string[]; typeMode: 'all' | 'some'; eventTypeIds: string[] };
+	const emptyForm = (): WebhookForm => ({
+		url: '', events: [], fields: [...allFieldKeys], typeMode: 'all', eventTypeIds: []
 	});
+	let form = $state<WebhookForm>(emptyForm());
 
 	// Delivery log (lazy-loaded per webhook).
 	let openDeliveries = $state<string | null>(null);
@@ -127,9 +147,21 @@
 		}
 	}
 
+	async function loadEventTypes() {
+		try {
+			const res = await api.get<{ items: WebhookEventType[] }>('/v1/webhooks/event-types');
+			eventTypes = res.items ?? [];
+		} catch {
+			eventTypesFailed = true;
+		} finally {
+			eventTypesLoaded = true;
+		}
+	}
+
 	onMount(() => {
 		load();
 		loadSettings();
+		loadEventTypes();
 	});
 
 	async function create() {
@@ -137,10 +169,19 @@
 		if (!form.url) { createError = 'La URL es obligatoria.'; return; }
 		if (!form.url.startsWith('https://')) { createError = 'La URL debe comenzar con https://'; return; }
 		if (form.events.length === 0) { createError = 'Selecciona al menos un evento.'; return; }
+		if (form.typeMode === 'some' && form.eventTypeIds.length === 0) {
+			createError = 'Marca al menos un tipo de cita, o elige «Todos los tipos».';
+			return;
+		}
 		creating = true;
 		try {
-			await api.post('/v1/webhooks', { url: form.url, events: form.events, fields: form.fields });
-			form = { url: '', events: [], fields: [...allFieldKeys] };
+			await api.post('/v1/webhooks', {
+				url: form.url,
+				events: form.events,
+				fields: form.fields,
+				event_type_ids: form.typeMode === 'some' ? form.eventTypeIds : []
+			});
+			form = emptyForm();
 			showCreate = false;
 			await load();
 		} catch (e: any) {
@@ -174,6 +215,31 @@
 		} else {
 			form.events = [...form.events, ev];
 		}
+	}
+
+	function toggleEventType(id: string) {
+		form.eventTypeIds = form.eventTypeIds.includes(id)
+			? form.eventTypeIds.filter((t) => t !== id)
+			: [...form.eventTypeIds, id];
+	}
+
+	// "Todos los tipos" or the names of the types a webhook is limited to. An inactive
+	// webhook with no types left lost its last type (the server switched it off rather than
+	// let it widen to every type), so it must not read "Todos los tipos".
+	function typesLabel(wh: Webhook): string {
+		const ids = wh.event_type_ids ?? [];
+		if (ids.length === 0) return wh.is_active ? 'Todos los tipos' : 'Ninguno (no envía nada)';
+		if (!eventTypesLoaded) return '…';
+		// Only the names failed to load; the filter itself is intact, so say that.
+		if (eventTypesFailed) {
+			const n = ids.length === 1 ? '1 tipo' : `${ids.length} tipos`;
+			return `Limitado a ${n} de cita (no se pudieron cargar los nombres; recarga la página)`;
+		}
+		// Loaded, yet an id is missing: a deleted type takes its filter row with it, so this
+		// one still exists but is out of this user's reach - a type they no longer attend
+		// (or, for the owner, one created after the page loaded).
+		const missing = teamScope ? 'un tipo de cita nuevo (recarga la página)' : 'un tipo de cita que ya no atiendes';
+		return ids.map((id) => eventTypeLabels.get(id) ?? missing).join(', ');
 	}
 
 	function toggleField(key: string) {
@@ -257,6 +323,45 @@
 			{/each}
 		</div>
 
+		<div class="mb-4 space-y-2">
+			<p class="text-sm font-medium">¿Para qué tipos de cita?</p>
+			<p class="text-xs text-muted-foreground">Para WhatsApp, elige solo los tipos de cita que deben recibir este mensaje. Las demás citas no lo enviarán.</p>
+			<div class="flex flex-col gap-2 sm:flex-row" role="radiogroup" aria-label="¿Para qué tipos de cita?">
+				{#each [{ value: 'all', label: 'Todos los tipos', hint: 'también los que crees después' }, { value: 'some', label: 'Solo algunos tipos', hint: 'tú eliges cuáles' }] as opt (opt.value)}
+					<label class="flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring {form.typeMode === opt.value ? 'border-primary bg-primary/5' : 'bg-background hover:bg-accent/50'}">
+						<input type="radio" name="wh-type-mode" bind:group={form.typeMode} value={opt.value} class="sr-only" />
+						<span class="font-medium">{opt.label}</span>
+						<span class="text-xs text-muted-foreground">({opt.hint})</span>
+					</label>
+				{/each}
+			</div>
+			{#if form.typeMode === 'some'}
+				<div class="space-y-1.5 rounded-md border bg-background p-3">
+					{#if !eventTypesLoaded}
+						<p class="text-sm text-muted-foreground">Cargando tipos de cita…</p>
+					{:else if eventTypesFailed}
+						<p class="text-sm text-destructive">No se pudo cargar la lista de tipos de cita. Recarga la página.</p>
+					{:else if activeEventTypes.length === 0}
+						<p class="text-sm text-muted-foreground">No hay tipos de cita activos.</p>
+					{:else}
+						{#each activeEventTypes as et (et.id)}
+							<label class="flex cursor-pointer items-start gap-2 text-sm">
+								<Checkbox
+									class="mt-0.5"
+									checked={form.eventTypeIds.includes(et.id)}
+									onCheckedChange={() => toggleEventType(et.id)}
+								/>
+								<span class="min-w-0">
+									<span class="font-medium">{et.name}</span>{#if !et.owned && et.owner_name}<span class="text-muted-foreground">{` — de ${et.owner_name}`}</span>{/if}
+									<span class="block break-all font-mono text-xs text-muted-foreground">{et.slug}</span>
+								</span>
+							</label>
+						{/each}
+					{/if}
+				</div>
+			{/if}
+		</div>
+
 		<div class="mb-4 space-y-3">
 			<p class="text-sm font-medium">Datos a enviar <span class="font-normal text-muted-foreground">— desmarca lo que no quieras enviar</span></p>
 			{#each fieldGroups as grp}
@@ -292,12 +397,13 @@
 		<p class="mt-1 text-sm text-muted-foreground">Agrega un webhook para recibir notificaciones en tiempo real de eventos de reservas.</p>
 	</div>
 {:else}
-	<div class="rounded-lg border bg-card overflow-hidden">
+	<div class="rounded-lg border bg-card overflow-x-auto">
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b">
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">URL</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Eventos</th>
+					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Tipos de cita</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Campos</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Estado</th>
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Creado</th>
@@ -308,8 +414,9 @@
 				<Tooltip.Provider>
 					{#each items as wh}
 						<tr class="transition-colors hover:bg-muted/30">
-							<td class="max-w-xs overflow-hidden text-ellipsis whitespace-nowrap px-4 py-3 font-mono text-xs">{wh.url}</td>
+							<td class="max-w-56 overflow-hidden text-ellipsis whitespace-nowrap px-4 py-3 font-mono text-xs" title={wh.url}>{wh.url}</td>
 							<td class="px-4 py-3 text-xs text-muted-foreground">{(wh.events ?? []).join(', ')}</td>
+							<td class="min-w-36 px-4 py-3 text-xs">{typesLabel(wh)}</td>
 							<td class="px-4 py-3 text-xs text-muted-foreground">{(wh.fields ?? []).length} campos</td>
 							<td class="px-4 py-3">
 								{#if wh.is_active}
@@ -336,7 +443,7 @@
 						</tr>
 						{#if openDeliveries === wh.id}
 							<tr class="bg-muted/20">
-								<td colspan="6" class="px-4 py-3">
+								<td colspan="7" class="px-4 py-3">
 									{#if deliveriesLoading}
 										<p class="text-xs text-muted-foreground">Cargando entregas…</p>
 									{:else if deliveries.length === 0}
@@ -375,4 +482,7 @@
 			</tbody>
 		</table>
 	</div>
+	{#if items.some((wh) => !wh.is_active)}
+		<p class="mt-3 text-sm text-muted-foreground">Un webhook queda «Inactivo» si se elimina el único tipo de cita al que estaba limitado: así no empieza a avisar de todas las citas. Si todavía lo necesitas, elimínalo y créalo de nuevo.</p>
+	{/if}
 {/if}

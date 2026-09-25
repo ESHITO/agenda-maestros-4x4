@@ -188,8 +188,8 @@ crossed the line** - move it into `book.go` and send the result.
 The owner sends WhatsApp through **FunnelChat**: each webhook points at its own FunnelChat
 flow, which maps JSON keys (`data.attendee_phone`, ...). FunnelChat **cannot branch on
 `event`**, so every moment is a separate event and the operator creates one webhook per
-message. No schema change was needed for any of this - keep it that way (this fork's goose
-numbers 00066/00067 already collide with upstream's).
+message. No goose migration was added for any of this - keep it that way (this fork's goose
+numbers 00066/00067 already collide with upstream's); the one fork table is made in code (below).
 
 - **Events.** `booking.created` is the confirmation. Fork adds `booking.reminder_morning`
   (the meeting's day at `REMINDER_MORNING_HOUR` in the **attendee's** zone),
@@ -244,6 +244,17 @@ numbers 00066/00067 already collide with upstream's).
   stored as hashes). It sits in `webhook_deliveries.payload` only while the delivery is in
   flight: the worker calls `webhook.Service.ScrubManageURL` when it succeeds or runs out of
   attempts. Keep it that way if you add a delivery path.
+- **Event-type filter** (`internal/webhook/fork_event_types.go`): `event_type_ids` on POST/PATCH/GET
+  `/v1/webhooks` (PATCH: null/omitted = unchanged); **empty = every type**, else only bookings of those
+  types, for every event (one `NOT EXISTS`/`EXISTS` in `matchingWebhooks`; no booking id = no match).
+  Table `webhook_event_type_filters` is made by `webhook.EnsureForkSchema` (idempotent, NOT goose - see
+  above); CASCADE on both FKs, and a trigger switches a webhook off (`is_active = 0`) when its last listed
+  type is deleted, since "no rows" would widen it to every type. Boot wraps `db.Migrate` in
+  `migrateWithForkSchema` (`cmd/calnode/fork_schema.go`): with migrations pending it drops the trigger first
+  (it names `webhooks`, and SQLite's RENAME re-checks every trigger, so an upstream rebuild of `webhooks`
+  would fail), then re-creates the schema or stops the boot; `webhook.New` retries it best effort, never failing.
+  Only the owner may pick any type; everyone else, admins included (their webhooks get only the bookings
+  they host), their own or hosted (`GET /v1/webhooks/event-types`).
 - The panel pre-selects no event (one webhook per FunnelChat flow). There is no "send test"
   button; to map a flow in FunnelChat, make a real booking.
 

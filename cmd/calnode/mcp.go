@@ -37,7 +37,8 @@ func runMCPStdio(_ []string) {
 	}
 	defer database.Close()
 
-	if err := db.Migrate(database); err != nil {
+	// Fork: db.Migrate plus the webhook event-type filter schema (fork_schema.go).
+	if err := migrateWithForkSchema(context.Background(), database); err != nil {
 		logger.Error("mcp: failed to run migrations", "error", err)
 		os.Exit(1)
 	}

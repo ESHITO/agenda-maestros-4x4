@@ -89,7 +89,7 @@ func TestWantsField_scopeAndSelection(t *testing.T) {
 
 	// Unconfigured webhook = default set, which does not include manage_url.
 	e.svc.Create(ctx, testUserID, "https://member.example.com/hook", []string{webhook.EventReminder5m})
-	if ok, err := e.svc.WantsField(ctx, webhook.EventReminder5m, testUserID, webhook.FieldManageURL); err != nil || ok {
+	if ok, err := e.svc.WantsField(ctx, webhook.EventReminder5m, testUserID, "", webhook.FieldManageURL); err != nil || ok {
 		t.Fatalf("WantsField = %v, %v; want false (default set has no manage_url)", ok, err)
 	}
 	// The owner selects it: now wanted for the member's booking too.
@@ -98,11 +98,11 @@ func TestWantsField_scopeAndSelection(t *testing.T) {
 	if err := e.svc.Update(ctx, ownerUser, wh.ID, nil, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := e.svc.WantsField(ctx, webhook.EventReminder5m, testUserID, webhook.FieldManageURL); !ok {
+	if ok, _ := e.svc.WantsField(ctx, webhook.EventReminder5m, testUserID, "", webhook.FieldManageURL); !ok {
 		t.Error("WantsField = false; want true via the owner's webhook")
 	}
 	// ...but not for an event nobody subscribes to.
-	if ok, _ := e.svc.WantsField(ctx, webhook.EventReminderMorning, testUserID, webhook.FieldManageURL); ok {
+	if ok, _ := e.svc.WantsField(ctx, webhook.EventReminderMorning, testUserID, "", webhook.FieldManageURL); ok {
 		t.Error("WantsField = true for an unsubscribed event")
 	}
 }

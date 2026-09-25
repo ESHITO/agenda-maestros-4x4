@@ -341,7 +341,7 @@ func (h *Handler) webhookManageURL(ctx context.Context, event, hostID, bookingID
 	if h.webhookSvc == nil {
 		return ""
 	}
-	want, err := h.webhookSvc.WantsField(ctx, event, hostID, webhook.FieldManageURL)
+	want, err := h.webhookSvc.WantsField(ctx, event, hostID, bookingID, webhook.FieldManageURL)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "webhook manage url: check subscribers", "error", err, "booking_id", bookingID)
 		return ""
