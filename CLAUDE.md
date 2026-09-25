@@ -183,6 +183,70 @@ arguments) and nothing else; it is not a printf and must not become one.
 **If you are building a plural form, a duration or a date format in JavaScript, you have
 crossed the line** - move it into `book.go` and send the result.
 
+## Webhooks - WhatsApp confirmations and reminders (fork)
+
+The owner sends WhatsApp through **FunnelChat**: each webhook points at its own FunnelChat
+flow, which maps JSON keys (`data.attendee_phone`, ...). FunnelChat **cannot branch on
+`event`**, so every moment is a separate event and the operator creates one webhook per
+message. No schema change was needed for any of this - keep it that way (this fork's goose
+numbers 00066/00067 already collide with upstream's).
+
+- **Events.** `booking.created` is the confirmation. Fork adds `booking.reminder_morning`
+  (the meeting's day at `REMINDER_MORNING_HOUR` in the **attendee's** zone),
+  `booking.reminder_1h` and `booking.reminder_5m` (constants in `internal/webhook/fork_fields.go`,
+  accepted by `validWebhookEvents`). Payload = the booking.created shape.
+- **Job `webhook.reminder`** (`internal/handler/webhook_reminders.go`, registered in
+  `server.go`): one `jobs` row per moment, payload `{"booking_id","kind","start_at"}`
+  (kind `morning|1h|5m`, start_at = the start it was planned for, RFC3339 UTC), `INSERT OR
+  IGNORE` on the live `(type, payload)` index plus a `NOT EXISTS` so a reminder that already
+  ran for that start is never planned twice. Written in `dispatchBookingConfirmation`
+  (every creation path: page, API, embed, MCP/assistant, Group, paid-after-Stripe), replaced
+  in `rescheduleSideEffects` (panel, `/manage`, MCP) and in `ReassignBooking` (same start,
+  but the zone can change - see below), deleted in `cancelSideEffects`. The job re-checks at
+  run time and does nothing if the booking is gone, not `confirmed`, its start_at no longer
+  matches, or it is late enough to be false (`reminderSuperseded`: morning dropped once the
+  1 h moment has come, 1 h once the 5 min one has, 5 min once the meeting started - a worker
+  back from downtime must not send a burst) - a stale row is harmless.
+- **Order is always morning → 1 h → 5 min.** Morning is planned only when it falls strictly
+  before the 1 h reminder (`morningReminderAt`; with 08:00, a 08:30 or 09:00 meeting gets
+  none, 09:05 does) and after now; 1h/5m only if still future. `planWebhookReminders` is
+  pure and carries the tests (zones, DST, same-day bookings, the ordering property).
+  `BackfillWebhookReminders` runs at every boot (idempotent) so bookings made before an
+  upgrade get their jobs too, and `syncMorningReminder` re-applies the current
+  `REMINDER_MORNING_HOUR` and zone to morning jobs still pending (moves or drops them;
+  `run_at` is deliberately NOT in the payload, or each change would add a duplicate). The
+  worker is in-process: a host that sleeps when idle sends reminders late or drops them -
+  keep the instance always on.
+- **`REMINDER_MORNING_HOUR`** (`HH:MM`, default `08:00`): `config.Validate` refuses a bad
+  value at boot. Exposed to the panel via `GET /v1/webhooks/settings`
+  (`{reminder_morning_hour, team_scope}`).
+- **Owner scope.** `webhook.Service.Enqueue` sends to the host's webhooks **and** those of
+  the workspace owner (`is_owner = 1`, not archived) - one query with an OR, so no
+  duplicates. The owner configures the team's notices once; mentors still get only their own.
+  Upstream isolates strictly by host; this is a deliberate divergence. A mentor's panel says
+  so, since a mentor webhook repeating the owner's message makes the client get it twice.
+- **Fork payload fields** (appended to `AllFields`, never in `defaultFields`, omitted when
+  empty): `attendee_phone` (E.164 from the first `phone` question, else a telephone
+  booking's `tel:` location; a number with no `+`/`00` is **omitted**, never sent as local
+  digits - FunnelChat/wa.me would read its first digits as a country code and message a
+  stranger), `attendee_whatsapp` (digits only, wa.me), `start_local` / `start_local_date` /
+  `start_local_time` (attendee zone - a stored `UTC` counts as unknown and falls back to the
+  host's - in `FORCE_LOCALE`, else the booker's locale, else `es`), `start_local_long`
+  ("martes 9 de marzo de 2027, 09:00": the short Spanish forms make "mar" both martes and
+  marzo; long names are a Spanish table in `fork_fields.go`, other locales get start_local's
+  text), `start_local_timezone` (the zone those texts are really in - `attendee_timezone`
+  stays the raw stored value and can say `UTC`), `manage_url` (`/manage/{token}`; the
+  caller fills `BookingPayload.ManageURL`, reusing the e-mail's token when there is one, else
+  an **additive** `IssueManageToken` - never Rotate - and only when a receiving webhook
+  selected the field, via `WantsField`). `location_value` is unchanged: it is already the
+  attendee's join link.
+- **`manage_url` is the only credential kept in clear in the database** (manage tokens are
+  stored as hashes). It sits in `webhook_deliveries.payload` only while the delivery is in
+  flight: the worker calls `webhook.Service.ScrubManageURL` when it succeeds or runs out of
+  attempts. Keep it that way if you add a delivery path.
+- The panel pre-selects no event (one webhook per FunnelChat flow). There is no "send test"
+  button; to map a flow in FunnelChat, make a real booking.
+
 ## Email - two transports, and the SMTP trap
 
 `internal/mailer` has **two** real transports behind one `Mailer` interface: `smtp.go` and

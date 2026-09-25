@@ -155,6 +155,14 @@ func (h *Handler) ReassignBooking(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Fork: re-plan the reminder webhooks with the NEW host. The time is unchanged,
+		// but the morning moment is set in the attendee's zone, and an attendee with no
+		// stored zone (API/MCP bookings) borrows the host's - as start_local does at send
+		// time. First, before the calendar calls below can use up ctx.
+		if err := h.replaceWebhookReminders(ctx, bCopy.ID, bCopy.StartAt); err != nil {
+			h.logger.Error("reassign: replace webhook reminders", "error", err, "booking_id", bCopy.ID)
+		}
+
 		// Move the Google Calendar event: remove from the old host, recreate on
 		// the new host, and persist the new event ID (clearing it if recreation
 		// produced nothing, e.g. the new host has no destination calendar).
@@ -228,6 +236,8 @@ func (h *Handler) ReassignBooking(w http.ResponseWriter, r *http.Request) {
 				Status:        bCopy.Status,
 				LocationValue: bCopy.LocationValue,
 				CreatedAt:     bCopy.CreatedAt.UTC().Format(time.RFC3339),
+				// Fork: additive token (links already sent keep working).
+				ManageURL: h.webhookManageURL(ctx, "booking.rescheduled", newHostID, bCopy.ID, ""),
 			}); err != nil {
 				h.logger.Error("reassign: enqueue webhook", "error", err, "booking_id", bCopy.ID)
 			}

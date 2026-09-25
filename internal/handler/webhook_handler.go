@@ -17,6 +17,9 @@ import (
 var validWebhookEvents = []string{
 	"booking.created", "booking.cancelled", "booking.rescheduled",
 	"recording.completed", "transcript.ready", "notes.ready",
+	// Fork: scheduled reminders (webhook_reminders.go), one event per moment because
+	// FunnelChat cannot branch on "event".
+	webhook.EventReminderMorning, webhook.EventReminder1h, webhook.EventReminder5m,
 }
 
 func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {

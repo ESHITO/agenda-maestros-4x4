@@ -293,6 +293,13 @@ func (h *Handler) rescheduleSideEffects(bCopy booking.Booking, capturedEtID stri
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Fork: re-plan the reminder webhooks first, before anything below can return early
+	// or the e-mails can use up ctx. A stale job would skip itself anyway (its start_at
+	// no longer matches), but without this the new time would get no reminders at all.
+	if err := h.replaceWebhookReminders(ctx, bCopy.ID, bCopy.StartAt); err != nil {
+		h.logger.Error("reschedule: replace webhook reminders", "error", err, "booking_id", bCopy.ID)
+	}
+
 	d, err := h.loadCancellationData(ctx, &bCopy)
 	if err != nil {
 		h.logger.Error("reschedule: load email data", "error", err, "booking_id", bCopy.ID)
@@ -348,6 +355,8 @@ func (h *Handler) rescheduleSideEffects(bCopy booking.Booking, capturedEtID stri
 			CreatedAt:       bCopy.CreatedAt.UTC().Format(time.RFC3339),
 			PreviousStartAt: previousStart.UTC().Format(time.RFC3339),
 			PreviousEndAt:   previousEnd.UTC().Format(time.RFC3339),
+			// Fork: the link just rotated for the reschedule e-mail (old links are dead now).
+			ManageURL: h.webhookManageURL(ctx, "booking.rescheduled", bCopy.HostID, bCopy.ID, d.ManageURL),
 		}); err != nil {
 			h.logger.Error("enqueue booking.rescheduled webhook", "error", err, "booking_id", bCopy.ID)
 		}

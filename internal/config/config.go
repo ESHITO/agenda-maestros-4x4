@@ -59,6 +59,11 @@ type Config struct {
 	// on borrowed computers set to English. Unsupported codes are ignored at boot.
 	ForceLocale string
 
+	// ReminderMorningHour (fork, REMINDER_MORNING_HOUR, "HH:MM", default "08:00") is when
+	// the booking.reminder_morning webhook fires: that clock time on the day of the
+	// meeting, in the ATTENDEE's zone. Validate refuses a malformed value.
+	ReminderMorningHour string
+
 	// CookieSecure sets the Secure flag on session cookies. Defaults to true
 	// when BASE_URL starts with https://, but can be overridden explicitly via
 	// COOKIE_SECURE=false for HTTPS-terminated-at-proxy setups where the binary
@@ -142,6 +147,7 @@ func Load() *Config {
 		EmbedAllowedOrigins: splitCSV(getEnv("EMBED_ALLOWED_ORIGINS", "")),
 		DataDir:             getEnv("DATA_DIR", "data"),
 		ForceLocale:         strings.TrimSpace(getEnv("FORCE_LOCALE", "")),
+		ReminderMorningHour: strings.TrimSpace(getEnv("REMINDER_MORNING_HOUR", DefaultReminderMorningHour)),
 		TrustedProxyCIDRs:   splitCSV(getEnv("TRUSTED_PROXY_CIDRS", "")),
 		// Space-separated, not comma: the value goes into a CSP source list verbatim, so
 		// it reads the same in the env var as it does in the header.
@@ -174,7 +180,23 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("FRAME_ANCESTORS: %w", err)
 		}
 	}
+	// A typo here would otherwise silently move every client's morning WhatsApp.
+	if c.ReminderMorningHour != "" && !ValidClockTime(c.ReminderMorningHour) {
+		return fmt.Errorf("REMINDER_MORNING_HOUR: %q must be a 24-hour HH:MM time, e.g. 08:00", c.ReminderMorningHour)
+	}
 	return nil
+}
+
+// DefaultReminderMorningHour is REMINDER_MORNING_HOUR when unset.
+const DefaultReminderMorningHour = "08:00"
+
+// ValidClockTime reports whether s is a 24-hour "HH:MM" clock time (00:00-23:59).
+func ValidClockTime(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	_, err := time.Parse("15:04", s)
+	return err == nil
 }
 
 // validFrameAncestor accepts 'self' or an https origin with no path, credentials, query

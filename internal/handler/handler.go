@@ -50,6 +50,7 @@ type Handler struct {
 	livekit           *livekit.Client // nil when LiveKit video is unconfigured
 	demoMode          bool            // true on the public demo instance: disables calendar/Zoom connect
 	forceLocale       string          // FORCE_LOCALE: every public surface in this one locale ("" = per visitor); see i18n.go
+	reminderMorning   string          // fork: REMINDER_MORNING_HOUR "HH:MM" ("" = default 08:00); see webhook_reminders.go
 	demoResetInterval time.Duration
 	demoMu            sync.RWMutex
 	demoNextResetAt   time.Time

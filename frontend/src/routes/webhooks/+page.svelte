@@ -8,20 +8,34 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { currentUser } from '$lib/stores';
 
 	let items: Webhook[] = $state([]);
 	let loading = $state(true);
 	let error = $state('');
 	let showCreate = $state(false);
 
-	const allEvents = [
-		'booking.created',
-		'booking.cancelled',
-		'booking.rescheduled',
-		'recording.completed',
-		'transcript.ready',
-		'notes.ready'
-	];
+	// GET /v1/webhooks/settings (fork): the morning reminder hour (REMINDER_MORNING_HOUR)
+	// and whether this user's webhooks receive the whole team's bookings (the owner).
+	let morningHour = $state('08:00');
+	let teamScope = $state(false);
+	let settingsLoaded = $state(false);
+
+	// Event catalog (keys must match the backend's validWebhookEvents). The three
+	// reminders are separate events on purpose: FunnelChat can't branch on "event",
+	// so each WhatsApp message gets its own webhook → its own flow.
+	type EventDef = { key: string; label: string; description?: string };
+	const eventDefs: EventDef[] = $derived([
+		{ key: 'booking.created', label: 'Cita agendada', description: 'confirmación en cuanto se reserva' },
+		{ key: 'booking.cancelled', label: 'Cita cancelada' },
+		{ key: 'booking.rescheduled', label: 'Cita reprogramada' },
+		{ key: 'booking.reminder_morning', label: 'Recordatorio de la mañana', description: `el mismo día a las ${morningHour}, hora del cliente; solo si la cita es más de 1 hora después` },
+		{ key: 'booking.reminder_1h', label: 'Recordatorio 1 hora antes' },
+		{ key: 'booking.reminder_5m', label: 'Recordatorio 5 minutos antes' },
+		{ key: 'recording.completed', label: 'Grabación lista' },
+		{ key: 'transcript.ready', label: 'Transcripción lista' },
+		{ key: 'notes.ready', label: 'Notas de la reunión listas' }
+	]);
 
 	// Payload field catalog (keys must match the backend's webhook field keys).
 	// `pii` flags personal data so the operator chooses consciously what leaves the system.
@@ -37,6 +51,14 @@
 			{ key: 'cancellation_reason', label: 'Motivo de cancelación' },
 			{ key: 'previous_start_at', label: 'Inicio anterior (reprogramación)' },
 			{ key: 'previous_end_at', label: 'Fin anterior (reprogramación)' },
+			{ key: 'start_local', label: 'Fecha y hora del cliente (texto)' },
+			{ key: 'start_local_date', label: 'Fecha del cliente (texto)' },
+			{ key: 'start_local_time', label: 'Hora del cliente (texto)' },
+			{ key: 'start_local_long', label: 'Fecha y hora del cliente, en palabras (martes 9 de marzo de 2027, 09:00)' },
+			// The zone the three texts above are in; can be the host's when the client's is unknown.
+			{ key: 'start_local_timezone', label: 'Zona horaria de esa fecha y hora', pii: true },
+			// A bearer link: whoever holds it can reschedule or cancel the booking.
+			{ key: 'manage_url', label: 'Enlace para cambiar o cancelar', pii: true },
 		] },
 		{ group: 'Pago', fields: [
 			{ key: 'payment_status', label: 'Estado del pago' },
@@ -56,6 +78,8 @@
 			{ key: 'attendee_name', label: 'Nombre del asistente', pii: true },
 			{ key: 'attendee_email', label: 'Correo del asistente', pii: true },
 			{ key: 'attendee_timezone', label: 'Zona horaria del asistente', pii: true },
+			{ key: 'attendee_phone', label: 'Teléfono del asistente (+51987654321)', pii: true },
+			{ key: 'attendee_whatsapp', label: 'WhatsApp del asistente (51987654321)', pii: true },
 		] },
 		{ group: 'Cuestionario', pii: true, fields: [
 			{ key: 'answers', label: 'Respuestas del cuestionario', pii: true },
@@ -63,8 +87,10 @@
 	];
 	const allFieldKeys = fieldGroups.flatMap((g) => g.fields.map((f) => f.key));
 
+	// No event pre-selected: each FunnelChat flow gets its own webhook, and a default like
+	// "created + cancelled" would also fire a "5 minutes before" flow at booking time.
 	let form = $state<{ url: string; events: string[]; fields: string[] }>({
-		url: '', events: ['booking.created', 'booking.cancelled'], fields: [...allFieldKeys]
+		url: '', events: [], fields: [...allFieldKeys]
 	});
 
 	// Delivery log (lazy-loaded per webhook).
@@ -87,7 +113,24 @@
 		}
 	}
 
-	onMount(load);
+	// Best-effort: on failure the page keeps the 08:00 default and falls back to the
+	// signed-in user's owner flag for the team note.
+	async function loadSettings() {
+		try {
+			const s = await api.get<{ reminder_morning_hour: string; team_scope: boolean }>('/v1/webhooks/settings');
+			if (s.reminder_morning_hour) morningHour = s.reminder_morning_hour;
+			teamScope = !!s.team_scope;
+		} catch {
+			teamScope = !!$currentUser?.is_owner;
+		} finally {
+			settingsLoaded = true;
+		}
+	}
+
+	onMount(() => {
+		load();
+		loadSettings();
+	});
 
 	async function create() {
 		createError = '';
@@ -97,7 +140,7 @@
 		creating = true;
 		try {
 			await api.post('/v1/webhooks', { url: form.url, events: form.events, fields: form.fields });
-			form = { url: '', events: ['booking.created', 'booking.cancelled'], fields: [...allFieldKeys] };
+			form = { url: '', events: [], fields: [...allFieldKeys] };
 			showCreate = false;
 			await load();
 		} catch (e: any) {
@@ -170,6 +213,11 @@
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Webhooks</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Recibe notificaciones en tiempo real de eventos de reservas.</p>
+		{#if teamScope}
+			<p class="mt-1 text-sm text-muted-foreground">Tus webhooks reciben las citas de todo el equipo.</p>
+		{:else if settingsLoaded}
+			<p class="mt-1 text-sm text-muted-foreground">Las citas que te agendan también llegan a los webhooks del dueño del equipo. Si él ya envía un mensaje de WhatsApp, no lo repitas aquí o el cliente lo recibirá dos veces.</p>
+		{/if}
 	</div>
 	<Button onclick={() => { showCreate = !showCreate; createError = ''; }}>
 		{showCreate ? 'Cancelar' : 'Nuevo webhook'}
@@ -193,13 +241,18 @@
 
 		<div class="mb-4 space-y-2">
 			<p class="text-sm font-medium">Eventos a enviar</p>
-			{#each allEvents as ev}
-				<label class="flex cursor-pointer items-center gap-2 font-mono text-sm">
+			<p class="text-xs text-muted-foreground">Para WhatsApp (FunnelChat), marca un solo evento por webhook: cada mensaje va a su propio flujo.</p>
+			{#each eventDefs as ev (ev.key)}
+				<label class="flex cursor-pointer items-start gap-2 text-sm">
 					<Checkbox
-						checked={form.events.includes(ev)}
-						onCheckedChange={() => toggleEvent(ev)}
+						class="mt-0.5"
+						checked={form.events.includes(ev.key)}
+						onCheckedChange={() => toggleEvent(ev.key)}
 					/>
-					<span>{ev}</span>
+					<span class="min-w-0">
+						<span class="font-medium">{ev.label}</span>{#if ev.description}<span class="text-muted-foreground">{` — ${ev.description}`}</span>{/if}
+						<span class="block break-all font-mono text-xs text-muted-foreground">{ev.key}</span>
+					</span>
 				</label>
 			{/each}
 		</div>

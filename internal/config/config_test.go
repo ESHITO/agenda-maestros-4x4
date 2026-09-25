@@ -208,3 +208,31 @@ func TestValidate_acceptsAPortAndATrailingSlash(t *testing.T) {
 		t.Errorf("Validate() = %v; want nil", err)
 	}
 }
+
+// Fork: REMINDER_MORNING_HOUR drives the booking.reminder_morning webhook.
+func TestLoad_reminderMorningHourDefault(t *testing.T) {
+	t.Setenv("REMINDER_MORNING_HOUR", "")
+	cfg := config.Load()
+	if cfg.ReminderMorningHour != "08:00" {
+		t.Errorf("ReminderMorningHour = %q; want 08:00", cfg.ReminderMorningHour)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() = %v; want nil for the default", err)
+	}
+}
+
+func TestValidate_reminderMorningHour(t *testing.T) {
+	for _, ok := range []string{"07:30", "00:00", "23:59"} {
+		t.Setenv("REMINDER_MORNING_HOUR", ok)
+		if err := config.Load().Validate(); err != nil {
+			t.Errorf("Validate() = %v for %q; want nil", err, ok)
+		}
+	}
+	// A typo must stop the boot rather than silently move every client's reminder.
+	for _, bad := range []string{"8", "8:00", "8am", "24:00", "08:60", "08.00", "08:00:00"} {
+		t.Setenv("REMINDER_MORNING_HOUR", bad)
+		if err := config.Load().Validate(); err == nil {
+			t.Errorf("Validate() = nil for %q; want an error", bad)
+		}
+	}
+}

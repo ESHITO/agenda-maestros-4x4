@@ -1317,8 +1317,14 @@ func (h *Handler) dispatchBookingConfirmation(b *booking.Booking, in bookingConf
 			h.logger.Error("booking confirmation: flag failure", "error", err, "booking_id", b.ID)
 		}
 	}
+	// Fork: the webhook and reminder writes below get a budget of their own. The e-mails
+	// above can use up all 30 s of ctx on their own (defaultSMTPTimeout is 30 s, and a
+	// failed send waits 5 s and retries), and a spent ctx used to cost the booking its
+	// booking.created webhook - the WhatsApp confirmation - and every reminder.
+	tctx, tcancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer tcancel()
 	if h.webhookSvc != nil {
-		if err := h.webhookSvc.Enqueue(ctx, "booking.created", webhook.BookingPayload{
+		if err := h.webhookSvc.Enqueue(tctx, "booking.created", webhook.BookingPayload{
 			ID:                 b.ID,
 			EventTypeSlug:      in.EventTypeSlug,
 			HostID:             b.HostID,
@@ -1330,12 +1336,17 @@ func (h *Handler) dispatchBookingConfirmation(b *booking.Booking, in bookingConf
 			PaymentStatus:      paymentStatusForWebhook(b.PaymentStatus),
 			AmountPaidCents:    b.AmountPaidCents,
 			AmountPaidCurrency: b.AmountPaidCurrency,
+			// Fork: reuse the confirmation e-mail's link rather than minting a second one.
+			ManageURL: h.webhookManageURL(tctx, "booking.created", b.HostID, b.ID, bData.ManageURL),
 		}); err != nil {
 			h.logger.Error("enqueue booking.created webhook", "error", err, "booking_id", b.ID)
 		}
 	}
-	if err := h.enqueueBookingReminders(ctx, b.EventTypeID, b.ID, b.StartAt); err != nil {
+	if err := h.enqueueBookingReminders(tctx, b.EventTypeID, b.ID, b.StartAt); err != nil {
 		h.logger.Error("enqueue reminders", "error", err, "booking_id", b.ID)
+	}
+	if err := h.scheduleWebhookReminders(tctx, b.ID, b.StartAt); err != nil {
+		h.logger.Error("schedule webhook reminders", "error", err, "booking_id", b.ID)
 	}
 }
 
@@ -1674,6 +1685,11 @@ func (h *Handler) CancelBooking(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) cancelSideEffects(b booking.Booking) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// Fork: drop the pending reminder webhooks first, before anything below can return
+	// early (JobWebhookReminder would skip a cancelled booking anyway).
+	if err := h.deleteWebhookReminders(ctx, b.ID); err != nil {
+		h.logger.Error("booking cancellation: delete webhook reminders", "error", err, "booking_id", b.ID)
+	}
 	d, err := h.loadCancellationData(ctx, &b)
 	if err != nil {
 		h.logger.Error("booking cancellation: load data", "error", err, "booking_id", b.ID)

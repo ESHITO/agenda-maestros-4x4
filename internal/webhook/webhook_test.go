@@ -241,6 +241,9 @@ func TestEnqueue_doesNotFireForNonSubscribedEvent(t *testing.T) {
 	}
 }
 
+// Host isolation still holds between MEMBERS: newEnv's two users are plain members
+// (is_owner = 0). Fork: the workspace owner's webhooks are the one exception - they
+// receive every host's bookings - and fork_scope_test.go covers that.
 func TestEnqueue_doesNotFireForDifferentHost(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()

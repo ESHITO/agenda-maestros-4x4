@@ -434,6 +434,9 @@ func (w *Worker) deliverWebhook(ctx context.Context, jobPayload string) error {
 		WHERE id = ?`, status, resp.StatusCode, now, p.WebhookDeliveryID); uerr != nil {
 		w.logger.Error("worker: record webhook delivery result", "error", uerr, "delivery_id", p.WebhookDeliveryID)
 	}
+	if status == "success" {
+		w.scrubManageURL(ctx, p.WebhookDeliveryID) // fork: see webhook.Service.ScrubManageURL
+	}
 
 	if status == "pending" && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		return fmt.Errorf("worker: endpoint returned HTTP %d", resp.StatusCode)
@@ -458,5 +461,18 @@ func (w *Worker) markDeliveryFailed(ctx context.Context, jobPayload string) {
 		`UPDATE webhook_deliveries SET status = 'failed' WHERE id = ? AND status != 'success'`,
 		p.WebhookDeliveryID); err != nil {
 		w.logger.Error("worker: mark webhook delivery failed", "error", err, "delivery_id", p.WebhookDeliveryID)
+	}
+	w.scrubManageURL(ctx, p.WebhookDeliveryID) // fork: no retry will need the link now
+}
+
+// scrubManageURL (fork) drops the attendee's manage link from a finished delivery's
+// stored payload - it is a bearer credential, kept in clear nowhere else in the database.
+// Best-effort: a failure is logged and the row keeps the link until the retention purge.
+func (w *Worker) scrubManageURL(ctx context.Context, deliveryID string) {
+	if w.svc == nil {
+		return
+	}
+	if err := w.svc.ScrubManageURL(ctx, deliveryID); err != nil {
+		w.logger.Error("worker: scrub manage_url from delivery", "error", err, "delivery_id", deliveryID)
 	}
 }

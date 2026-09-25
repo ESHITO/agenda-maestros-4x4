@@ -55,6 +55,17 @@ const (
 	FieldPaymentStatus   = "payment_status"
 	FieldAmountPaid      = "amount_paid_cents"
 	FieldCurrency        = "amount_paid_currency"
+
+	// Fork (Agenda Maestros 4x4): fields for WhatsApp automations (FunnelChat maps
+	// them by key). Computed in enrich / fork_fields.go; see CLAUDE.md "Webhooks".
+	FieldAttendeePhone    = "attendee_phone"    // E.164, "+51987654321"
+	FieldAttendeeWhatsApp = "attendee_whatsapp" // digits only, wa.me form, "51987654321"
+	FieldStartLocal       = "start_local"       // start in the attendee's zone + booking locale
+	FieldStartLocalDate   = "start_local_date"
+	FieldStartLocalTime   = "start_local_time"
+	FieldManageURL        = "manage_url"           // reschedule/cancel link; filled by the caller (BookingPayload.ManageURL)
+	FieldStartLocalLong   = "start_local_long"     // "martes 9 de marzo de 2027, 09:00": no "mar" (martes/marzo) ambiguity
+	FieldStartLocalTZ     = "start_local_timezone" // the zone start_local* is really in (attendee's, else host's)
 )
 
 // AllFields is every selectable field, in payload order. Used to validate config
@@ -66,6 +77,12 @@ var AllFields = []string{
 	FieldHostID, FieldHostName, FieldHostEmail,
 	FieldAttendeeName, FieldAttendeeEmail, FieldAttendeeTZ, FieldAnswers,
 	FieldPaymentStatus, FieldAmountPaid, FieldCurrency,
+	// Fork additions, appended (never interleaved) so upstream merges stay trivial.
+	// Deliberately NOT in defaultFields: an unconfigured webhook keeps its old shape.
+	FieldAttendeePhone, FieldAttendeeWhatsApp,
+	FieldStartLocal, FieldStartLocalDate, FieldStartLocalTime,
+	FieldManageURL,
+	FieldStartLocalLong, FieldStartLocalTZ,
 }
 
 // defaultFields reproduces the original payload (no PII, no answers) so a webhook with no
@@ -125,11 +142,18 @@ type BookingPayload struct {
 	PaymentStatus      string `json:"payment_status,omitempty"`
 	AmountPaidCents    int    `json:"amount_paid_cents,omitempty"`
 	AmountPaidCurrency string `json:"amount_paid_currency,omitempty"`
+	// ManageURL is the attendee's reschedule/cancel link (fork). The CALLER fills it -
+	// this package never mints manage tokens - and only when WantsField says some
+	// receiving webhook selected FieldManageURL. Empty = omitted.
+	ManageURL string `json:"manage_url,omitempty"`
 }
 
 type Service struct {
 	db  *sql.DB
 	key [32]byte
+	// forceLocale (fork) pins the locale of the start_local* fields, mirroring the
+	// handler's FORCE_LOCALE. "" = use the booker's stored locale. See SetForceLocale.
+	forceLocale string
 }
 
 // New creates a Service. If encKeyHex is empty an ephemeral key is generated
@@ -278,6 +302,10 @@ type enrichedBooking struct {
 	hostName, hostEmail                     string
 	attendeeName, attendeeEmail, attendeeTZ string
 	answers                                 []map[string]string
+	// Fork fields (fork_fields.go): empty = omitted from the payload.
+	attendeePhone, attendeeWhatsApp            string
+	startLocal, startLocalDate, startLocalTime string
+	startLocalLong, startLocalTZ               string
 }
 
 // enrich loads the data not carried in BookingPayload (host name/email, event-type
@@ -289,33 +317,50 @@ func (s *Service) enrich(ctx context.Context, p BookingPayload) enrichedBooking 
 	if p.ID == "" {
 		return bd
 	}
+	// hostTZ, locType, locValue and attendeeLocale feed only the fork fields below.
+	var hostTZ, locType, locValue, attendeeLocale string
 	_ = s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(et.name,''), COALESCE(u.name,''), COALESCE(u.email,'')
+		SELECT COALESCE(et.name,''), COALESCE(u.name,''), COALESCE(u.email,''),
+		       COALESCE(u.iana_timezone,''), COALESCE(b.location_type,''), COALESCE(b.location_value,'')
 		FROM bookings b
 		JOIN event_types et ON et.id = b.event_type_id
 		JOIN users u ON u.id = b.host_id
-		WHERE b.id = ?`, p.ID).Scan(&bd.eventTypeName, &bd.hostName, &bd.hostEmail)
+		WHERE b.id = ?`, p.ID).Scan(&bd.eventTypeName, &bd.hostName, &bd.hostEmail,
+		&hostTZ, &locType, &locValue)
 
 	_ = s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(name,''), COALESCE(email,''), COALESCE(iana_timezone,'')
+		SELECT COALESCE(name,''), COALESCE(email,''), COALESCE(iana_timezone,''), COALESCE(locale,'')
 		FROM booking_attendees WHERE booking_id = ? AND is_organizer = 1`, p.ID).
-		Scan(&bd.attendeeName, &bd.attendeeEmail, &bd.attendeeTZ)
+		Scan(&bd.attendeeName, &bd.attendeeEmail, &bd.attendeeTZ, &attendeeLocale)
 
+	var phoneAnswers []string // 'phone'-type answers in question order (fork: attendee_phone)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT q.label, ba.value
+		SELECT q.label, ba.value, q.type
 		FROM booking_answers ba
 		JOIN event_type_questions q ON q.id = ba.question_id
 		WHERE ba.booking_id = ?
 		ORDER BY q.position`, p.ID)
 	if err == nil {
 		for rows.Next() {
-			var label, value string
-			if err := rows.Scan(&label, &value); err == nil {
+			var label, value, qtype string
+			if err := rows.Scan(&label, &value, &qtype); err == nil {
 				bd.answers = append(bd.answers, map[string]string{"question": label, "answer": value})
+				if qtype == "phone" {
+					phoneAnswers = append(phoneAnswers, value)
+				}
 			}
 		}
 		rows.Close() // #nosec G104 -- rows already fully consumed above; nothing actionable on close error
 	}
+
+	s.enrichForkFields(&bd, forkInputs{
+		phoneAnswers:   phoneAnswers,
+		locationType:   locType,
+		locationValue:  locValue,
+		attendeeTZ:     bd.attendeeTZ,
+		hostTZ:         hostTZ,
+		attendeeLocale: attendeeLocale,
+	})
 	return bd
 }
 
@@ -346,6 +391,16 @@ func buildData(bd enrichedBooking, fields []string) map[string]any {
 		FieldPreviousEndAt:   bd.core.PreviousEndAt,
 		FieldPaymentStatus:   bd.core.PaymentStatus,
 		FieldCurrency:        bd.core.AmountPaidCurrency,
+		// Fork fields: absent rather than "" when unknown, so a FunnelChat mapping
+		// sees a missing key instead of dialling an empty number.
+		FieldAttendeePhone:    bd.attendeePhone,
+		FieldAttendeeWhatsApp: bd.attendeeWhatsApp,
+		FieldStartLocal:       bd.startLocal,
+		FieldStartLocalDate:   bd.startLocalDate,
+		FieldStartLocalTime:   bd.startLocalTime,
+		FieldManageURL:        bd.core.ManageURL,
+		FieldStartLocalLong:   bd.startLocalLong,
+		FieldStartLocalTZ:     bd.startLocalTZ,
 	}
 	out := make(map[string]any, len(fields))
 	for _, f := range fields {
@@ -360,28 +415,38 @@ func buildData(bd enrichedBooking, fields []string) map[string]any {
 	return out
 }
 
-// Enqueue finds all active webhooks for p.HostID that subscribe to event,
-// and creates a webhook_deliveries + jobs row pair for each. Failures are
-// soft-errors (caller logs; a booking is already committed).
-func (s *Service) Enqueue(ctx context.Context, event string, p BookingPayload) error {
+// matchedWebhook is one active webhook that subscribes to the event being enqueued.
+type matchedWebhook struct {
+	id     string
+	fields []string // nil = default set
+}
+
+// matchingWebhooks returns the active webhooks that should receive event for a booking
+// hosted by hostID.
+//
+// Scope - FORK BEHAVIOUR (Agenda Maestros 4x4), deliberately wider than upstream: a
+// booking reaches its host's own webhooks AND the webhooks of the workspace owner(s)
+// (users.is_owner = 1, not archived). The owner configures the team's WhatsApp
+// notices once and receives every mentor's appointments; mentors still receive only
+// their own. It is ONE query with an OR, so an owner who is also the host gets each of
+// their webhooks once, never twice. Upstream keys on user_id = host only.
+func (s *Service) matchingWebhooks(ctx context.Context, event, hostID string) ([]matchedWebhook, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, events, fields FROM webhooks
-		WHERE user_id = ? AND is_active = 1`, p.HostID)
+		WHERE is_active = 1
+		  AND (user_id = ?
+		       OR user_id IN (SELECT id FROM users WHERE is_owner = 1 AND archived_at IS NULL))`, hostID)
 	if err != nil {
-		return fmt.Errorf("webhook: list for enqueue: %w", err)
+		return nil, fmt.Errorf("webhook: list for enqueue: %w", err)
 	}
 
-	type wrow struct {
-		id     string
-		fields []string // nil = default set
-	}
-	var matching []wrow
+	var matching []matchedWebhook
 	for rows.Next() {
 		var id, eventsJSON string
 		var fieldsJSON sql.NullString
 		if err := rows.Scan(&id, &eventsJSON, &fieldsJSON); err != nil {
 			rows.Close() // #nosec G104 -- already returning the scan error; nothing more actionable
-			return fmt.Errorf("webhook: scan: %w", err)
+			return nil, fmt.Errorf("webhook: scan: %w", err)
 		}
 		var events []string
 		_ = json.Unmarshal([]byte(eventsJSON), &events)
@@ -399,10 +464,45 @@ func (s *Service) Enqueue(ctx context.Context, event string, p BookingPayload) e
 		if fieldsJSON.Valid && fieldsJSON.String != "" {
 			_ = json.Unmarshal([]byte(fieldsJSON.String), &fields)
 		}
-		matching = append(matching, wrow{id: id, fields: fields})
+		matching = append(matching, matchedWebhook{id: id, fields: fields})
 	}
 	rows.Close() // #nosec G104 -- rows already fully consumed above; nothing actionable on close error
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return matching, nil
+}
+
+// WantsField reports whether any webhook that would receive event for a booking hosted
+// by hostID has field selected (an unconfigured webhook means defaultFields). Callers use
+// it before paying for a value that has a side effect - FieldManageURL mints a manage
+// token row per call - so nothing is minted when nobody asked for the link.
+func (s *Service) WantsField(ctx context.Context, event, hostID, field string) (bool, error) {
+	matching, err := s.matchingWebhooks(ctx, event, hostID)
+	if err != nil {
+		return false, err
+	}
+	for _, wh := range matching {
+		fieldset := wh.fields
+		if len(fieldset) == 0 {
+			fieldset = defaultFields
+		}
+		for _, f := range fieldset {
+			if f == field {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// Enqueue finds all active webhooks in scope for p.HostID (its own plus the workspace
+// owner's - see matchingWebhooks) that subscribe to event, and creates a
+// webhook_deliveries + jobs row pair for each. Failures are soft-errors (caller logs;
+// a booking is already committed).
+func (s *Service) Enqueue(ctx context.Context, event string, p BookingPayload) error {
+	matching, err := s.matchingWebhooks(ctx, event, p.HostID)
+	if err != nil {
 		return err
 	}
 	if len(matching) == 0 {

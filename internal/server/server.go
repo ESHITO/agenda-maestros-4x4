@@ -47,6 +47,11 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 			logger.Warn("FORCE_LOCALE ignored: not a supported locale", "locale", cfg.ForceLocale)
 		}
 	}
+	// Fork: REMINDER_MORNING_HOUR for the booking.reminder_morning webhook. Validate has
+	// already refused a malformed value; an empty one (Config literals in tests) keeps 08:00.
+	if cfg.ReminderMorningHour != "" && !h.SetReminderMorningHour(cfg.ReminderMorningHour) {
+		logger.Warn("REMINDER_MORNING_HOUR ignored: not HH:MM; using 08:00", "value", cfg.ReminderMorningHour)
+	}
 	// DATA_DIR, defaulting to the relative "data" every deployment has always used.
 	// The fallback is repeated here because tests build a Config literal that skips
 	// Load, and an empty dir would put uploads beside the binary.
@@ -138,12 +143,28 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 	if err != nil {
 		logger.Error("webhook: init failed", "error", err)
 	} else {
+		// Fork: the start_local* payload fields follow FORCE_LOCALE like every other
+		// attendee-facing text (unsupported codes are ignored, as for the handler).
+		whs.SetForceLocale(cfg.ForceLocale)
 		h.SetWebhookSvc(whs)
 		// Pass live so the worker picks up SMTP changes automatically.
 		wrk := worker.New(db, whs, logger, worker.WithMailer(live))
 		// Notetaker jobs live in the handler package (they need LLM/S3/encKey).
 		wrk.RegisterHandler("notetaker.transcribe", h.JobNotetakerTranscribe)
 		wrk.RegisterHandler("notetaker.summarize", h.JobNotetakerSummarize)
+		// Fork: scheduled reminder webhooks (morning / 1 h / 5 min), webhook_reminders.go.
+		wrk.RegisterHandler("webhook.reminder", h.JobWebhookReminder)
+		// ...and plan them for bookings that predate the feature. Idempotent, so every
+		// boot may run it; in the background so it never delays serving.
+		go func() {
+			bctx, bcancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer bcancel()
+			if n, err := h.BackfillWebhookReminders(bctx); err != nil {
+				logger.Error("webhook reminders: backfill failed", "error", err)
+			} else if n > 0 {
+				logger.Info("webhook reminders: backfill checked upcoming bookings", "bookings", n)
+			}
+		}()
 		go wrk.Run(ctx)
 		drain = wrk.Wait
 		logger.Info("webhook worker started")
@@ -514,6 +535,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	// Webhooks
 	mux.HandleFunc("POST /v1/webhooks", h.RequireAuth(h.CreateWebhook))
 	mux.HandleFunc("GET /v1/webhooks", h.RequireAuth(h.ListWebhooks))
+	mux.HandleFunc("GET /v1/webhooks/settings", h.RequireAuth(h.GetWebhookSettings)) // fork: reminder hour + team scope
 	mux.HandleFunc("PATCH /v1/webhooks/{id}", h.RequireAuth(h.PatchWebhook))
 	mux.HandleFunc("DELETE /v1/webhooks/{id}", h.RequireAuth(h.DeleteWebhook))
 	mux.HandleFunc("GET /v1/webhooks/{id}/deliveries", h.RequireAuth(h.ListWebhookDeliveries))

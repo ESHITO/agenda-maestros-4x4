@@ -733,7 +733,10 @@ as the desired state:
 - `internal/webhook`: enqueues `booking.created` / `.cancelled` / `.rescheduled`
   plus the notetaker events `recording.completed` / `transcript.ready` / `notes.ready`
   (reference payloads — booking-shaped, keyed by id; consumers fetch the artifact body
-  via REST/MCP). There is **no** `booking.reminder` webhook event. Deliveries are signed
+  via REST/MCP). Upstream has **no** reminder webhook event; **this fork** adds
+  `booking.reminder_morning` / `_1h` / `_5m`, fired by `webhook.reminder` jobs, and sends
+  every booking to the workspace owner's webhooks too (see CLAUDE.md "Webhooks - WhatsApp
+  confirmations and reminders"). Deliveries are signed
   **HMAC-SHA256**, header `X-Calnode-Signature` (+ `X-Calnode-Event`/`-Delivery`),
   secret stored encrypted. The worker's HTTP client is **SSRF-guarded** (resolves
   DNS, blocks private/loopback/CGNAT/ULA IPs, dials the resolved IP to avoid
