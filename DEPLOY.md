@@ -88,6 +88,13 @@ Railway auto-detects the `Dockerfile` and builds it. Steps:
      **Cloudflare, set it to "DNS only" (grey cloud)** — proxying (orange cloud)
      blocks Railway's cert issuance and can cause redirect loops. You may re-enable
      the proxy after the cert issues, with SSL mode = Full (strict).
+6. **Serverless OFF** (Service → Settings → Serverless; it shows up as "Sleep Application"
+   in the change review). With it on, Railway stops the container after a spell without
+   requests and only restarts it on the next one, and the job worker runs inside that
+   container: reminders wait for the next visitor, and those whose next moment has come
+   by then are dropped. Seen in production: a 1 h reminder sent 16 min late, exactly when
+   someone next opened the panel, with `Stopping Container` / `Starting Container` in the
+   deploy logs around it.
 
 ### Railway-specific build notes (already handled in this repo)
 - **No `VOLUME` directive in the Dockerfile** — Railway's builder rejects it; storage
@@ -350,6 +357,7 @@ first event type + availability.
 |---|---|
 | App won't start (prod) | Missing `CALNODE_ENCRYPTION_KEY` with an https `BASE_URL`. |
 | Custom domain 502 / "Application failed to respond" | Custom-domain **target port ≠ the listening port** (use 8080 on Railway). |
+| Reminders / webhooks go out late, or right when someone opens the site | The host sleeps the instance when idle (Railway: Serverless on). The worker is in-process; keep the instance always on (§3 step 6). |
 | `ERR_CERT_COMMON_NAME_INVALID` on a new domain | Cert not issued yet — wait; ensure the DNS record is **DNS-only**, not proxied. |
 | 403 on admin actions behind a proxy | Proxy not forwarding the original `Host` header (CSRF same-origin check). |
 | OAuth `redirect_uri_mismatch` | Registered URI doesn't match `BASE_URL` + `/v1/...callback` exactly. |
