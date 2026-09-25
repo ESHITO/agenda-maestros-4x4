@@ -27,7 +27,10 @@ func (h *Handler) SetGoogleAuth(clientID, clientSecret, redirectURL string, secu
 		ClientSecret: clientSecret,
 		Endpoint:     google.Endpoint,
 		RedirectURL:  redirectURL,
-		Scopes:       []string{"openid", "email", "profile"},
+		// Only the verified email is used (finishOAuthLogin matches an existing user by it),
+		// so "profile" is not requested: asking Google for name and photo we never read
+		// would have to be disclosed and justified in the privacy policy (/privacidad).
+		Scopes: []string{"openid", "email"},
 	}
 	h.authMu.Lock()
 	h.googleAuth = cfg

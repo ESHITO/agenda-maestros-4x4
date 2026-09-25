@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de privacidad — {{.BusinessName}}</title>
+<style>
+  :root { --ink: #111827; --muted: #4b5563; --line: #e5e7eb; --accent: #0e7490; --bg: #ffffff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 18px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { text-align: center; margin-bottom: 28px; }
+  header img { max-width: 100%; height: auto; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 12px 0 4px; }
+  .updated { color: var(--muted); font-size: .95rem; margin: 0; }
+  h2 { font-size: 1.25rem; margin: 36px 0 8px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 20px 0 6px; }
+  ul, ol { padding-left: 1.25rem; }
+  li { margin: 6px 0; }
+  a { color: var(--accent); }
+  .note { background: #f0f9ff; border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 6px; }
+  footer { margin-top: 48px; color: var(--muted); font-size: .9rem; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    {{if .LogoURL}}<img src="{{.LogoURL}}" alt="{{.BusinessName}}" style="height:{{.LogoHeight}}px">{{end}}
+    <h1>Política de privacidad</h1>
+    <p class="updated">{{.BusinessName}} · Última actualización: {{.Updated}}</p>
+  </header>
+
+  <p>Esta página explica qué datos personales recoge la agenda de citas de {{.BusinessName}}
+  (<a href="{{.SiteURL}}">{{.SiteHost}}</a>), para qué los usamos, con quién los compartimos y
+  cómo puedes ejercer tus derechos.{{if .ContactEmail}} Si tienes cualquier duda, escríbenos a
+  <a href="mailto:{{.ContactEmail}}">{{.ContactEmail}}</a>.{{end}}</p>
+
+  <h2>1. Quién es el responsable</h2>
+  <p>El responsable de tus datos es {{.BusinessName}}. Usamos esta agenda para que los miembros
+  del club reserven sesiones con nuestros mentores y con el equipo de soporte.{{if .ContactEmail}}
+  Contacto: <a href="mailto:{{.ContactEmail}}">{{.ContactEmail}}</a>.{{end}}</p>
+
+  <h2>2. Qué datos recogemos</h2>
+  <ul>
+    <li><strong>Cuando reservas una cita:</strong> tu nombre, tu correo electrónico, tu número de
+    WhatsApp o teléfono, las respuestas que des a las preguntas del formulario, la fecha y hora de
+    la cita y tu zona horaria.</li>
+    <li><strong>Datos técnicos mínimos:</strong> tu dirección IP, que usamos para proteger la agenda
+    contra abusos, y registros técnicos de acceso. Para proponerte el prefijo telefónico de tu país,
+    es tu propio navegador el que mira su zona horaria y su idioma.</li>
+    <li><strong>Mentores y equipo:</strong> nombre, correo, zona horaria y horario disponible. Si un
+    mentor conecta su calendario, también los datos descritos en la sección 4.</li>
+    <li><strong>Videollamadas:</strong> las sesiones se realizan en nuestra sala de video. Solo se
+    graban si el anfitrión activa la grabación; en ese caso todos ven el aviso «Grabando» en la sala
+    y a los invitados se les pide su consentimiento.</li>
+  </ul>
+
+  <h2>3. Para qué usamos tus datos</h2>
+  <ul>
+    <li>Gestionar tus reservas: confirmarlas, cambiarlas o cancelarlas.</li>
+    <li>Enviarte la confirmación y los recordatorios de tu cita por correo o por WhatsApp.</li>
+    <li>Mostrar solo los horarios en los que tu mentor está realmente disponible.</li>
+    <li>Realizar la videollamada y, si se activa, guardar su grabación.</li>
+    <li>Mantener la agenda segura y funcionando.</li>
+  </ul>
+  <p>No vendemos tus datos, no los usamos para publicidad y no los cedemos a terceros para sus
+  propios fines. Hoy la agenda no usa inteligencia artificial con tus datos; si algún día activamos
+  un asistente de reservas por chat o notas automáticas de las grabaciones, lo diremos aquí antes,
+  con el nombre del proveedor que reciba los mensajes o el audio.</p>
+
+  <h2>4. Datos de las cuentas de Google</h2>
+  <p>Los mentores y el equipo pueden conectar su <strong>Google Calendar</strong> y entrar con su
+  <strong>cuenta de Google</strong>. Google les pedirá permiso para ver y editar sus calendarios; la
+  agenda solo usa ese permiso para lo siguiente, y nada más:</p>
+  <ul>
+    <li><strong>Google Calendar:</strong>
+      <ol>
+        <li>lee la lista de sus calendarios con sus nombres y el correo de la cuenta conectada, para
+        que elija cuáles revisar y en cuál anotar las citas;</li>
+        <li>pregunta a Google solo en qué horas está ocupado en esos calendarios, sin ver el título,
+        la descripción ni los invitados de sus eventos, para no ofrecer esas horas a otras personas;</li>
+        <li>crea, cambia y borra, en el calendario que elija, los eventos de las citas reservadas con
+        él. Esos eventos llevan el nombre y el correo de quien reservó, y Google le envía a esa
+        persona la invitación.</li>
+      </ol>
+    </li>
+    <li><strong>Inicio de sesión con Google:</strong> su correo, y la confirmación de Google de que es
+    suyo, para comprobar que ya tiene una cuenta en la agenda. No pedimos ni guardamos su foto ni
+    otros datos de su perfil.</li>
+  </ul>
+  <p class="note">El uso que hace {{.BusinessName}} de la información recibida de las APIs de Google,
+  y su transferencia a cualquier otra aplicación, se ajusta a la
+  <a href="https://developers.google.com/terms/api-services-user-data-policy">Política de Datos del
+  Usuario de los Servicios de las APIs de Google</a>, incluidos los requisitos de Uso Limitado.</p>
+  <p>En concreto: los datos de Google se usan solo para las funciones descritas arriba; no se usan
+  para publicidad; no se venden; no se pasan a nadie más, salvo a los proveedores que alojan la
+  agenda para que funcione (sección 5), por seguridad, porque la ley lo exija o, con su permiso
+  previo, si el negocio se fusiona o se vende; no se usan para evaluar créditos ni préstamos;
+  ninguna persona los lee salvo con su permiso, por motivos de seguridad o porque la ley lo exija;
+  y no se usan para desarrollar, mejorar ni entrenar modelos de inteligencia artificial o de
+  aprendizaje automático.</p>
+
+  <h3>Qué guardamos de Google y cuándo lo borramos</h3>
+  <p>Guardamos, cifradas, las llaves de acceso a su calendario; también el correo de la cuenta de
+  Google conectada, los nombres de los calendarios que eligió y el número de cada evento que creamos,
+  para poder cambiarlo o borrarlo si la cita cambia. No guardamos sus horas ocupadas ni el contenido
+  de sus otros eventos: se los preguntamos a Google en el momento.</p>
+  <p>Todo esto se borra al instante cuando el mentor pulsa <em>Desconectar</em> en la agenda
+  (menú <em>Calendario</em>, junto a su cuenta de Google), o cuando nos lo pide por correo, por
+  ejemplo si deja el club. Si quita el acceso desde su cuenta de Google, la conexión deja de
+  funcionar al momento, y los datos que guardábamos se borran cuando la desconecte en la agenda o
+  nos lo pida. Para quitar también el permiso en Google, puede entrar a
+  <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. Lo borrado
+  desaparece también de nuestras copias de seguridad cifradas en un máximo de 2 días.</p>
+
+  <h2>5. Con quién compartimos los datos</h2>
+  <p>Solo con los proveedores que necesitamos para que la agenda funcione, y solo con los datos
+  imprescindibles para cada tarea:</p>
+  <ul>
+    <li><strong>Railway</strong>: alojamiento de la agenda (Estados Unidos).</li>
+    <li><strong>Cloudflare R2</strong>: copias de seguridad cifradas y grabaciones de las sesiones.</li>
+    <li><strong>LiveKit</strong>: transmisión de las videollamadas.</li>
+    <li><strong>Google</strong>: calendario e inicio de sesión, solo si el mentor los conecta (sección 4).
+    Además, el panel del equipo carga su tipo de letra desde Google Fonts, así que Google ve la
+    dirección IP de quien abre el panel.</li>
+    <li><strong>Envío de correos</strong>: el proveedor con el que enviamos las confirmaciones y los
+    recordatorios por correo.</li>
+    <li><strong>Nuestras herramientas de WhatsApp</strong>: la agenda les pasa, mediante avisos
+    automáticos (webhooks), tu nombre, tu teléfono y los datos de tu cita, para enviarte mensajes.</li>
+    <li><strong>Herramientas que un mentor conecte a propósito</strong> a su propia agenda (desde
+    «Aplicaciones conectadas» o «Claves de API», por ejemplo un asistente de inteligencia
+    artificial): solo reciben los datos de las citas de ese mentor.</li>
+  </ul>
+  <p>También podríamos comunicar datos a las autoridades cuando la ley nos obligue.</p>
+
+  <h2>6. Dónde se guardan y durante cuánto tiempo</h2>
+  <p>Los datos se guardan en servidores de Estados Unidos. La comunicación con la agenda viaja
+  cifrada (HTTPS) y las credenciales de los calendarios se guardan cifradas. Conservamos los datos de
+  tus reservas mientras sean necesarios para tu relación con el club, y los borramos cuando lo pidas,
+  salvo que la ley nos obligue a conservarlos. Lo borrado desaparece de nuestras copias de seguridad
+  en un máximo de 2 días.</p>
+
+  <h2>7. Tus derechos</h2>
+  <p>Puedes pedirnos en cualquier momento <strong>ver, corregir o borrar</strong> tus datos, u
+  <strong>oponerte</strong> a que los usemos.{{if .ContactEmail}} Escríbenos a
+  <a href="mailto:{{.ContactEmail}}">{{.ContactEmail}}</a> y lo haremos nosotros mismos en un plazo
+  máximo de 30 días.{{end}}</p>
+
+  <h2>8. Cookies</h2>
+  <p>La agenda solo usa cookies técnicas imprescindibles: la sesión de quienes entran al panel y unas
+  cookies de pocos minutos que protegen el inicio de sesión. En la sala de video, tu navegador
+  recuerda el nombre que escribiste para no pedírtelo otra vez; si usas una computadora prestada,
+  usa una ventana privada. No usamos cookies de publicidad. Si algún día activamos herramientas de
+  medición (como Google Analytics), te pediremos permiso antes con un aviso en pantalla.</p>
+
+  <h2>9. Menores de edad</h2>
+  <p>La agenda está pensada para personas adultas. No recogemos a sabiendas datos de menores de 18 años.</p>
+
+  <h2>10. Cambios en esta política</h2>
+  <p>Si cambiamos esta política, publicaremos aquí la nueva versión con su fecha de actualización.</p>
+
+  <footer>{{.BusinessName}} · <a href="{{.SiteURL}}">{{.SiteHost}}</a></footer>
+</main>
+</body>
+</html>

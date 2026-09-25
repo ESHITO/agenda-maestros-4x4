@@ -473,6 +473,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("GET /embed.js", h.EmbedJS)
 	mux.HandleFunc("GET /booking.css", h.BookingCSS)
 	mux.HandleFunc("GET /book/{slug}", h.BookPage)
+	// Public privacy policy (this fork): required by Google to publish the OAuth app.
+	mux.HandleFunc("GET /privacidad", h.PrivacyPage)
 	// Flag SVGs for the phone country picker (book.html + widget); name must be ^[a-z]{2}\.svg$.
 	mux.HandleFunc("GET /assets/flags/{name}", h.FlagAsset)
 
