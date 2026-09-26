@@ -31,7 +31,7 @@
 			hasAvailability = (rules.items?.length ?? 0) > 0;
 			hasEventType = (events.items?.length ?? 0) > 0;
 			// The first type used to win even when inactive or archived, or when it was an
-			// older own type while the mentor's real link is their copy.
+			// older own type while the person's real link is their copy (Mentoría or Soporte).
 			const pl = $currentUser?.personal_link;
 			personalUrl = pl?.active ? pl.url || (pl.slug ? `${origin}/book/${pl.slug}` : '') : '';
 			firstSlug = (events.items ?? []).find((e) => e.is_active && !e.archived)?.slug ?? '';

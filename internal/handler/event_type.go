@@ -67,7 +67,7 @@ type eventTypeJSON struct {
 	// contact for changes. Populated only for the host (read-only) GET case.
 	OwnerName  string `json:"owner_name,omitempty"`
 	OwnerEmail string `json:"owner_email,omitempty"`
-	// Fork: a predefined type of the team (template, mentor's copy, Soporte) - fork_team_guards.go.
+	// Fork: a predefined type of the team (a template or a copy of one) - fork_team_guards.go.
 	Team *eventTypeTeamJSON `json:"team,omitempty"`
 }
 

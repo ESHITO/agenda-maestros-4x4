@@ -2,7 +2,7 @@ package handler
 
 // Fork (Agenda Maestros 4x4): the team feature's API (the engine is fork_team.go).
 //
-//	GET  /v1/team/settings            admins: the predefined types (T and S) and their people
+//	GET  /v1/team/settings            admins: the two templates (T and S) and their copies
 //	PUT  /v1/team/settings            owner: choose / unset T and S, then reconcile
 //	PUT  /v1/users/{id}/team-role     tier (admin|member) + área, per the permission matrix
 //	GET  /v1/users, GET /v1/users/me  + area, personal_link (fillUserTeamInfo, teamInfoForUser)
@@ -25,18 +25,21 @@ import (
 type teamLinkInfo struct {
 	copyID, templateID, userID, kind string
 	templateSlug, templateName       string
-	mentorName                       string
+	mentorName                       string // the person who attends the copy
 	copySlug                         string
+	area                             string // copies: the área of their template (teamTemplateArea)
 	active                           bool
 }
 
-// teamIndex is the team feature's view of the workspace, loaded in two small queries: the
-// settings and every link (a workspace has a handful of mentors).
+// teamIndex is the team feature's view of the workspace, loaded in three small queries:
+// the settings, the recorded template áreas and every link (a workspace has a handful of
+// people).
 type teamIndex struct {
-	st           teamSettings
-	links        map[string]teamLinkInfo // by copy/holder id
-	activeCopies map[string]int          // template id -> active copies
-	anyCopies    map[string]int          // template id -> copies, active or not
+	st            teamSettings
+	links         map[string]teamLinkInfo // by copy/holder id
+	activeCopies  map[string]int          // template id -> active copies
+	anyCopies     map[string]int          // template id -> copies, active or not
+	templateAreas map[string]string       // fork_template_areas
 }
 
 func (h *Handler) loadTeamIndex(ctx context.Context) (*teamIndex, error) {
@@ -44,7 +47,24 @@ func (h *Handler) loadTeamIndex(ctx context.Context) (*teamIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	idx := &teamIndex{st: st, links: map[string]teamLinkInfo{}, activeCopies: map[string]int{}, anyCopies: map[string]int{}}
+	idx := &teamIndex{st: st, links: map[string]teamLinkInfo{}, activeCopies: map[string]int{},
+		anyCopies: map[string]int{}, templateAreas: map[string]string{}}
+	arows, err := h.db.QueryContext(ctx, `SELECT template_id, area FROM fork_template_areas`)
+	if err != nil {
+		return nil, err
+	}
+	for arows.Next() {
+		var id, area string
+		if err := arows.Scan(&id, &area); err != nil {
+			arows.Close() // #nosec G104 -- already returning the scan error
+			return nil, err
+		}
+		idx.templateAreas[id] = area
+	}
+	arows.Close() // #nosec G104 -- drained
+	if err := arows.Err(); err != nil {
+		return nil, err
+	}
 	rows, err := h.db.QueryContext(ctx, `
 		SELECT l.copy_id, l.template_id, l.user_id, l.kind, c.slug, c.is_active,
 		       COALESCE(t.slug, ''), COALESCE(t.name, ''), COALESCE(u.name, '')
@@ -63,6 +83,7 @@ func (h *Handler) loadTeamIndex(ctx context.Context) (*teamIndex, error) {
 			&li.templateSlug, &li.templateName, &li.mentorName); err != nil {
 			return nil, err
 		}
+		li.area = idx.templateArea(li.templateID)
 		idx.links[li.copyID] = li
 		if li.kind == linkKindCopy {
 			idx.anyCopies[li.templateID]++
@@ -74,32 +95,69 @@ func (h *Handler) loadTeamIndex(ctx context.Context) (*teamIndex, error) {
 	return idx, rows.Err()
 }
 
+// templateArea is teamTemplateArea over the loaded index.
+func (idx *teamIndex) templateArea(templateID string) string {
+	if a := idx.st.currentArea(templateID); a != "" {
+		return a
+	}
+	if idx.templateAreas[templateID] == areaSoporte {
+		return areaSoporte
+	}
+	return areaMentoria
+}
+
 // Kinds of the "team" object on event types (fork_team_guards.go) and internal ones.
 const (
-	teamKindTemplate = "mentoria_template"
-	teamKindCopy     = "mentoria_copy"
-	teamKindSoporte  = "soporte_shared"
-	teamKindHolder   = "holder" // never shown: holders are omitted everywhere
+	teamKindMentoriaTemplate = "mentoria_template"
+	teamKindMentoriaCopy     = "mentoria_copy"
+	teamKindSoporteTemplate  = "soporte_template"
+	teamKindSoporteCopy      = "soporte_copy"
+	teamKindHolder           = "holder" // never shown: holders are omitted everywhere
 )
+
+// isTeamCopyKind reports whether kind is a copy of either template.
+func isTeamCopyKind(kind string) bool {
+	return kind == teamKindMentoriaCopy || kind == teamKindSoporteCopy
+}
+
+// isTeamTemplateKind reports whether kind is either template.
+func isTeamTemplateKind(kind string) bool {
+	return kind == teamKindMentoriaTemplate || kind == teamKindSoporteTemplate
+}
 
 // kindOf classifies an event type: "" = an ordinary type.
 func (idx *teamIndex) kindOf(etID string) string {
 	if li, ok := idx.links[etID]; ok {
-		if li.kind == linkKindHolder {
+		switch {
+		case li.kind == linkKindHolder:
 			return teamKindHolder
+		case li.area == areaSoporte:
+			return teamKindSoporteCopy
 		}
-		return teamKindCopy
+		return teamKindMentoriaCopy
 	}
-	switch {
-	case etID != "" && etID == idx.st.templateID:
-		return teamKindTemplate
-	case etID != "" && etID == idx.st.soporteID:
-		return teamKindSoporte
+	switch idx.st.currentArea(etID) {
+	case areaMentoria:
+		return teamKindMentoriaTemplate
+	case areaSoporte:
+		return teamKindSoporteTemplate
 	}
 	return ""
 }
 
-// copiesOf lists the copy links of a template, sorted by mentor name.
+// areaOf is the área of an event type's bookings: T or a Mentoría copy is Mentoría, S or
+// a Soporte copy is Soporte, anything else (a holder included) is "".
+func (idx *teamIndex) areaOf(etID string) string {
+	switch idx.kindOf(etID) {
+	case teamKindMentoriaTemplate, teamKindMentoriaCopy:
+		return areaMentoria
+	case teamKindSoporteTemplate, teamKindSoporteCopy:
+		return areaSoporte
+	}
+	return ""
+}
+
+// copiesOf lists the copy links of a template, sorted by the attending person's name.
 func (idx *teamIndex) copiesOf(templateID string) []teamLinkInfo {
 	var out []teamLinkInfo
 	for _, li := range idx.links {
@@ -119,7 +177,8 @@ func sortTeamLinks(ls []teamLinkInfo) {
 	}
 }
 
-// teamCopyLinkJSON is one mentor's personal link, as the owner sees it.
+// teamCopyLinkJSON is one person's personal link (their copy of a template), as the owner
+// sees it. mentor_name is the attending person: a mentor or a support person.
 type teamCopyLinkJSON struct {
 	Slug       string `json:"slug"`
 	URL        string `json:"url"`
@@ -139,36 +198,10 @@ func (h *Handler) copyLinksJSON(links []teamLinkInfo) []teamCopyLinkJSON {
 	return out
 }
 
-// teamPersonJSON names a person (S's hosts, reassign candidates).
-type teamPersonJSON struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// teamTypeHosts lists an event type's hosts by priority.
-func (h *Handler) teamTypeHosts(ctx context.Context, etID string) ([]teamPersonJSON, error) {
-	rows, err := h.db.QueryContext(ctx, `
-		SELECT u.id, u.name FROM event_type_hosts eth JOIN users u ON u.id = eth.user_id
-		WHERE eth.event_type_id = ? ORDER BY eth.priority, u.name`, etID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []teamPersonJSON{}
-	for rows.Next() {
-		var p teamPersonJSON
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// teamSettingsJSON is GET/PUT /v1/team/settings.
+// teamSettingsJSON is GET/PUT /v1/team/settings. Both templates have the same shape.
 type teamSettingsJSON struct {
 	MentoriaTemplate *teamTemplateJSON `json:"mentoria_template"`
-	SoporteShared    *teamSoporteJSON  `json:"soporte_shared"`
+	SoporteTemplate  *teamTemplateJSON `json:"soporte_template"`
 	CanEdit          bool              `json:"can_edit"`
 	Warnings         *teamWarnings     `json:"warnings,omitempty"` // PUT only
 }
@@ -177,27 +210,18 @@ type teamTemplateJSON struct {
 	ID        string             `json:"id"`
 	Slug      string             `json:"slug"`
 	Name      string             `json:"name"`
-	Copies    int                `json:"copies"`               // active copies (one per mentor)
+	Copies    int                `json:"copies"`               // active copies (one per person of the área)
 	CopyLinks []teamCopyLinkJSON `json:"copy_links,omitempty"` // owner only: every copy, with its state
 }
 
-type teamSoporteJSON struct {
-	ID    string           `json:"id"`
-	Slug  string           `json:"slug"`
-	Name  string           `json:"name"`
-	Hosts []teamPersonJSON `json:"hosts"`
-	// Waiting: active área-soporte people left out of the rotation because their weekly
-	// hours do not reach S yet (fork_team_hours.go). They join when they set them.
-	Waiting []teamPersonJSON `json:"waiting"`
-}
-
-// teamWarnings accompany a PUT: what the change did and what the owner may still need to
-// do (a predefined type no active webhook of theirs receives sends no WhatsApp).
+// teamWarnings accompany a PUT: what the change did (the copies of both templates
+// together) and what the owner may still need to do (a template no active webhook of
+// theirs receives sends no WhatsApp).
 type teamWarnings struct {
 	CopiesCreated             int  `json:"copies_created"`
 	CopiesDeactivated         int  `json:"copies_deactivated"`
 	MentoriaTemplateNoWebhook bool `json:"mentoria_template_no_webhook"`
-	SoporteSharedNoWebhook    bool `json:"soporte_shared_no_webhook"`
+	SoporteTemplateNoWebhook  bool `json:"soporte_template_no_webhook"`
 }
 
 // teamSettingsFor builds the settings answer for user.
@@ -207,29 +231,22 @@ func (h *Handler) teamSettingsFor(ctx context.Context, user AuthUser) (*teamSett
 		return nil, err
 	}
 	out := &teamSettingsJSON{CanEdit: user.IsOwner}
-	if t, err := loadTeamType(ctx, h.db, idx.st.templateID); err != nil {
-		return nil, err
-	} else if t != nil {
-		out.MentoriaTemplate = &teamTemplateJSON{ID: t.id, Slug: t.slug, Name: t.name, Copies: idx.activeCopies[t.id]}
+	for _, c := range []struct {
+		id  string
+		dst **teamTemplateJSON
+	}{{idx.st.templateID, &out.MentoriaTemplate}, {idx.st.soporteID, &out.SoporteTemplate}} {
+		t, err := loadTeamType(ctx, h.db, c.id)
+		if err != nil {
+			return nil, err
+		}
+		if t == nil {
+			continue
+		}
+		j := &teamTemplateJSON{ID: t.id, Slug: t.slug, Name: t.name, Copies: idx.activeCopies[t.id]}
 		if user.IsOwner {
-			out.MentoriaTemplate.CopyLinks = h.copyLinksJSON(idx.copiesOf(t.id))
+			j.CopyLinks = h.copyLinksJSON(idx.copiesOf(t.id))
 		}
-	}
-	if s, err := loadTeamType(ctx, h.db, idx.st.soporteID); err != nil {
-		return nil, err
-	} else if s != nil {
-		hosts, err := h.teamTypeHosts(ctx, s.id)
-		if err != nil {
-			return nil, err
-		}
-		_, waiting, err := loadSoporteStaff(ctx, h.db, s.id)
-		if err != nil {
-			return nil, err
-		}
-		out.SoporteShared = &teamSoporteJSON{ID: s.id, Slug: s.slug, Name: s.name, Hosts: hosts, Waiting: []teamPersonJSON{}}
-		for _, p := range waiting {
-			out.SoporteShared.Waiting = append(out.SoporteShared.Waiting, teamPersonJSON{ID: p.id, Name: p.name})
-		}
+		*c.dst = j
 	}
 	return out, nil
 }
@@ -265,7 +282,8 @@ func (o *optionalID) UnmarshalJSON(b []byte) error {
 }
 
 // PutTeamSettings handles PUT /v1/team/settings (owner): {"mentoria_template_id":
-// "<id>"|null, "soporte_shared_id": "<id>"|null}; an omitted key is left as it is. A
+// "<id>"|null, "soporte_template_id": "<id>"|null}; an omitted key is left as it is.
+// "soporte_shared_id" (the old name) is still read when soporte_template_id is absent. A
 // newly chosen type must be the owner's own, not a copy or holder, not archived, on the
 // built-in video room, and the two must differ (400, Spanish). Saves, reconciles, and
 // answers like GET plus "warnings".
@@ -278,7 +296,8 @@ func (h *Handler) PutTeamSettings(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	var req struct {
 		MentoriaTemplateID optionalID `json:"mentoria_template_id"`
-		SoporteSharedID    optionalID `json:"soporte_shared_id"`
+		SoporteTemplateID  optionalID `json:"soporte_template_id"`
+		SoporteSharedID    optionalID `json:"soporte_shared_id"` // alias of soporte_template_id
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "JSON inválido")
@@ -294,19 +313,24 @@ func (h *Handler) PutTeamSettings(w http.ResponseWriter, r *http.Request) {
 	if req.MentoriaTemplateID.set {
 		tmplID = strings.TrimSpace(req.MentoriaTemplateID.id)
 	}
-	if req.SoporteSharedID.set {
+	switch {
+	case req.SoporteTemplateID.set:
+		supID = strings.TrimSpace(req.SoporteTemplateID.id)
+	case req.SoporteSharedID.set:
 		supID = strings.TrimSpace(req.SoporteSharedID.id)
 	}
 	if tmplID != "" && tmplID == supID {
-		h.writeError(w, http.StatusBadRequest, "La plantilla de Mentoría y el tipo de Soporte deben ser tipos distintos.")
+		h.writeError(w, http.StatusBadRequest, "La plantilla de Mentoría y la de Soporte deben ser tipos distintos.")
 		return
 	}
 	// Validate on change: a value that is already saved is not re-judged.
-	for _, c := range []struct{ id, stored string }{{tmplID, idx.st.templateID}, {supID, idx.st.soporteID}} {
+	for _, c := range []struct{ id, stored, area string }{
+		{tmplID, idx.st.templateID, areaMentoria}, {supID, idx.st.soporteID, areaSoporte},
+	} {
 		if c.id == "" || c.id == c.stored {
 			continue
 		}
-		if msg, err := h.teamSettingCandidateError(r.Context(), idx, user, c.id); err != nil {
+		if msg, err := h.teamSettingCandidateError(r.Context(), idx, user, c.id, c.area); err != nil {
 			h.logger.ErrorContext(r.Context(), "team settings: validate", "error", err)
 			h.writeError(w, http.StatusInternalServerError, "internal error")
 			return
@@ -335,14 +359,14 @@ func (h *Handler) PutTeamSettings(w http.ResponseWriter, r *http.Request) {
 		warn.MentoriaTemplateNoWebhook = !h.ownerWebhookReceives(r.Context(), user.ID, tmplID)
 	}
 	if supID != "" {
-		warn.SoporteSharedNoWebhook = !h.ownerWebhookReceives(r.Context(), user.ID, supID)
+		warn.SoporteTemplateNoWebhook = !h.ownerWebhookReceives(r.Context(), user.ID, supID)
 	}
 	out.Warnings = warn
 	h.writeJSON(w, http.StatusOK, out)
 }
 
-// teamSettingCandidateError says why id cannot become a predefined type ("" = it can).
-func (h *Handler) teamSettingCandidateError(ctx context.Context, idx *teamIndex, owner AuthUser, id string) (string, error) {
+// teamSettingCandidateError says why id cannot become the template of área ("" = it can).
+func (h *Handler) teamSettingCandidateError(ctx context.Context, idx *teamIndex, owner AuthUser, id, area string) (string, error) {
 	var name, userID, locType string
 	var archived bool
 	err := h.db.QueryRowContext(ctx,
@@ -355,8 +379,10 @@ func (h *Handler) teamSettingCandidateError(ctx context.Context, idx *teamIndex,
 		return "", err
 	}
 	switch idx.kindOf(id) {
-	case teamKindCopy:
+	case teamKindMentoriaCopy:
 		return "«" + name + "» es la copia de un mentor; elige un tipo de atención tuyo.", nil
+	case teamKindSoporteCopy:
+		return "«" + name + "» es la copia de una persona de soporte; elige un tipo de atención tuyo.", nil
 	case teamKindHolder:
 		return "«" + name + "» guarda preguntas retiradas y no se puede elegir.", nil
 	}
@@ -368,6 +394,15 @@ func (h *Handler) teamSettingCandidateError(ctx context.Context, idx *teamIndex,
 	}
 	if locType != "livekit" {
 		return "«" + name + "» debe usar la sala de video integrada para ser un tipo predefinido.", nil
+	}
+	// A template's copies are Mentoría or Soporte by the área of their template (one value
+	// per template, teamTemplateArea), so a type that already has copies stays in its área:
+	// switching it would relabel every existing session - and offer it to the other área.
+	if idx.anyCopies[id] > 0 && idx.templateArea(id) != area {
+		if area == areaSoporte {
+			return "«" + name + "» ya tiene copias de Mentoría (una por mentor); para Soporte elige otro tipo de atención o duplícalo.", nil
+		}
+		return "«" + name + "» ya tiene copias de Soporte (una por persona de soporte); para Mentoría elige otro tipo de atención o duplícalo.", nil
 	}
 	return "", nil
 }
@@ -386,39 +421,27 @@ func (h *Handler) ownerWebhookReceives(ctx context.Context, ownerID, etID string
 	return err == nil && n > 0
 }
 
-// teamFamily returns the event type ids of an área: mentoria = T and every copy (of any
-// template, old ones included: a copy's bookings are Mentoría); soporte = S.
+// teamFamily returns the event type ids of an área: its current template and every copy
+// whose template serves that área (old templates included: a copy's bookings keep the
+// área it was made for - teamTemplateArea). Nil for an unknown área.
 func (h *Handler) teamFamily(ctx context.Context, area string) ([]string, error) {
-	st, err := loadTeamSettings(ctx, h.db)
+	if area != areaMentoria && area != areaSoporte {
+		return nil, nil
+	}
+	idx, err := h.loadTeamIndex(ctx)
 	if err != nil {
 		return nil, err
 	}
-	switch area {
-	case areaSoporte:
-		if st.soporteID == "" {
-			return nil, nil
-		}
-		return []string{st.soporteID}, nil
-	case areaMentoria:
-		ids := []string{}
-		if st.templateID != "" {
-			ids = append(ids, st.templateID)
-		}
-		rows, err := h.db.QueryContext(ctx, `SELECT copy_id FROM fork_event_type_links WHERE kind = ?`, linkKindCopy)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return nil, err
-			}
-			ids = append(ids, id)
-		}
-		return ids, rows.Err()
+	ids := []string{}
+	if id := idx.st.templateFor(area); id != "" {
+		ids = append(ids, id)
 	}
-	return nil, nil
+	for _, li := range idx.links {
+		if li.kind == linkKindCopy && li.area == area {
+			ids = append(ids, li.copyID)
+		}
+	}
+	return ids, nil
 }
 
 // SetTeamRole handles PUT /v1/users/{id}/team-role: {"tier": "admin"|"member", "area":
@@ -484,11 +507,15 @@ func (h *Handler) SetTeamRole(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tier = "owner"
-		if req.Area == areaMentoria {
-			if t, err := loadTeamType(r.Context(), h.db, h.forkSettings(r.Context(), forkKeyTeamTemplate)[forkKeyTeamTemplate]); err == nil && t != nil && t.userID == targetID {
-				h.writeError(w, http.StatusBadRequest, "Tu enlace de Mentoría es la plantilla; como propietario solo puedes atender Soporte.")
-				return
-			}
+		// The templates ARE the owner's links: owning one, they get no copy of it, so its
+		// área would do nothing (and read as if they attended through a copy).
+		if msg, err := h.ownerAreaRefusal(r.Context(), targetID, req.Area); err != nil {
+			h.logger.ErrorContext(r.Context(), "team role: owner área", "error", err)
+			h.writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		} else if msg != "" {
+			h.writeError(w, http.StatusBadRequest, msg)
+			return
 		}
 	case actor.IsOwner:
 		if tier != "admin" && tier != "member" {
@@ -550,10 +577,29 @@ func (h *Handler) SetTeamRole(w http.ResponseWriter, r *http.Request) {
 	h.reconcileTeamAfter(r.Context(), targetID)
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"id": targetID, "tier": tier, "area": req.Area, "upcoming_in_previous_area": upcoming,
-		// Fork: whether their weekly hours reach what they now attend; false on soporte =
-		// they wait outside the rotation until they set them (fork_team_hours.go).
+		// Fork: whether their weekly hours reach what they now attend; false = their
+		// personal link shows no times until they set them (fork_team_hours.go).
 		"has_availability": h.teamHoursChecker(r.Context())(targetID, req.Area),
 	})
+}
+
+// ownerAreaRefusal is the Spanish 400 for the owner taking área while they own that área's
+// template, or "".
+func (h *Handler) ownerAreaRefusal(ctx context.Context, ownerID, area string) (string, error) {
+	st, err := loadTeamSettings(ctx, h.db)
+	if err != nil {
+		return "", err
+	}
+	t, err := loadTeamType(ctx, h.db, st.templateFor(area))
+	if err != nil || t == nil || t.userID != ownerID {
+		return "", err
+	}
+	if area == areaSoporte {
+		return "Tu enlace de Soporte es la plantilla «" + t.name + "»: como propietario no recibes una copia, " +
+			"así que no necesitas el área Soporte.", nil
+	}
+	return "Tu enlace de Mentoría es la plantilla «" + t.name + "»: como propietario no recibes una copia, " +
+		"así que no necesitas el área Mentoría.", nil
 }
 
 // upcomingInArea counts the upcoming, non-cancelled bookings userID hosts (primary or a
@@ -574,16 +620,19 @@ func (h *Handler) upcomingInArea(ctx context.Context, userID, area string) (int,
 	return n, err
 }
 
-// personalLinkJSON is a person's own booking link: their copy of the current template, or
-// the template itself for its owner. url is the public booking page.
+// personalLinkJSON is a person's own booking link: their copy of their área's template,
+// or T itself for its owner. url is the public booking page.
 type personalLinkJSON struct {
 	Slug   string `json:"slug"`
 	URL    string `json:"url"`
 	Active bool   `json:"active"`
 }
 
-// teamPeople returns every user's área and personal link. Two small queries; best effort
-// (empty maps on error, logged): the members list must never fail over this.
+// teamPeople returns every user's área and personal link. Three small queries; best
+// effort (empty maps on error, logged): the members list must never fail over this. The
+// link is the person's copy of S when their área is soporte, else their copy of T (a
+// person with no área keeps showing a T copy they may still have); T's owner always gets
+// T itself. S's owner has no copy of S, so without T they have no link.
 func (h *Handler) teamPeople(ctx context.Context) (map[string]string, map[string]*personalLinkJSON) {
 	areas := map[string]string{}
 	links := map[string]*personalLinkJSON{}
@@ -600,26 +649,36 @@ func (h *Handler) teamPeople(ctx context.Context) (map[string]string, map[string
 	}
 	rows.Close() // #nosec G104 -- drained
 	st, err := loadTeamSettings(ctx, h.db)
-	if err != nil || st.templateID == "" {
+	if err != nil || (st.templateID == "" && st.soporteID == "") {
 		return areas, links
 	}
+	// Each row: a copy of T or S (its template id), or T itself (source 'template').
 	rows, err = h.db.QueryContext(ctx, `
-		SELECT l.user_id, c.slug, c.is_active = 1 AND c.archived_at IS NULL
+		SELECT l.user_id, c.slug, c.is_active = 1 AND c.archived_at IS NULL, l.template_id
 		FROM fork_event_type_links l JOIN event_types c ON c.id = l.copy_id
-		WHERE l.kind = ? AND l.template_id = ?
+		WHERE l.kind = ? AND l.template_id <> '' AND l.template_id IN (?, ?)
 		UNION ALL
-		SELECT t.user_id, t.slug, t.is_active = 1 AND t.archived_at IS NULL
-		FROM event_types t WHERE t.id = ?`, linkKindCopy, st.templateID, st.templateID)
+		SELECT t.user_id, t.slug, t.is_active = 1 AND t.archived_at IS NULL, 'template'
+		FROM event_types t WHERE t.id = ?`, linkKindCopy, st.templateID, st.soporteID, st.templateID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "team people: links", "error", err)
 		return areas, links
 	}
 	defer rows.Close()
+	ownT := map[string]bool{}
 	for rows.Next() {
-		var id, slug string
+		var id, slug, source string
 		var active bool
-		if rows.Scan(&id, &slug, &active) == nil {
-			links[id] = &personalLinkJSON{Slug: slug, URL: h.bookURL(slug), Active: active}
+		if rows.Scan(&id, &slug, &active, &source) != nil {
+			continue
+		}
+		link := &personalLinkJSON{Slug: slug, URL: h.bookURL(slug), Active: active}
+		switch {
+		case source == "template":
+			links[id], ownT[id] = link, true
+		case ownT[id]:
+		case source == st.templateFor(areas[id]) || (areas[id] != areaSoporte && source == st.templateID):
+			links[id] = link
 		}
 	}
 	return areas, links

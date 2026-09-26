@@ -1,8 +1,9 @@
 package webhook
 
 // Fork (Agenda Maestros 4x4): the team's predefined event types ("tipos predefinidos").
-// The owner names one "Mentoría privada" template T, and every mentor gets a COPY of it -
-// their own bookable link, owned by T's owner and kept in step with T by the reconcile
+// The owner names two templates - "Mentoría privada" T and "Soporte 1 a 1" S - and every
+// person of the matching área (mentoría, soporte) gets a COPY of it: their own bookable
+// link, owned by the template's owner and kept in step with it by the reconcile
 // (internal/handler/fork_team.go). The rows that say "this type is a copy of that one"
 // live here, in the webhook package, because this package's SQL reads them: the
 // template-aware event-type filter (matchingWebhooks) and the WhatsApp texts a copy
@@ -20,7 +21,7 @@ import (
 // forkTeamLinkSchema is created by EnsureForkSchema with the rest of the fork's schema, in
 // code, NOT by goose (see forkSchema). Plain tables and indexes, no trigger.
 //
-//   - fork_event_type_links: one row per copy (kind 'copy': a mentor's copy of a template)
+//   - fork_event_type_links: one row per copy (kind 'copy': one person's copy of a template)
 //     or holder (kind 'holder': the hidden per-template type that keeps the questions a
 //     template retired while clients' answers still point at them). copy_id CASCADEs with
 //     its event type; template_id has NO foreign key on purpose - a link must survive the
@@ -57,6 +58,10 @@ var forkTeamLinkSchema = []string{
 //
 //   - fork_member_areas: what a person attends ('mentoria' | 'soporte'); no row = nothing.
 //     Independent of the permission tier (users.is_owner / is_admin).
+//   - fork_template_areas: the área ('mentoria' | 'soporte') each template served while it
+//     was a setting, written by the reconcile. A copy of a template that is no longer a
+//     setting keeps its área through it (its bookings stay Mentoría or Soporte); a template
+//     with no row (a copy made before Soporte was a template) is Mentoría.
 //   - fork_invite_roles: the role an invite grants on claim ('mentoria' | 'soporte' |
 //     'admin'), keyed by the lowercased email because a resend re-creates the invite row.
 //   - fork_livekit_mints / fork_livekit_sessions / fork_livekit_host_links: attendance of
@@ -67,6 +72,11 @@ var forkTeamSchema = []string{
 		user_id    TEXT PRIMARY KEY,
 		area       TEXT NOT NULL,
 		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS fork_template_areas (
+		template_id TEXT PRIMARY KEY,
+		area        TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS fork_invite_roles (
 		email      TEXT PRIMARY KEY,
@@ -120,7 +130,7 @@ func EnsureTeamSchema(db *sql.DB) error {
 // forkEventTypeFilterClause is matchingWebhooks' event-type filter (fork_event_types.go),
 // made template-aware: a filtered webhook keeps a booking whose type it lists OR whose
 // type is a copy of a template it lists, so the owner's webhook limited to "Mentoría
-// privada" also carries every mentor's copy. It reads ONLY the links, never fork_settings:
+// privada" (or "Soporte 1 a 1") also carries every copy of it. It reads ONLY the links, never fork_settings:
 // a copy of a template that is no longer the setting keeps matching for the bookings it
 // already has. It cannot widen anything: the NOT EXISTS branch is unchanged, copy_id is
 // the primary key (at most one template, one level), and a missing link is NULL - no

@@ -9,12 +9,14 @@ package handler
 //	POST /v1/bookings/{id}/reassign              admins; TeamReassignGuard (same-área rule, Spanish)
 //	GET  /v1/bookings/{id}/reassign-candidates   admins: [{id, name, area}]
 //
-// Same-área rule, derived from the booking's TYPE (fork_team_bookings.go does the same):
-//   - Mentoría (the template T or a mentor's copy of it): only to the template's owner, or
-//     to a mentor with an ACTIVE copy of that template. The booking then moves to the new
-//     host's family member - their copy, or T itself for T's owner - so it books, lists,
-//     notifies and reads {tema} as theirs; the answers follow through fork_question_links.
-//   - Soporte (the shared type S): only to an active person whose área is soporte.
+// Same-área rule, derived from the booking's TYPE (fork_team_bookings.go does the same),
+// identical for both áreas:
+//   - Mentoría (the template T or a copy of it) and Soporte (the template S or a copy of
+//     it): only to the template's owner, or to a person with an ACTIVE copy of that
+//     template. The booking then moves to the new host's family member - their copy, or
+//     the template itself for its owner - so it books, lists, notifies and reads {tema} as
+//     theirs; the answers follow through fork_question_links. A session never crosses
+//     áreas: a support person has no Mentoría copy and a mentor no Soporte one.
 //   - Any other type: the upstream rule (any active user).
 //
 // ReassignBooking keeps its single call site: teamReassignHost replaces the one call to
@@ -57,42 +59,43 @@ func (h *Handler) teamMayReadAnswers(ctx context.Context, user AuthUser, booking
 // teamReassignRule is the same-área rule that applies to a booking's type.
 type teamReassignRule struct {
 	area       string // areaMentoria | areaSoporte | "" (the upstream rule)
-	templateID string // mentoria: the template of the booking's family
+	templateID string // the template of the booking's family
 }
 
-// errTeamNotInFamily: the new host has no member of the booking's Mentoría family (no
-// active copy, not the template's owner). The guard refuses it first, in Spanish; inside
-// the transaction it only means the copy was deactivated in between.
+// errTeamNotInFamily: the new host has no member of the booking's family (no active
+// copy, not the template's owner). The guard refuses it first, in Spanish; inside the
+// transaction it only means the copy was deactivated in between.
 var errTeamNotInFamily = errors.New("team: the new host has no active copy of the template")
 
-// teamRuleFor classifies etID: a mentor's copy (of any template, the current one or an
-// old one) or the current template T is Mentoría, with the copy's own template as its
-// family; the current S is Soporte; anything else (a holder included) is neither.
+// teamRuleFor classifies etID: a copy (of any template, the current one or an old one)
+// belongs to its template's family and área (teamTemplateArea); the current T and S are
+// the families of Mentoría and Soporte; anything else (a holder included) is neither.
 func teamRuleFor(ctx context.Context, q teamQuerier, st teamSettings, etID string) (teamReassignRule, error) {
 	var templateID, kind string
 	err := q.QueryRowContext(ctx,
 		`SELECT template_id, kind FROM fork_event_type_links WHERE copy_id = ?`, etID).Scan(&templateID, &kind)
 	switch {
 	case err == nil:
-		if kind == linkKindCopy {
-			return teamReassignRule{area: areaMentoria, templateID: templateID}, nil
+		if kind != linkKindCopy {
+			return teamReassignRule{}, nil
 		}
-		return teamReassignRule{}, nil
+		area, err := teamTemplateArea(ctx, q, st, templateID)
+		if err != nil {
+			return teamReassignRule{}, err
+		}
+		return teamReassignRule{area: area, templateID: templateID}, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return teamReassignRule{}, err
 	}
-	switch {
-	case etID != "" && etID == st.templateID:
-		return teamReassignRule{area: areaMentoria, templateID: etID}, nil
-	case etID != "" && etID == st.soporteID:
-		return teamReassignRule{area: areaSoporte}, nil
+	if area := st.currentArea(etID); area != "" {
+		return teamReassignRule{area: area, templateID: etID}, nil
 	}
 	return teamReassignRule{}, nil
 }
 
-// teamFamilyTarget is the event type a Mentoría booking must move to when userID takes
-// it: the template itself for its owner, else userID's ACTIVE copy of it (an active user,
-// a copy neither paused nor archived). "" = userID may not take it.
+// teamFamilyTarget is the event type a booking of templateID's family must move to when
+// userID takes it: the template itself for its owner, else userID's ACTIVE copy of it (an
+// active user, a copy neither paused nor archived). "" = userID may not take it.
 func teamFamilyTarget(ctx context.Context, q teamQuerier, templateID, userID string) (string, error) {
 	var owner string
 	err := q.QueryRowContext(ctx, `SELECT user_id FROM event_types WHERE id = ?`, templateID).Scan(&owner)
@@ -114,15 +117,6 @@ func teamFamilyTarget(ctx context.Context, q teamQuerier, templateID, userID str
 		return "", nil
 	}
 	return copyID, err
-}
-
-// teamIsSoporteStaff reports whether userID is active with the área soporte.
-func teamIsSoporteStaff(ctx context.Context, q teamQuerier, userID string) (bool, error) {
-	var n int
-	err := q.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM users u JOIN fork_member_areas a ON a.user_id = u.id
-		WHERE u.id = ? AND u.archived_at IS NULL AND a.area = ?`, userID, areaSoporte).Scan(&n)
-	return n > 0, err
 }
 
 // ---- POST /v1/bookings/{id}/reassign: the guard ----------------------------------------
@@ -219,25 +213,20 @@ func (h *Handler) teamReassignCheck(ctx context.Context, bookingID, newHostID st
 	if err != nil {
 		return 0, "", err
 	}
-	switch rule.area {
-	case areaMentoria:
-		target, err := teamFamilyTarget(ctx, h.db, rule.templateID, newHostID)
-		if err != nil {
-			return 0, "", err
+	if rule.area == "" {
+		return 0, "", nil
+	}
+	target, err := teamFamilyTarget(ctx, h.db, rule.templateID, newHostID)
+	if err != nil {
+		return 0, "", err
+	}
+	if target == "" {
+		if rule.area == areaSoporte {
+			return http.StatusBadRequest, "«" + name + "» no tiene un enlace de Soporte activo: esta sesión solo puede pasarse " +
+				"al propietario de la plantilla o a una persona de soporte con su enlace activo.", nil
 		}
-		if target == "" {
-			return http.StatusBadRequest, "«" + name + "» no tiene un enlace de Mentoría activo: esta sesión solo puede pasarse " +
-				"al propietario de la plantilla o a un mentor con su enlace activo.", nil
-		}
-	case areaSoporte:
-		ok, err := teamIsSoporteStaff(ctx, h.db, newHostID)
-		if err != nil {
-			return 0, "", err
-		}
-		if !ok {
-			return http.StatusBadRequest, "«" + name + "» no es del personal de soporte: esta sesión solo puede pasarse " +
-				"a otra persona de Soporte.", nil
-		}
+		return http.StatusBadRequest, "«" + name + "» no tiene un enlace de Mentoría activo: esta sesión solo puede pasarse " +
+			"al propietario de la plantilla o a un mentor con su enlace activo.", nil
 	}
 	return 0, "", nil
 }
@@ -246,8 +235,8 @@ func (h *Handler) teamReassignCheck(ctx context.Context, bookingID, newHostID st
 
 // teamReassignHost replaces ReassignBooking's call to bookingSvc.ReassignHost. In ONE
 // transaction, with ReassignHost's busy check (booking.ReassignHostWith): host_id; the
-// booking_hosts primary seat; for a Mentoría booking, event_type_id moved to the new
-// host's family member and the answers remapped to its questions; for a LiveKit booking, a
+// booking_hosts primary seat; for a Mentoría or Soporte booking, event_type_id moved to
+// the new host's family member and the answers remapped to its questions; for a LiveKit booking, a
 // fresh host link whose hash replaces the previous one. Returns the updated booking (its
 // EventTypeID already the new one, so the emails and booking.rescheduled carry it) and the
 // new host link ("" when the booking has no room), which the goroutine emails to the new
@@ -274,7 +263,7 @@ func (h *Handler) teamReassignHost(ctx context.Context, bookingID, newHostID str
 		if err != nil {
 			return err
 		}
-		if rule.area == areaMentoria {
+		if rule.area != "" {
 			target, err := teamFamilyTarget(ctx, tx, rule.templateID, newHostID)
 			if err != nil {
 				return err
@@ -529,16 +518,12 @@ func (h *Handler) teamReassignCandidates(ctx context.Context, etID, hostID strin
 		FROM users u LEFT JOIN fork_member_areas a ON a.user_id = u.id
 		WHERE u.archived_at IS NULL AND u.id <> ?`
 	args := []any{hostID}
-	switch rule.area {
-	case areaMentoria:
+	if rule.area != "" { // the family: the template's owner and whoever has an active copy
 		query += ` AND (u.id = (SELECT user_id FROM event_types WHERE id = ?)
 		            OR EXISTS (SELECT 1 FROM fork_event_type_links l JOIN event_types c ON c.id = l.copy_id
 		                       WHERE l.template_id = ? AND l.user_id = u.id AND l.kind = ?
 		                         AND c.is_active = 1 AND c.archived_at IS NULL))`
 		args = append(args, rule.templateID, rule.templateID, linkKindCopy)
-	case areaSoporte:
-		query += ` AND a.area = ?`
-		args = append(args, areaSoporte)
 	}
 	rows, err := h.db.QueryContext(ctx, query, args...)
 	if err != nil {

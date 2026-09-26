@@ -15,8 +15,8 @@ export type User = {
 	role: 'owner' | 'admin' | 'member';
 	/** Fork: what this person attends ('' = nothing), independent of the tier. */
 	area?: Area;
-	/** Fork: the viewer's own booking link (their Mentoría copy; for the template's owner,
-	 *  the template itself). null/absent = none. */
+	/** Fork: the viewer's own booking link (their copy of the Mentoría or Soporte template,
+	 *  per their área; for the templates' owner, the Mentoría template). null/absent = none. */
 	personal_link?: PersonalLink | null;
 	notify_confirmation: boolean;
 	notify_cancellation: boolean;
@@ -75,7 +75,7 @@ export type EventType = {
 	owner_email?: string;
 	/** Fork: set only on predefined types (absent for ordinary ones). */
 	team?: EventTypeTeam;
-	/** Fork, single GET of a copy: the mentor it belongs to (also accepted inside team). */
+	/** Fork, single GET of a copy: the person who attends it (also accepted inside team). */
 	mentor_name?: string;
 };
 
@@ -85,25 +85,35 @@ export type Area = 'mentoria' | 'soporte' | '';
 /** Fork: a personal booking link (GET /v1/users, /v1/users/me). */
 export type PersonalLink = { slug: string; url: string; active: boolean };
 
-/** Fork: one mentor's copy of the Mentoría template (owner only). */
+/** Fork: one person's copy of a template (owner only). mentor_name = the attending person:
+ *  a mentor on the Mentoría template, a support person on the Soporte one. */
 export type CopyLink = { slug: string; url: string; mentor_name: string; active: boolean };
+
+/** Fork: the two templates work the same way: every person of the área gets a copy. */
+export type TeamTemplateKind = 'mentoria_template' | 'soporte_template';
+export type TeamCopyKind = 'mentoria_copy' | 'soporte_copy';
 
 /** Fork: the `team` object of a predefined event type (GET /v1/event-types and /{slug}). */
 export type EventTypeTeam = {
-	kind: 'mentoria_template' | 'mentoria_copy' | 'soporte_shared';
+	kind: TeamTemplateKind | TeamCopyKind;
 	/** Copy only: the template it follows. */
 	template_slug?: string;
 	template_name?: string;
-	/** Template only: how many mentor copies exist. */
+	/** Template only: how many copies exist (one per person of the área). */
 	copies?: number;
-	/** Copy: the mentor who attends it. */
+	/** Copy: the person who attends it. */
 	host_name?: string;
 	mentor_name?: string;
-	/** Template, owner only: every mentor's link. */
+	/** Template, owner only: every copy's link. */
 	copy_links?: CopyLink[];
-	/** Soporte: its current rotation, by priority. */
-	hosts?: { id: string; name: string }[];
 };
+
+/** Fork: a copy of either template (read-only, edited through its template). */
+export const isTeamCopy = (kind: string | undefined): kind is TeamCopyKind =>
+	kind === 'mentoria_copy' || kind === 'soporte_copy';
+/** Fork: either template (Mentoría or Soporte). */
+export const isTeamTemplate = (kind: string | undefined): kind is TeamTemplateKind =>
+	kind === 'mentoria_template' || kind === 'soporte_template';
 
 export type EventTypeHost = {
 	user_id: string;
@@ -251,7 +261,7 @@ export type WebhookEventType = {
 	archived: boolean;
 	owned: boolean;
 	owner_name: string;
-	/** Fork: on the Mentoría template, how many mentor copies it covers (copies themselves are omitted). */
+	/** Fork: on either template, how many copies it covers (copies themselves are omitted). */
 	copies?: number;
 };
 
@@ -365,10 +375,11 @@ export type TeamMember = {
 	role: 'owner' | 'admin' | 'member';
 	/** Fork: what this person attends ('' = nothing). */
 	area?: Area;
-	/** Fork: their active copy's link (for the template's owner, the template). */
+	/** Fork: their active copy's link, Mentoría or Soporte per their área (for the templates'
+	 *  owner, the Mentoría template). */
 	personal_link?: PersonalLink | null;
-	/** Fork: their weekly hours can open slots on what they attend (Soporte: a global rule
-	 *  or one for the Soporte type; Mentoría: global or their copy; nothing: any rule). */
+	/** Fork: their weekly hours can open slots on what they attend (a global rule or one for
+	 *  their copy, in either área; nothing: any rule). */
 	has_availability?: boolean;
 	email_login: boolean;
 	provider?: string;
@@ -421,32 +432,31 @@ export type Invite = {
 /** Fork: role carried by an invite. Same spelling as Area for the two áreas. */
 export type InviteRole = 'mentoria' | 'soporte' | 'admin';
 
+/** Fork: one template in GET /v1/team/settings (same shape for Mentoría and Soporte). */
+export type TeamTemplate = {
+	id: string;
+	slug: string;
+	name: string;
+	copies: number;
+	/** Owner only. */
+	copy_links?: CopyLink[];
+};
+
 /** Fork: GET /v1/team/settings (admins; can_edit = owner). */
 export type TeamSettings = {
-	mentoria_template: {
-		id: string;
-		slug: string;
-		name: string;
-		copies: number;
-		/** Owner only. */
-		copy_links?: CopyLink[];
-	} | null;
-	soporte_shared: {
-		id: string;
-		slug: string;
-		name: string;
-		hosts: { id: string; name: string }[];
-		/** Área-soporte people left out of the rotation until they set their hours. */
-		waiting?: { id: string; name: string }[];
-	} | null;
+	mentoria_template: TeamTemplate | null;
+	soporte_template: TeamTemplate | null;
 	can_edit: boolean;
 	/** PUT only: what the save changed or should draw attention to (teamWarnings in Go). */
 	warnings?: {
+		/** Both templates together. */
 		copies_created: number;
 		copies_deactivated: number;
-		/** No active webhook of the owner receives the template's / Soporte type's bookings. */
+		/** No active webhook of the owner receives that template's bookings. */
 		mentoria_template_no_webhook: boolean;
-		soporte_shared_no_webhook: boolean;
+		soporte_template_no_webhook?: boolean;
+		/** Older spelling of soporte_template_no_webhook, read as the same warning. */
+		soporte_shared_no_webhook?: boolean;
 	};
 };
 
@@ -456,8 +466,8 @@ export type TeamRoleResponse = {
 	tier: 'owner' | 'admin' | 'member';
 	area: Area;
 	upcoming_in_previous_area: number;
-	/** Their weekly hours reach what they now attend (false on soporte = waiting outside
-	 *  the rotation until they set them). */
+	/** Their weekly hours reach what they now attend (false = their personal link shows no
+	 *  times until they set them). */
 	has_availability?: boolean;
 };
 
@@ -542,7 +552,7 @@ export const teamApi = {
 	getSettings: () => api.get<TeamSettings>('/v1/team/settings'),
 
 	/** PUT /v1/team/settings (owner). null = unset. Answers the settings + warnings. */
-	putSettings: (body: { mentoria_template_id: string | null; soporte_shared_id: string | null }) =>
+	putSettings: (body: { mentoria_template_id: string | null; soporte_template_id: string | null }) =>
 		api.put<TeamSettings>('/v1/team/settings', body),
 
 	/** PUT /v1/users/{id}/team-role: tier and área in one call (see the matrix in Members). */

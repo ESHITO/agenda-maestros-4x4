@@ -14,8 +14,9 @@ import (
 // open tx with the booking as it was loaded (HostID already the new host) and may change
 // more rows, and fields of b the caller moved (EventTypeID) - an error rolls everything
 // back. The team feature uses it to move the booking_hosts primary seat, the event type
-// (a mentor's copy) and the answers together with the host, so a half-done reassign can
-// never leave the old host with a seat or the new host on another mentor's copy.
+// (the new host's copy of the template) and the answers together with the host, so a
+// half-done reassign can never leave the old host with a seat or the new host on another
+// person's copy.
 //
 // It mirrors ReassignHost statement for statement (same errors, same no-op for the
 // current host, which skips inTx); keep the two in step. inTx must use only tx - the pool

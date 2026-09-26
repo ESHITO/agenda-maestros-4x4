@@ -61,8 +61,8 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		// Fork: what the person attends and their own booking link (fork_team_api.go).
 		Area         string            `json:"area"`
 		PersonalLink *personalLinkJSON `json:"personal_link"`
-		// Fork: whether their weekly rules can open hours on what they attend (Soporte:
-		// global or S; Mentoría: global or their copy; nothing: any) - fork_team_hours.go.
+		// Fork: whether their weekly rules can open a slot on their personal link
+		// (Mentoría / Soporte: global or for their copy; nothing: any) - fork_team_hours.go.
 		HasAvailability bool `json:"has_availability"`
 	}
 	out := []userRow{}

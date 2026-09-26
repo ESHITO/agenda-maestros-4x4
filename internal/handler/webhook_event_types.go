@@ -100,7 +100,7 @@ type webhookEventTypeJSON struct {
 	Archived  bool   `json:"archived"`
 	Owned     bool   `json:"owned"`
 	OwnerName string `json:"owner_name"`
-	// Copies is how many mentors' copies a team template carries (fork_team.go): a filter
+	// Copies is how many copies a team template carries (fork_team.go): a filter
 	// listing the template reaches all of them. 0 (omitted) on any other type.
 	Copies int `json:"copies,omitempty"`
 }
@@ -109,7 +109,7 @@ type webhookEventTypeJSON struct {
 // user may limit a webhook to (webhookEventTypeScope), active and inactive, so the panel
 // can both offer checkboxes (active ones) and name every id an existing filter holds. For
 // the owner that is more than GET /v1/event-types, which lists only what they own or host.
-// Mentors' copies and holders of the team feature are left out: a filter lists the
+// The templates' copies and holders of the team feature are left out: a filter lists the
 // template, which includes every copy (the webhook guard refuses a newly listed copy).
 func (h *Handler) ListWebhookEventTypes(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())

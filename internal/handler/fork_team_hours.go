@@ -1,18 +1,21 @@
 package handler
 
-// Fork (Agenda Maestros 4x4): who has working hours. A person joins the Soporte shared
-// type's rotation only when their weekly availability can open a window on it - a global
-// rule (event_type_id NULL) or one for S itself, the same rules loadHostSchedule feeds the
-// slot engine. Round robin only offers slots where some host is free, so a single host
-// with no rules makes the public page show nothing: that is how putting an admin with no
-// schedule in área soporte once took S from 319 slots to 0.
+// Fork (Agenda Maestros 4x4): who has working hours - GET /v1/users' has_availability,
+// which the panel shows as "Sin horario: su enlace aún no muestra horarios". A mentor's or
+// support person's personal link (their copy of T or S; the template itself for its owner)
+// is hosted by them alone, so it shows times only where THEIR weekly availability can open
+// a window on it: a global rule (event_type_id NULL) or one for that copy, the same rules
+// loadHostSchedule feeds the slot engine, and only if the window can hold one slot of the
+// copy's duration, aligned like the engine.
 //
 // Date overrides are left out on purpose: an override replaces one day, it never adds
-// weekly hours, and a person whose only hours are a few overrides would drain S the day
-// after their last one.
+// weekly hours, and a person whose only hours are a few overrides would have an empty link
+// the day after their last one.
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -78,17 +81,12 @@ func (th teamHours) usable(userID, etID string) *teamUserHours {
 	return u
 }
 
-// forType reports whether userID has a usable weekly rule for event type etID ("" = only
-// a global rule counts).
-func (th teamHours) forType(userID, etID string) bool {
-	return th.opensFor(userID, etID, teamSlotShape{})
-}
-
-// opensFor is forType where a rule counts only if at least one slot of shape fits in it
-// (a zero shape skips that check). The slot engine does not merge rules: each one is its
-// own window, the first start is aligned up to the slot interval (epoch-aligned, in UTC),
-// and a slot is offered only if it ends inside the window. A Monday 09:00-09:05 rule on a
-// 30-minute type opens nothing, so it must not put its owner alone in S's rotation.
+// opensFor reports whether userID has a usable weekly rule for event type etID ("" = only
+// a global rule counts) that holds at least one slot of shape (a zero shape skips that
+// check). The slot engine does not merge rules: each one is its own window, the first
+// start is aligned up to the slot interval (epoch-aligned, in UTC), and a slot is offered
+// only if it ends inside the window. A Monday 09:00-09:05 rule on a 30-minute type opens
+// nothing, so it must not count as hours.
 func (th teamHours) opensFor(userID, etID string, shape teamSlotShape) bool {
 	u := th.usable(userID, etID)
 	if u == nil {
@@ -189,61 +187,13 @@ func loadTeamHours(ctx context.Context, q teamQuerier) (teamHours, error) {
 	return out, rows.Err()
 }
 
-// teamStaffMember is an active área-soporte person.
-type teamStaffMember struct {
-	id, name string
-}
-
-// loadSoporteStaff splits the active área-soporte people, in the rotation's stable order
-// (created_at, id), into those whose hours reach S (the rotation) and those left waiting
-// for a schedule.
-func loadSoporteStaff(ctx context.Context, q teamQuerier, supID string) (rotation, waiting []teamStaffMember, err error) {
-	rows, err := q.QueryContext(ctx, `
-		SELECT u.id, u.name FROM users u JOIN fork_member_areas a ON a.user_id = u.id
-		WHERE a.area = ? AND u.archived_at IS NULL
-		ORDER BY u.created_at, u.id`, areaSoporte)
-	if err != nil {
-		return nil, nil, err
-	}
-	var staff []teamStaffMember
-	for rows.Next() {
-		var s teamStaffMember
-		if err := rows.Scan(&s.id, &s.name); err != nil {
-			rows.Close() // #nosec G104 -- already returning the scan error
-			return nil, nil, err
-		}
-		staff = append(staff, s)
-	}
-	rows.Close() // #nosec G104 -- drained
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	if len(staff) == 0 {
-		return nil, nil, nil
-	}
-	shape, err := loadTeamSlotShape(ctx, q, supID)
-	if err != nil {
-		return nil, nil, err
-	}
-	hours, err := loadTeamHours(ctx, q)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, s := range staff {
-		if hours.opensFor(s.id, supID, shape) {
-			rotation = append(rotation, s)
-		} else {
-			waiting = append(waiting, s)
-		}
-	}
-	return rotation, waiting, nil
-}
-
 // teamHoursChecker returns hasHours(userID, area): whether the person's weekly rules can
-// open a window on what they attend - Soporte: a global rule or one for S; Mentoría: a
-// global rule or one for their copy (the template, for its owner); no área: any rule.
-// Best effort for the members list: on a read error it logs and answers true (no false
-// "Sin horario" alarm).
+// open a slot on what they attend - Mentoría / Soporte: their personal link (their copy
+// of T / S, or the template itself for its owner), with a global rule or one for that
+// link, holding a slot of the template's shape (copies share it: duration and slot
+// interval are synced); no área: any rule. With the área's template unset, only a global
+// rule counts. Best effort for the members list: on a read error it logs and answers true
+// (no false "Sin horario" alarm).
 func (h *Handler) teamHoursChecker(ctx context.Context) func(userID, area string) bool {
 	yes := func(string, string) bool { return true }
 	st, err := loadTeamSettings(ctx, h.db)
@@ -251,12 +201,22 @@ func (h *Handler) teamHoursChecker(ctx context.Context) func(userID, area string
 		h.logger.ErrorContext(ctx, "team hours: settings", "error", err)
 		return yes
 	}
-	personal := map[string]string{} // user id -> their Mentoría type id
-	if st.templateID != "" {
+	type family struct {
+		shape    teamSlotShape     // zero (no fit check) while the área has no template
+		personal map[string]string // user id -> their link's event type id
+	}
+	families := map[string]*family{}
+	for _, area := range []string{areaMentoria, areaSoporte} {
+		f := &family{personal: map[string]string{}}
+		families[area] = f
+		tmplID := st.templateFor(area)
+		if tmplID == "" {
+			continue
+		}
 		rows, err := h.db.QueryContext(ctx, `
 			SELECT user_id, copy_id FROM fork_event_type_links WHERE kind = ? AND template_id = ?
 			UNION ALL
-			SELECT user_id, id FROM event_types WHERE id = ?`, linkKindCopy, st.templateID, st.templateID)
+			SELECT user_id, id FROM event_types WHERE id = ?`, linkKindCopy, tmplID, tmplID)
 		if err != nil {
 			h.logger.ErrorContext(ctx, "team hours: links", "error", err)
 			return yes
@@ -264,15 +224,12 @@ func (h *Handler) teamHoursChecker(ctx context.Context) func(userID, area string
 		for rows.Next() {
 			var owner, etID string
 			if rows.Scan(&owner, &etID) == nil {
-				personal[owner] = etID
+				f.personal[owner] = etID
 			}
 		}
 		rows.Close() // #nosec G104 -- drained
-	}
-	var supShape teamSlotShape // zero (no fit check) while no Soporte type is set
-	if st.soporteID != "" {
-		if supShape, err = loadTeamSlotShape(ctx, h.db, st.soporteID); err != nil {
-			h.logger.ErrorContext(ctx, "team hours: soporte shape", "error", err)
+		if f.shape, err = loadTeamSlotShape(ctx, h.db, tmplID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			h.logger.ErrorContext(ctx, "team hours: shape", "error", err)
 			return yes
 		}
 	}
@@ -282,15 +239,9 @@ func (h *Handler) teamHoursChecker(ctx context.Context) func(userID, area string
 		return yes
 	}
 	return func(userID, area string) bool {
-		switch area {
-		case areaSoporte:
-			// The same test loadSoporteStaff uses for the rotation, so the note and the
-			// "Esperando horario" list agree.
-			return hours.opensFor(userID, st.soporteID, supShape)
-		case areaMentoria:
-			return hours.forType(userID, personal[userID])
-		default:
-			return hours.any(userID)
+		if f := families[area]; f != nil {
+			return hours.opensFor(userID, f.personal[userID], f.shape)
 		}
+		return hours.any(userID)
 	}
 }

@@ -303,8 +303,8 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 // http.Handler and the worker drain func.
 func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) (http.Handler, func()) {
 	h, drain := BuildHandler(ctx, cfg, db, logger)
-	// Fork: the team feature's boot pass (support-tier repair + reconcile of the mentors'
-	// copies and the Soporte rotation), in the background. HTTP server only: BuildHandler
+	// Fork: the team feature's boot pass (support-tier repair + reconcile of the copies of
+	// the Mentoría and Soporte templates), in the background. HTTP server only: BuildHandler
 	// also backs the `calnode mcp` process, which must not reconcile next to the server.
 	h.StartTeamBoot(ctx)
 	mux := http.NewServeMux()
@@ -384,7 +384,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 
 	// Users
 	mux.HandleFunc("GET /v1/users", h.RequireAuth(h.ListUsers))
-	// Fork: user changes that move copies or the Soporte rotation reconcile after a 2xx,
+	// Fork: user changes that move copies reconcile after a 2xx,
 	// and the team's áreas have their own endpoint (fork_team_guards.go, fork_team_api.go).
 	mux.HandleFunc("DELETE /v1/users/{id}", h.RequireAuth(h.TeamReconcileAfter(h.DeleteUser)))
 	mux.HandleFunc("PATCH /v1/users/{id}/role", h.RequireAuth(h.TeamReconcileAfter(h.SetUserRole)))
@@ -392,7 +392,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/users/{id}/transfer-ownership", h.RequireAuth(h.TeamTransferOwnershipGuard(h.TransferOwnership)))
 	mux.HandleFunc("POST /v1/users/{id}/archive", h.RequireAuth(h.TeamReconcileAfter(h.ArchiveUser)))
 	mux.HandleFunc("POST /v1/users/{id}/restore", h.RequireAuth(h.TeamReconcileAfter(h.RestoreUser)))
-	// Fork: the owner's predefined event types (Mentoría template, Soporte shared type).
+	// Fork: the owner's predefined event types (the Mentoría and Soporte templates).
 	mux.HandleFunc("GET /v1/team/settings", h.RequireAuth(h.GetTeamSettings))
 	mux.HandleFunc("GET /v1/users/{id}/upcoming-bookings", h.RequireAuth(h.ListUserUpcomingBookings))
 
@@ -451,7 +451,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/event-types", h.RequireAuth(h.CreateEventType))
 	mux.HandleFunc("GET /v1/event-types", h.RequireAuth(h.ListEventTypes))
 	mux.HandleFunc("GET /v1/event-types/{slug}", h.RequireAuth(h.GetEventType))
-	// Fork: TeamEventTypeGuard refuses edits of mentors' copies and holders, guards the
+	// Fork: TeamEventTypeGuard refuses edits of the templates' copies and holders, guards the
 	// predefined types, and reconciles the copies after a template edit (fork_team_guards.go).
 	mux.HandleFunc("PATCH /v1/event-types/{slug}", h.RequireAuth(h.TeamEventTypeGuard(handler.TeamOpPatch, h.PatchEventType)))
 	mux.HandleFunc("DELETE /v1/event-types/{slug}", h.RequireAuth(h.TeamEventTypeGuard(handler.TeamOpDelete, h.DeleteEventType)))
@@ -467,7 +467,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/event-types/{slug}/whatsapp-messages/preview", h.RequireAuth(h.TeamEventTypeGuard(handler.TeamOpWhatsAppWrite, h.PreviewWhatsAppMessages)))
 
 	// Availability rules
-	mux.HandleFunc("POST /v1/availability-rules", h.RequireAuth(h.TeamReconcileAfterCaller(h.CreateAvailabilityRule))) // fork: hours decide the Soporte rotation
+	mux.HandleFunc("POST /v1/availability-rules", h.RequireAuth(h.TeamReconcileAfterCaller(h.CreateAvailabilityRule))) // fork: reconcile the caller (fork_team_guards.go)
 	mux.HandleFunc("GET /v1/availability-rules", h.RequireAuth(h.ListAvailabilityRules))
 	mux.HandleFunc("PATCH /v1/availability-rules/{id}", h.RequireAuth(h.TeamReconcileAfterCaller(h.UpdateAvailabilityRule)))
 	mux.HandleFunc("DELETE /v1/availability-rules/{id}", h.RequireAuth(h.TeamReconcileAfterCaller(h.DeleteAvailabilityRule)))
@@ -569,7 +569,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 
 	// Webhooks
 	// Fork: TeamWebhookGuard - only the owner selects whatsapp_message; filters list a
-	// template, never a mentor's copy (fork_team_guards.go).
+	// template, never one of its copies (fork_team_guards.go).
 	mux.HandleFunc("POST /v1/webhooks", h.RequireAuth(h.TeamWebhookGuard(h.CreateWebhook)))
 	mux.HandleFunc("GET /v1/webhooks", h.RequireAuth(h.ListWebhooks))
 	mux.HandleFunc("GET /v1/webhooks/settings", h.RequireAuth(h.GetWebhookSettings)) // fork: reminder hour + team scope

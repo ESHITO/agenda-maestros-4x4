@@ -6,9 +6,11 @@
 		teamApi,
 		copyText,
 		reassignErrorText,
+		isTeamCopy,
 		AREA_LABELS,
 		INVITE_ROLE_LABELS,
 		type Area,
+		type CopyLink,
 		type EventType,
 		type Invite,
 		type InviteRole,
@@ -120,7 +122,14 @@
 	function applySettings(s: TeamSettings) {
 		settings = s;
 		tplChoice = s.mentoria_template?.id ?? '';
-		supChoice = s.soporte_shared?.id ?? '';
+		supChoice = s.soporte_template?.id ?? '';
+	}
+
+	// The template of each área (Mentoría → T, Soporte → S); null = not set.
+	function templateOf(a: Area) {
+		if (a === 'mentoria') return settings?.mentoria_template ?? null;
+		if (a === 'soporte') return settings?.soporte_template ?? null;
+		return null;
 	}
 
 	// The owner picks among their own types: never a copy, never archived, and only ones in
@@ -130,7 +139,7 @@
 		try {
 			const res = await api.get<{ items: EventType[] }>('/v1/event-types');
 			ownerTypes = (res.items ?? []).filter(
-				(et) => et.owned !== false && et.team?.kind !== 'mentoria_copy' && !et.archived && et.location_type === 'livekit'
+				(et) => et.owned !== false && !isTeamCopy(et.team?.kind) && !et.archived && et.location_type === 'livekit'
 			);
 		} catch {
 			ownerTypes = [];
@@ -233,9 +242,27 @@
 		if (!me?.is_owner || m.archived) return false;
 		return (m.is_admin && !m.is_owner) || (m.is_owner && m.id === me.id);
 	}
-	// The template's owner has no copy (their link IS the template): only Soporte or nothing.
+	// The templates' owner gets no copy of either (each template IS their link), so on their
+	// own row an área whose template is set is not offered (the server refuses it with a 400).
 	function alsoOptions(m: TeamMember): Area[] {
-		return m.is_owner ? ['', 'soporte'] : ['', 'mentoria', 'soporte'];
+		const all: Area[] = ['mentoria', 'soporte'];
+		if (!m.is_owner) return ['', ...all];
+		const out: Area[] = ['', ...(settings ? all.filter((a) => !templateOf(a)) : [])];
+		// An área stored before its template was set stays listed, so it can be cleared.
+		const cur = areaOf(m);
+		if (cur && !out.includes(cur)) out.push(cur);
+		return out;
+	}
+	// Nothing left to choose → the select is not shown.
+	function showAlso(m: TeamMember): boolean {
+		return canEditAlso(m) && alsoOptions(m).length > 1;
+	}
+	// The owner's own row: the templates they own are their links.
+	function ownerLinks(m: TeamMember): { name: string; slug: string }[] {
+		if (!m.is_owner || m.archived || m.id !== me?.id || !settings) return [];
+		return [settings.mentoria_template, settings.soporte_template]
+			.filter((t) => !!t)
+			.map((t) => ({ name: t.name, slug: t.slug }));
 	}
 	const alsoLabel = (a: Area) => (a ? AREA_LABELS[a] : 'No atiende');
 
@@ -256,16 +283,16 @@
 		applyTeamRole(m, { tier: 'admin', area: a });
 	}
 
-	// Slugs whose bookings belong to an área: Mentoría = the person's copy (their personal
-	// link) and the template; Soporte = the shared type. Empty = cannot tell.
+	// Slugs whose bookings belong to the person's current área: their copy (their personal
+	// link) and that área's template. Empty = cannot tell. The owner has no copy: their
+	// personal_link is T itself, whatever área they leave, so only the template counts
+	// (the same family the server's upcoming_in_previous_area counts).
 	function areaSlugs(m: TeamMember, a: Area): Set<string> {
 		const out = new Set<string>();
-		if (a === 'mentoria') {
-			if (m.personal_link?.slug) out.add(m.personal_link.slug);
-			if (settings?.mentoria_template?.slug) out.add(settings.mentoria_template.slug);
-		} else if (a === 'soporte' && settings?.soporte_shared?.slug) {
-			out.add(settings.soporte_shared.slug);
-		}
+		if (!a) return out;
+		if (!m.is_owner && m.personal_link?.slug) out.add(m.personal_link.slug);
+		const t = templateOf(a);
+		if (t?.slug) out.add(t.slug);
 		return out;
 	}
 
@@ -273,17 +300,21 @@
 	// person until someone passes them on or cancels them).
 	async function applyTeamRole(m: TeamMember, body: { tier: 'admin' | 'member'; area: Area }) {
 		const prev = areaOf(m);
-		if (prev && body.area !== prev) {
+		const slugs = areaSlugs(m, prev);
+		// The owner leaving an área with no template: nothing of it can be told apart from
+		// their Mentoría sessions, so no warning (the change itself still reports the count).
+		if (prev && body.area !== prev && !(m.is_owner && slugs.size === 0)) {
 			try {
 				const res = await teamApi.upcomingBookings(m.id);
-				const slugs = areaSlugs(m, prev);
 				const left = (res.items ?? []).filter((b) => slugs.size === 0 || slugs.has(b.event_type_slug));
 				if (left.length > 0) {
 					const n = left.length;
 					const what = slugs.size === 0 ? (n === 1 ? 'sesión próxima' : 'sesiones próximas') : `${n === 1 ? 'sesión próxima' : 'sesiones próximas'} de ${AREA_LABELS[prev]}`;
 					openConfirm({
 						title: `${m.name} tiene ${n} ${what}`,
-						description: `Seguirán a su nombre hasta que las pases a otra persona o las canceles desde Reservas. ${prev === 'mentoria' ? 'Su enlace personal dejará de aceptar reservas nuevas.' : 'Dejará de recibir reservas nuevas de Soporte.'}`,
+						description: m.is_owner
+							? 'Seguirán a tu nombre hasta que las pases a otra persona o las canceles desde Reservas. Tus enlaces (las plantillas) siguen aceptando reservas.'
+							: 'Seguirán a su nombre hasta que las pases a otra persona o las canceles desde Reservas. Su enlace personal dejará de aceptar reservas nuevas.',
 						confirmText: 'Cambiar de todas formas',
 						destructive: false,
 						action: () => doTeamRole(m, body)
@@ -305,11 +336,10 @@
 					: body.area === ''
 						? (m.is_admin ? 'deja de ser administrador y no atiende Mentoría ni Soporte' : 'ya no atiende Mentoría ni Soporte')
 						: `ahora es ${UI_ROLE_LABELS[body.area].toLowerCase()}`;
-			// An área-soporte person without weekly hours waits outside the rotation
-			// (fork_team_hours.go): say so, or the owner expects them to get bookings. Only
-			// while a Soporte type is set: with none there is no rotation to promise.
-			const waits = body.area === 'soporte' && !!settings?.soporte_shared && res?.has_availability === false;
-			toast.success(`${m.name} ${label}${waits ? '. Entrará a la rotación de Soporte cuando ponga su disponibilidad.' : ''}`);
+			// A person without weekly hours gets a personal link that shows no times: say so,
+			// or the owner expects them to get bookings. Only while that área's template is set.
+			const noHours = !m.is_owner && !!templateOf(body.area) && res?.has_availability === false;
+			toast.success(`${m.name} ${label}${noHours ? '. Su enlace no mostrará horarios hasta que ponga su disponibilidad.' : ''}`);
 			if (res?.upcoming_in_previous_area && res.upcoming_in_previous_area > 0) {
 				const n = res.upcoming_in_previous_area;
 				toast.warning(`${m.name} tiene ${n} ${n === 1 ? 'sesión próxima' : 'sesiones próximas'} del área anterior: pásalas a otra persona desde Reservas.`);
@@ -459,10 +489,10 @@
 	// --- Tipos predefinidos (PUT /v1/team/settings, owner) ---
 	const typeName = (id: string) => ownerTypes.find((t) => t.id === id)?.name
 		?? (settings?.mentoria_template?.id === id ? settings.mentoria_template.name : undefined)
-		?? (settings?.soporte_shared?.id === id ? settings.soporte_shared.name : undefined)
+		?? (settings?.soporte_template?.id === id ? settings.soporte_template.name : undefined)
 		?? '';
 	const settingsDirty = $derived(
-		!!settings && (tplChoice !== (settings.mentoria_template?.id ?? '') || supChoice !== (settings.soporte_shared?.id ?? ''))
+		!!settings && (tplChoice !== (settings.mentoria_template?.id ?? '') || supChoice !== (settings.soporte_template?.id ?? ''))
 	);
 
 	function confirmSettings() {
@@ -477,10 +507,10 @@
 			if (oldT) lines.push(`Las copias de «${oldT.name}» de cada mentor se desactivarán (sus reservas y enlaces se conservan; si vuelves a elegirla, se reactivan las mismas).`);
 			if (tplChoice) lines.push(`Cada mentor recibirá su copia de «${typeName(tplChoice)}», con su propio enlace y los mismos datos, preguntas y textos de WhatsApp.`);
 		}
-		const oldS = settings.soporte_shared;
+		const oldS = settings.soporte_template;
 		if (supChoice !== (oldS?.id ?? '')) {
-			if (oldS) lines.push(`«${oldS.name}» vuelve a atenderlo solo su propietario.`);
-			if (supChoice) lines.push(`«${typeName(supChoice)}» se repartirá por turnos entre el personal de soporte.`);
+			if (oldS) lines.push(`Las copias de «${oldS.name}» de cada persona de soporte se desactivarán (sus reservas y enlaces se conservan; si vuelves a elegirla, se reactivan las mismas).`);
+			if (supChoice) lines.push(`Cada persona de soporte recibirá su copia de «${typeName(supChoice)}», con su propio enlace y los mismos datos, preguntas y textos de WhatsApp.`);
 		}
 		openConfirm({
 			title: '¿Guardar los tipos predefinidos?',
@@ -497,13 +527,13 @@
 		const out: string[] = [];
 		const n = (v: number, one: string, many: string) => (v === 1 ? one : many.replace('{n}', String(v)));
 		if (w.copies_created > 0)
-			out.push(`Se ${n(w.copies_created, 'creó 1 copia', 'crearon {n} copias')} (una por mentor).`);
+			out.push(`Se ${n(w.copies_created, 'creó 1 copia', 'crearon {n} copias')} (una por mentor o persona de soporte).`);
 		if (w.copies_deactivated > 0)
 			out.push(`Se ${n(w.copies_deactivated, 'desactivó 1 copia', 'desactivaron {n} copias')} (sus reservas y enlaces se conservan).`);
 		if (w.mentoria_template_no_webhook)
 			out.push('La plantilla de Mentoría no está en ningún webhook tuyo: sus sesiones no enviarán WhatsApp hasta que la añadas en Webhooks.');
-		if (w.soporte_shared_no_webhook)
-			out.push('El tipo de Soporte no está en ningún webhook tuyo: sus sesiones no enviarán WhatsApp hasta que lo añadas en Webhooks.');
+		if (w.soporte_template_no_webhook ?? w.soporte_shared_no_webhook)
+			out.push('La plantilla de Soporte no está en ningún webhook tuyo: sus sesiones no enviarán WhatsApp hasta que la añadas en Webhooks.');
 		return out;
 	}
 
@@ -512,7 +542,7 @@
 		try {
 			const res = await teamApi.putSettings({
 				mentoria_template_id: tplChoice || null,
-				soporte_shared_id: supChoice || null
+				soporte_template_id: supChoice || null
 			});
 			applySettings(res);
 			settingsWarnings = warningLines(res.warnings);
@@ -537,13 +567,11 @@
 		return { label: 'Sin área', variant: 'outline' };
 	}
 
-	// "Sin horario" note on a card: only when the missing hours cost something - a Soporte
-	// person (any tier) while a Soporte type is set, or a mentor who has a personal link.
+	// "Sin horario" note on a card: only when the missing hours cost something - a mentor or
+	// support person (any tier) whose personal link would show no times.
 	function noHoursNote(m: TeamMember): string {
-		if (m.archived || m.has_availability !== false) return '';
-		if (m.area === 'soporte' && settings?.soporte_shared)
-			return 'Sin horario: entra a la rotación de Soporte cuando ponga su disponibilidad';
-		if (m.area === 'mentoria' && m.personal_link) return 'Sin horario: su enlace aún no muestra horarios';
+		if (m.archived || m.has_availability !== false || !m.personal_link) return '';
+		if (m.area === 'mentoria' || m.area === 'soporte') return 'Sin horario: su enlace aún no muestra horarios';
 		return '';
 	}
 
@@ -566,6 +594,34 @@
 		return Math.max(0, Math.ceil(diff / 86_400_000));
 	}
 </script>
+
+<!-- Fork: a template's copies count and its own link (Mentoría and Soporte alike). -->
+{#snippet templateMeta(slug: string, n: number, per: string)}
+	<p class="text-xs text-muted-foreground">
+		{n === 1 ? `1 copia (${per})` : `${n} copias (${per})`} ·
+		<a href={bookUrl(slug)} target="_blank" rel="noopener noreferrer" class="break-all underline">/book/{slug}</a>
+	</p>
+{/snippet}
+
+<!-- Fork: every personal link of a template (owner only: copy_links is absent for admins). -->
+{#snippet copyLinkList(title: string, links: CopyLink[] | undefined)}
+	{#if links && links.length > 0}
+		<div class="space-y-1.5 border-t pt-4">
+			<p class="text-sm font-medium">{title}</p>
+			<ul class="space-y-1.5">
+				{#each links as l (l.slug)}
+					<li class="flex flex-col gap-1 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+						<div class="min-w-0">
+							<p class="text-sm font-medium">{l.mentor_name}{#if !l.active}<span class="ml-1.5 text-xs font-normal text-muted-foreground">(inactiva)</span>{/if}</p>
+							<a href={l.url} target="_blank" rel="noopener noreferrer" class="break-all text-xs text-primary hover:underline">{l.url}</a>
+						</div>
+						<Button variant="outline" size="sm" class="self-start sm:self-auto" onclick={() => copyLink(l.url)}>Copiar enlace</Button>
+					</li>
+				{/each}
+			</ul>
+		</div>
+	{/if}
+{/snippet}
 
 <ConfirmDialog
 	bind:open={confirmOpen}
@@ -832,7 +888,14 @@
 												</Select.Root>
 											</div>
 										{/if}
-										{#if canEditAlso(m)}
+										{#if ownerLinks(m).length > 0}
+											{@const links = ownerLinks(m)}
+											<p class="w-full text-xs text-muted-foreground">
+												Tus enlaces:
+												{#each links as l, i (l.slug)}{#if i > 0}{i === links.length - 1 ? ' y ' : ', '}{/if}<a href={bookUrl(l.slug)} target="_blank" rel="noopener noreferrer" class="font-medium text-foreground underline">{l.name}</a>{/each}
+											</p>
+										{/if}
+										{#if showAlso(m)}
 											<div class="space-y-1">
 												<p class="text-xs text-muted-foreground">También atiende</p>
 												<Select.Root type="single" bind:value={() => areaOf(m) || 'none', (v) => changeAlso(m, v)}>
@@ -866,7 +929,7 @@
 			{#if $currentUser?.is_admin}
 				<p class="mt-2 text-xs text-muted-foreground">
 					<span class="font-medium">Mentor</span>: atiende la Mentoría con su propio enlace personal.
-					<span class="font-medium">Soporte</span>: recibe por turnos las reservas de Soporte.
+					<span class="font-medium">Soporte</span>: atiende el Soporte con su propio enlace personal.
 					<span class="font-medium">Sin área</span>: no atiende los tipos predefinidos. Cada persona ve solo sus reservas;
 					el propietario y los administradores ven todas y pueden pasarlas a otra persona de la misma área.
 				</p>
@@ -905,40 +968,26 @@
 								<p class="text-sm">{settings.mentoria_template?.name ?? 'Ninguna'}</p>
 							{/if}
 							{#if settings.mentoria_template}
-								{@const n = settings.mentoria_template.copies}
-								<p class="text-xs text-muted-foreground">
-									{n === 1 ? '1 copia (una por mentor)' : `${n} copias (una por mentor)`} ·
-									<a href={bookUrl(settings.mentoria_template.slug)} target="_blank" rel="noopener noreferrer" class="underline">/book/{settings.mentoria_template.slug}</a>
-								</p>
+								{@render templateMeta(settings.mentoria_template.slug, settings.mentoria_template.copies, 'una por mentor')}
 							{/if}
 						</div>
 						<div class="min-w-0 space-y-1.5">
-							<p class="text-sm font-medium">Tipo de Soporte <span class="font-normal text-muted-foreground">(se reparte entre el personal de soporte)</span></p>
+							<p class="text-sm font-medium">Plantilla de Soporte <span class="font-normal text-muted-foreground">(cada persona de soporte recibe su copia)</span></p>
 							{#if canEdit}
 								<Select.Root type="single" value={supChoice || 'none'} onValueChange={(v) => (supChoice = !v || v === 'none' ? '' : v)} disabled={savingSettings}>
-									<Select.Trigger class="w-full" aria-label="Tipo de Soporte">{supChoice ? typeName(supChoice) || 'Tipo actual' : 'Ninguno'}</Select.Trigger>
+									<Select.Trigger class="w-full" aria-label="Plantilla de Soporte">{supChoice ? typeName(supChoice) || 'Tipo actual' : 'Ninguna'}</Select.Trigger>
 									<Select.Content>
-										<Select.Item value="none" label="Ninguno">Ninguno</Select.Item>
+										<Select.Item value="none" label="Ninguna">Ninguna</Select.Item>
 										{#each ownerTypes as t (t.id)}
 											<Select.Item value={t.id} label={t.name} disabled={t.id === tplChoice}>{t.name}</Select.Item>
 										{/each}
 									</Select.Content>
 								</Select.Root>
 							{:else}
-								<p class="text-sm">{settings.soporte_shared?.name ?? 'Ninguno'}</p>
+								<p class="text-sm">{settings.soporte_template?.name ?? 'Ninguna'}</p>
 							{/if}
-							{#if settings.soporte_shared}
-								{@const hosts = settings.soporte_shared.hosts ?? []}
-								{@const waiting = settings.soporte_shared.waiting ?? []}
-								<p class="text-xs text-muted-foreground">
-									{hosts.length > 0 ? `Lo atienden: ${hosts.map((h) => h.name).join(', ')}` : 'Nadie tiene el área Soporte'} ·
-									<a href={bookUrl(settings.soporte_shared.slug)} target="_blank" rel="noopener noreferrer" class="underline">/book/{settings.soporte_shared.slug}</a>
-								</p>
-								{#if waiting.length > 0}
-									<p class="text-xs text-amber-700 dark:text-amber-400">
-										Esperando horario: {waiting.map((w) => w.name).join(', ')} (entran a la rotación cuando pongan su disponibilidad)
-									</p>
-								{/if}
+							{#if settings.soporte_template}
+								{@render templateMeta(settings.soporte_template.slug, settings.soporte_template.copies, 'una por persona de soporte')}
 							{/if}
 						</div>
 					</div>
@@ -960,22 +1009,8 @@
 							{#each settingsWarnings as w}<li>{w}</li>{/each}
 						</ul>
 					{/if}
-					{#if settings.mentoria_template?.copy_links && settings.mentoria_template.copy_links.length > 0}
-						<div class="space-y-1.5 border-t pt-4">
-							<p class="text-sm font-medium">Enlaces de los mentores</p>
-							<ul class="space-y-1.5">
-								{#each settings.mentoria_template.copy_links as l (l.slug)}
-									<li class="flex flex-col gap-1 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-										<div class="min-w-0">
-											<p class="text-sm font-medium">{l.mentor_name}{#if !l.active}<span class="ml-1.5 text-xs font-normal text-muted-foreground">(inactiva)</span>{/if}</p>
-											<a href={l.url} target="_blank" rel="noopener noreferrer" class="break-all text-xs text-primary hover:underline">{l.url}</a>
-										</div>
-										<Button variant="outline" size="sm" class="self-start sm:self-auto" onclick={() => copyLink(l.url)}>Copiar enlace</Button>
-									</li>
-								{/each}
-							</ul>
-						</div>
-					{/if}
+					{@render copyLinkList('Enlaces de los mentores', settings.mentoria_template?.copy_links)}
+					{@render copyLinkList('Enlaces del personal de soporte', settings.soporte_template?.copy_links)}
 				{/if}
 			</div>
 		</div>

@@ -3,7 +3,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { api, copyText, type EventType, type EventTypeHost, type TeamMember, type Team, type CalendarStatus, type ZoomStatus } from '$lib/api';
+	import { api, copyText, isTeamCopy, isTeamTemplate, type EventType, type EventTypeHost, type TeamMember, type Team, type CalendarStatus, type ZoomStatus } from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -68,14 +68,14 @@
 	let etSaving = $state(false);
 
 	// ── Fork: predefined types (et.team) ─────────────────────────────────────────
-	// Decided BEFORE `owned`: a mentor's copy is owned by the template's owner, so for the
-	// owner owned = true, yet every edit of a copy is refused (409) - it is read-only for
-	// everyone, and edited through its template. The template (T) and the shared Soporte
-	// type (S) stay editable by their owner, except who hosts them: that follows the áreas
-	// set in Miembros, so no hosts PUT and no routing fields in the PATCH.
+	// Decided BEFORE `owned`: a copy (of the Mentoría or the Soporte template) is owned by
+	// the template's owner, so for the owner owned = true, yet every edit of a copy is
+	// refused (409) - it is read-only for everyone, and edited through its template. Both
+	// templates stay editable by their owner, except who hosts them: each copy is hosted by
+	// its person (áreas set in Miembros), so no hosts PUT and no routing fields in the PATCH.
 	const teamKind = $derived(et?.team?.kind);
-	const isCopy = $derived(teamKind === 'mentoria_copy');
-	const isManaged = $derived(teamKind === 'mentoria_template' || teamKind === 'soporte_shared');
+	const isCopy = $derived(isTeamCopy(teamKind));
+	const isManaged = $derived(isTeamTemplate(teamKind));
 	const mentorName = $derived(et?.team?.mentor_name || et?.mentor_name || et?.team?.host_name || '');
 	async function copyBookLink() {
 		const url = `${window.location.origin}/book/${et?.slug ?? slug}`;
@@ -404,9 +404,8 @@
 				subj_reschedule: subj_reschedule.trim(),
 				subj_reminder: subj_reminder.trim(),
 			};
-			// Fork: left out on T and S. Sending them from a page loaded before the Soporte
-			// rotation changed would put the stored routing back (the server also refuses a
-			// change with 409).
+			// Fork: left out on both templates: their routing is fixed to their owner (the
+			// server refuses a change with 409).
 			if (managed) {
 				delete payload.routing_mode;
 				delete payload.rr_strategy;
@@ -495,8 +494,8 @@
 	onMount(async () => {
 		await loadET();
 		// Editor-only data (owner-scoped endpoints) — skip for read-only hosts, and for a
-		// mentor's copy (read-only for everyone, fork).
-		if (et?.owned === false || et?.team?.kind === 'mentoria_copy') return;
+		// template's copy (read-only for everyone, fork).
+		if (et?.owned === false || isTeamCopy(et?.team?.kind)) return;
 		// Connected calendar — best-effort; drives the meeting-link hint only.
 		api.get<CalendarStatus>('/v1/calendar/status').then((s) => (calStatus = s)).catch(() => {});
 	api.get<ZoomStatus>('/v1/zoom/status').then((s) => (zoomStatus = s)).catch(() => {});
@@ -600,17 +599,17 @@
 	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else if etError}
 	<p class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{etError}</p>
-{:else if et && et.team?.kind === 'mentoria_copy'}
+{:else if et && isTeamCopy(et.team?.kind)}
 
-<!-- Fork: a mentor's copy of the Mentoría template - read-only for everyone. -->
+<!-- Fork: a person's copy of the Mentoría or Soporte template - read-only for everyone. -->
 <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
 	{#if et.owned !== false}
-		Es la copia de {mentorName ? mentorName : 'un mentor'}.
-		{#if et.team.template_slug}
+		Es la copia de {mentorName ? mentorName : et.team?.kind === 'soporte_copy' ? 'una persona de soporte' : 'un mentor'}.
+		{#if et.team?.template_slug}
 			Se edita en la plantilla:
 			<a href="{base}/event-types/{et.team.template_slug}" class="font-medium underline">{et.team.template_name || et.team.template_slug}</a>.
 		{:else}
-			Se edita en la plantilla{et.team.template_name ? `: ${et.team.template_name}` : ''}.
+			Se edita en la plantilla{et.team?.template_name ? `: ${et.team.template_name}` : ''}.
 		{/if}
 		Los cambios de la plantilla llegan solos a todas las copias.
 	{:else}
@@ -625,12 +624,7 @@
 
 <!-- Read-only: the user hosts this event type but doesn't own it -->
 <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-	{#if et.team}
-		<!-- Fork: a predefined type this person attends (the shared Soporte type). -->
-		<span class="font-medium">Predefinido por el propietario.</span>
-		Se reparte por turnos entre el personal de soporte; tú defines tus horarios en
-		<a href="{base}/availability" class="font-medium underline">Disponibilidad</a>.
-	{:else if et.owner_email}
+	{#if et.owner_email}
 		<span class="font-medium">{et.owner_name || et.owner_email}</span> creó este tipo de atención.
 		<a href="mailto:{et.owner_email}?subject={encodeURIComponent('Solicitud de cambio: ' + et.name)}" class="font-medium underline">Envíale un mensaje</a> para solicitar cambios.
 	{:else if et.owner_name}
@@ -651,11 +645,12 @@
 		y las copias siguen los cambios que guardes aquí (datos generales, notificaciones, preguntas y textos de WhatsApp).
 		Este enlace sigue siendo el tuyo.
 	</div>
-{:else if teamKind === 'soporte_shared'}
+{:else if teamKind === 'soporte_template'}
 	<div class="mb-4 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-		<span class="font-medium">Tipo de Soporte.</span>
-		Un solo enlace que se reparte por turnos entre el personal de soporte (el área se asigna en
-		<a href="{base}/members" class="underline">Miembros</a>).
+		<span class="font-medium">Plantilla de Soporte.</span>
+		Cada persona de soporte tiene su propia copia con su enlace personal{#if et?.team?.copies !== undefined}{' '}({et.team.copies === 1 ? '1 copia' : `${et.team.copies} copias`}){/if},
+		y las copias siguen los cambios que guardes aquí (datos generales, notificaciones, preguntas y textos de WhatsApp).
+		Este enlace sigue siendo el tuyo.
 	</div>
 {/if}
 
@@ -867,24 +862,16 @@
 {/if}
 
 {#if activeTab === 'hosts' && isManaged}
-<!-- Fork: who hosts T / S follows the áreas; nothing to edit here. -->
+<!-- Fork: a template is hosted by its owner, each copy by its person; nothing to edit here. -->
 <div class="mb-8">
 	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Anfitriones</h2>
 	<div class="rounded-lg border bg-card p-4 sm:p-6">
 		<p class="mb-4 text-sm text-muted-foreground">
 			Asignados por área — se cambian en <a href="{base}/members" class="underline">Miembros</a>.
 		</p>
-		{#if teamKind === 'mentoria_template'}
-			<p class="mb-3 text-sm">
-				Esta plantilla la atiendes tú. Cada mentor atiende su propia copia, con su enlace personal.
-			</p>
-		{:else}
-			<p class="mb-3 text-sm">
-				{et?.routing_mode === 'round_robin'
-					? 'Se reparte por turnos entre el personal de soporte:'
-					: 'Nadie tiene el área Soporte todavía, así que lo atiende su propietario:'}
-			</p>
-		{/if}
+		<p class="mb-3 text-sm">
+			Esta plantilla la atiendes tú. {teamKind === 'soporte_template' ? 'Cada persona de soporte' : 'Cada mentor'} atiende su propia copia, con su enlace personal.
+		</p>
 		{#if !hostsLoaded}
 			<p class="text-sm text-muted-foreground">Cargando…</p>
 		{:else}

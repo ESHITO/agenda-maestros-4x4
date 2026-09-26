@@ -6,18 +6,19 @@ package handler
 //
 // Guards (Spanish 409s) - checked BEFORE the wrapped handler, which resolves {slug}
 // itself; a wrapper resolves slug -> id first, because a PATCH may rename the slug:
-//   - a mentor's copy: PATCH, DELETE, duplicate, transfer, hosts PUT, questions, WhatsApp
-//     PUT/preview - it is edited through its template;
+//   - a copy (a mentor's copy of T, a support person's copy of S): PATCH, DELETE,
+//     duplicate, transfer, hosts PUT, questions, WhatsApp PUT/preview - it is edited
+//     through its template;
 //   - a holder (retired questions): every mutation;
-//   - T and S: transfer, hosts PUT (assigned from Miembros), a PATCH that CHANGES
-//     routing_mode / rr_strategy or moves the location off the built-in video room
-//     (validate on change: the editor PATCHes the whole form), DELETE of a template that
-//     has copies, DELETE of S while it is the setting;
+//   - T and S alike: transfer, hosts PUT (their owner, locked by the reconcile), a PATCH
+//     that CHANGES routing_mode / rr_strategy or moves the location off the built-in
+//     video room (validate on change: the editor PATCHes the whole form), DELETE of a
+//     template that has copies;
 //   - workspace ownership transfer while either setting is set.
 //
 // Triggers (after a 2xx, detached from the request's cancellation): template edits
-// (PATCH, questions) and a PATCH of S reconcile; so do role, archive, restore, delete and
-// an invite claim (TeamReconcileAfter).
+// (PATCH, questions) reconcile; so do role, archive, restore, delete and an invite claim
+// (TeamReconcileAfter).
 
 import (
 	"context"
@@ -50,7 +51,8 @@ type teamEventType struct {
 	locationType            string
 	kind                    string // teamKind*, "" = ordinary
 	link                    teamLinkInfo
-	copies                  int // copy links whose template is this type
+	copies                  int    // copy links whose template is this type
+	copiesArea              string // the área those copies serve (teamTemplateArea)
 }
 
 // teamEventTypeBySlug loads the event type named slug (any owner: slugs are unique) with
@@ -74,20 +76,24 @@ func (h *Handler) teamEventTypeBySlug(ctx context.Context, slug string) (*teamEv
 	et.kind = idx.kindOf(et.id)
 	et.link = idx.links[et.id]
 	et.copies = idx.anyCopies[et.id]
+	et.copiesArea = idx.templateArea(et.id)
 	return &et, idx, nil
 }
 
-// copyGuardMessage is the 409 for any edit of a mentor's copy.
+// copyGuardMessage is the 409 for any edit of a copy (of either template).
 func copyGuardMessage(li teamLinkInfo) string {
 	tmpl := li.templateName
 	if tmpl == "" {
 		tmpl = "la plantilla"
 	}
-	mentor := li.mentorName
-	if mentor == "" {
-		mentor = "un mentor"
+	person := li.mentorName
+	if person == "" {
+		person = "un mentor"
+		if li.area == areaSoporte {
+			person = "una persona de soporte"
+		}
 	}
-	return "Esta es la copia de «" + tmpl + "» para " + mentor + "; se edita en la plantilla."
+	return "Esta es la copia de «" + tmpl + "» para " + person + "; se edita en la plantilla."
 }
 
 const holderGuardMessage = "Este tipo guarda las preguntas retiradas de una plantilla y no se edita."
@@ -106,14 +112,14 @@ func (h *Handler) TeamEventTypeGuard(op TeamOp, next http.HandlerFunc) http.Hand
 			next(w, r) // the handler answers its own 404
 			return
 		}
-		switch et.kind {
-		case teamKindCopy:
+		switch {
+		case isTeamCopyKind(et.kind):
 			h.writeError(w, http.StatusConflict, copyGuardMessage(et.link))
 			return
-		case teamKindHolder:
+		case et.kind == teamKindHolder:
 			h.writeError(w, http.StatusConflict, holderGuardMessage)
 			return
-		case teamKindTemplate, teamKindSoporte:
+		case isTeamTemplateKind(et.kind):
 			if msg, err := h.predefinedGuard(w, r, op, et); err != nil {
 				h.writeError(w, http.StatusBadRequest, "invalid JSON")
 				return
@@ -123,8 +129,12 @@ func (h *Handler) TeamEventTypeGuard(op TeamOp, next http.HandlerFunc) http.Hand
 			}
 		}
 		if op == TeamOpDelete && et.copies > 0 {
+			whose := "de los mentores"
+			if et.copiesArea == areaSoporte {
+				whose = "del personal de soporte"
+			}
 			h.writeError(w, http.StatusConflict,
-				"«"+et.name+"» tiene copias de los mentores y no se puede borrar; archívala si ya no la usas.")
+				"«"+et.name+"» tiene copias "+whose+" y no se puede borrar; archívala si ya no la usas.")
 			return
 		}
 
@@ -133,26 +143,21 @@ func (h *Handler) TeamEventTypeGuard(op TeamOp, next http.HandlerFunc) http.Hand
 		if !sw.ok() {
 			return
 		}
-		// A template edit reaches every copy; a PATCH of S may have touched what its
-		// rotation needs. Both are whole passes (the workspace is small).
-		if (et.kind == teamKindTemplate && (op == TeamOpPatch || op == TeamOpQuestions)) ||
-			(et.kind == teamKindSoporte && op == TeamOpPatch) {
+		// A template edit reaches every copy: a whole pass (the workspace is small).
+		if isTeamTemplateKind(et.kind) && (op == TeamOpPatch || op == TeamOpQuestions) {
 			h.reconcileTeamAfter(r.Context(), "")
 		}
 	}
 }
 
-// predefinedGuard is the T/S part of TeamEventTypeGuard: the refusal message, or "".
+// predefinedGuard is the T/S part of TeamEventTypeGuard (the same rules for both): the
+// refusal message, or "".
 func (h *Handler) predefinedGuard(w http.ResponseWriter, r *http.Request, op TeamOp, et *teamEventType) (string, error) {
 	switch op {
 	case TeamOpTransfer:
 		return "Los tipos predefinidos no se transfieren.", nil
 	case TeamOpHostsPut:
-		return "Los anfitriones de los tipos predefinidos se asignan desde Miembros.", nil
-	case TeamOpDelete:
-		if et.kind == teamKindSoporte {
-			return "«" + et.name + "» es el tipo de Soporte; quítalo primero en Miembros.", nil
-		}
+		return "Los tipos predefinidos los atiende el propietario; cada persona atiende su copia, que se asigna desde Miembros.", nil
 	case TeamOpPatch:
 		body, err := readBody(w, r, 32<<10)
 		if err != nil {
@@ -168,7 +173,7 @@ func (h *Handler) predefinedGuard(w http.ResponseWriter, r *http.Request, op Tea
 		}
 		if (req.RoutingMode != nil && *req.RoutingMode != et.routingMode) ||
 			(req.RRStrategy != nil && *req.RRStrategy != et.rrStrategy) {
-			return "El reparto de los tipos predefinidos se asigna desde Miembros.", nil
+			return "El reparto de los tipos predefinidos es fijo: cada persona atiende su propia copia.", nil
 		}
 		if req.LocationType != nil && *req.LocationType != et.locationType && *req.LocationType != "livekit" {
 			return "Los tipos predefinidos usan la sala de video integrada.", nil
@@ -178,8 +183,8 @@ func (h *Handler) predefinedGuard(w http.ResponseWriter, r *http.Request, op Tea
 }
 
 // TeamTransferOwnershipGuard wraps POST /v1/users/{id}/transfer-ownership: refused while
-// T or S is set (the predefined types, their copies and S's rotation all belong to the
-// owner; the owner unsets them first). Non-owners fall through to the handler's 403.
+// T or S is set (the templates and all their copies belong to the owner; the owner unsets
+// them first). Non-owners fall through to the handler's 403.
 func (h *Handler) TeamTransferOwnershipGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if actor, _ := userFromContext(r.Context()); actor.IsOwner {
@@ -212,8 +217,10 @@ func (h *Handler) TeamReconcileAfter(next http.HandlerFunc) http.HandlerFunc {
 
 // TeamReconcileAfterCaller wraps a mutation of the signed-in user's own data - POST, PATCH
 // and DELETE /v1/availability-rules ({id} there is the rule, and a rule always belongs to
-// its caller) - with a reconcile for the caller after a 2xx: their hours decide whether
-// they rotate on the Soporte shared type (fork_team_hours.go).
+// its caller) - with a reconcile for the caller after a 2xx. Nothing the reconcile writes
+// depends on hours any more (nobody rotates; has_availability is computed on read, in
+// fork_team_hours.go), so this pass is a cheap idempotent no-op today; it stays so that
+// hours-dependent team state, should any return, is refreshed on the change that causes it.
 func (h *Handler) TeamReconcileAfterCaller(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sw := &teamStatusWriter{ResponseWriter: w}
@@ -231,8 +238,8 @@ func (h *Handler) TeamReconcileAfterCaller(next http.HandlerFunc) http.HandlerFu
 // (a PATCH re-sends what is stored):
 //   - only the owner may select the whatsapp_message field: a member's webhook would send
 //     the client a second copy of the owner's message (403);
-//   - a filter may not newly list a mentor's copy (the template already includes every
-//     copy) or a holder (400).
+//   - a filter may not newly list a copy of either template (the template already
+//     includes every copy) or a holder (400).
 func (h *Handler) TeamWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, _ := userFromContext(r.Context())
@@ -313,8 +320,12 @@ func (h *Handler) TeamWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
 					if tmpl == "" {
 						tmpl = name
 					}
-					h.writeError(w, http.StatusBadRequest,
-						"«"+name+"» es la copia de un mentor; elige la plantilla «"+tmpl+"» (incluye a todos los mentores).")
+					msg := "«" + name + "» es la copia de un mentor; elige la plantilla «" + tmpl + "» (incluye a todos los mentores)."
+					if li.area == areaSoporte {
+						msg = "«" + name + "» es la copia de una persona de soporte; elige la plantilla «" + tmpl +
+							"» (incluye a todo el personal de soporte)."
+					}
+					h.writeError(w, http.StatusBadRequest, msg)
 					return
 				}
 			}
@@ -327,41 +338,37 @@ func (h *Handler) TeamWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
 
 // eventTypeTeamJSON says what a predefined event type is. Absent on ordinary types.
 type eventTypeTeamJSON struct {
-	Kind         string             `json:"kind"`                    // mentoria_template | mentoria_copy | soporte_shared
+	// mentoria_template | mentoria_copy | soporte_template | soporte_copy
+	Kind         string             `json:"kind"`
 	TemplateSlug string             `json:"template_slug,omitempty"` // copy: its template
 	TemplateName string             `json:"template_name,omitempty"` // copy: its template
-	MentorName   string             `json:"mentor_name,omitempty"`   // copy: who attends it
+	MentorName   string             `json:"mentor_name,omitempty"`   // copy: who attends it (mentor or support person)
 	Copies       *int               `json:"copies,omitempty"`        // template: active copies
 	CopyLinks    []teamCopyLinkJSON `json:"copy_links,omitempty"`    // template, owner only: every copy
-	Hosts        []teamPersonJSON   `json:"hosts,omitempty"`         // soporte: its current rotation
 }
 
 // teamJSONFor builds et's team object for viewer (nil for an ordinary type).
-func (h *Handler) teamJSONFor(ctx context.Context, idx *teamIndex, viewer AuthUser, etID string) *eventTypeTeamJSON {
-	switch idx.kindOf(etID) {
-	case teamKindCopy:
+func (h *Handler) teamJSONFor(idx *teamIndex, viewer AuthUser, etID string) *eventTypeTeamJSON {
+	kind := idx.kindOf(etID)
+	switch {
+	case isTeamCopyKind(kind):
 		li := idx.links[etID]
-		return &eventTypeTeamJSON{Kind: teamKindCopy, TemplateSlug: li.templateSlug, TemplateName: li.templateName, MentorName: li.mentorName}
-	case teamKindTemplate:
+		return &eventTypeTeamJSON{Kind: kind, TemplateSlug: li.templateSlug, TemplateName: li.templateName, MentorName: li.mentorName}
+	case isTeamTemplateKind(kind):
 		n := idx.activeCopies[etID]
-		t := &eventTypeTeamJSON{Kind: teamKindTemplate, Copies: &n}
+		t := &eventTypeTeamJSON{Kind: kind, Copies: &n}
 		if viewer.IsOwner {
 			t.CopyLinks = h.copyLinksJSON(idx.copiesOf(etID))
 		}
 		return t
-	case teamKindSoporte:
-		hosts, err := h.teamTypeHosts(ctx, etID)
-		if err != nil {
-			h.logger.ErrorContext(ctx, "event type team: soporte hosts", "error", err)
-		}
-		return &eventTypeTeamJSON{Kind: teamKindSoporte, Hosts: hosts}
 	}
 	return nil
 }
 
 // withTeamInfo is ListEventTypes' hook: holders are dropped for everyone, copies from
-// their owner's list (the owner sees them through T; the mentor who hosts one keeps it),
-// and predefined types gain "team". Best effort: on error the list is returned as it is.
+// their owner's list (the owner sees them through their template; the person who hosts
+// one keeps it), and predefined types gain "team". Best effort: on error the list is
+// returned as it is.
 func (h *Handler) withTeamInfo(ctx context.Context, viewer AuthUser, items []eventTypeJSON) []eventTypeJSON {
 	idx, err := h.loadTeamIndex(ctx)
 	if err != nil {
@@ -370,15 +377,11 @@ func (h *Handler) withTeamInfo(ctx context.Context, viewer AuthUser, items []eve
 	}
 	out := items[:0]
 	for _, et := range items {
-		switch idx.kindOf(et.ID) {
-		case teamKindHolder:
+		kind := idx.kindOf(et.ID)
+		if kind == teamKindHolder || (isTeamCopyKind(kind) && et.Owned) {
 			continue
-		case teamKindCopy:
-			if et.Owned {
-				continue
-			}
 		}
-		et.Team = h.teamJSONFor(ctx, idx, viewer, et.ID)
+		et.Team = h.teamJSONFor(idx, viewer, et.ID)
 		out = append(out, et)
 	}
 	return out
@@ -395,19 +398,19 @@ func (h *Handler) decorateTeamEventType(ctx context.Context, viewer AuthUser, et
 	if idx.kindOf(et.ID) == teamKindHolder {
 		return true
 	}
-	et.Team = h.teamJSONFor(ctx, idx, viewer, et.ID)
+	et.Team = h.teamJSONFor(idx, viewer, et.ID)
 	return false
 }
 
 // ---- WhatsApp texts of copies, and the preview names of T and S ------------------------
 
-// writeInheritedWhatsApp answers GET /v1/event-types/{slug}/whatsapp-messages for a
-// mentor's copy, for its owner or the mentor hosting it: the TEMPLATE's texts (what the
-// copy really sends), plus inherited_from {slug, name} and read_only: true. Returns false
-// when slug is not a copy the viewer may see, so the normal handler runs.
+// writeInheritedWhatsApp answers GET /v1/event-types/{slug}/whatsapp-messages for a copy
+// (of either template), for its owner or the person hosting it: the TEMPLATE's texts
+// (what the copy really sends), plus inherited_from {slug, name} and read_only: true.
+// Returns false when slug is not a copy the viewer may see, so the normal handler runs.
 func (h *Handler) writeInheritedWhatsApp(w http.ResponseWriter, r *http.Request, viewer AuthUser) bool {
 	et, _, err := h.teamEventTypeBySlug(r.Context(), r.PathValue("slug"))
-	if err != nil || et == nil || et.kind != teamKindCopy || h.webhookSvc == nil {
+	if err != nil || et == nil || !isTeamCopyKind(et.kind) || h.webhookSvc == nil {
 		return false
 	}
 	if et.userID != viewer.ID {
@@ -437,8 +440,8 @@ func (h *Handler) writeInheritedWhatsApp(w http.ResponseWriter, r *http.Request,
 	return true
 }
 
-// Preview names of {mentor} for the predefined types: the real deliveries name each
-// mentor (T's copies) or whoever the rotation picks (S), never the owner.
+// Preview names of {mentor} for the templates: the real deliveries name the person who
+// attends each copy (a mentor on T's, a support person on S's), never the owner.
 const (
 	previewMentorTemplate = "Nombre del mentor"
 	previewMentorSoporte  = "Nombre de quien atiende"

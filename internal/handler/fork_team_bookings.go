@@ -4,8 +4,8 @@ package handler
 // gains two filters and one item field, all derived from the booking's TYPE (never from
 // the host's current área, which would carry a mentor's past sessions into Soporte when
 // they change área):
-//   - ?area=mentoria: bookings of the template T or of any mentor's copy; ?area=soporte:
-//     bookings of the Soporte type S;
+//   - ?area=mentoria: bookings of the template T or of any Mentoría copy; ?area=soporte:
+//     bookings of the Soporte template S or of any Soporte copy (teamFamily);
 //   - ?event_type=<slug of a template>: the template AND every copy of it (the copies'
 //     bookings are its sessions too), where upstream resolves exactly one type;
 //   - items gain "area" ("mentoria" | "soporte" | "") in bookingListItem only - never in
@@ -68,7 +68,7 @@ func (h *Handler) forkBookingListFilter(ctx context.Context, q url.Values, f *bo
 	return nil
 }
 
-// templateFamily is etID plus every mentor's copy of it (just etID for any other type).
+// templateFamily is etID plus every copy of it (just etID for a type with no copies).
 func (h *Handler) templateFamily(ctx context.Context, etID string) ([]string, error) {
 	out := []string{etID}
 	rows, err := h.db.QueryContext(ctx,
@@ -87,33 +87,27 @@ func (h *Handler) templateFamily(ctx context.Context, etID string) ([]string, er
 	return out, rows.Err()
 }
 
-// fillBookingAreas sets each list item's área from its booking's type. One query for the
-// page; best effort (withWhatsAppNotices logs an error and serves the list without it).
+// fillBookingAreas sets each list item's área from its booking's type (teamIndex.areaOf:
+// T or a Mentoría copy, S or a Soporte copy). A few small queries for the page; best effort
+// (withWhatsAppNotices logs an error and serves the list without it).
 func (h *Handler) fillBookingAreas(ctx context.Context, idsJSON string, idx map[string]int, out []bookingListItem) error {
-	st, err := loadTeamSettings(ctx, h.db)
+	team, err := h.loadTeamIndex(ctx)
 	if err != nil {
 		return err
 	}
-	rows, err := h.db.QueryContext(ctx, `
-		SELECT b.id,
-		       CASE WHEN b.event_type_id = ?
-		              OR EXISTS (SELECT 1 FROM fork_event_type_links l
-		                         WHERE l.copy_id = b.event_type_id AND l.kind = ?) THEN ?
-		            WHEN b.event_type_id = ? THEN ?
-		            ELSE '' END
-		FROM bookings b WHERE b.id IN (SELECT value FROM json_each(?))`,
-		st.templateID, linkKindCopy, areaMentoria, st.soporteID, areaSoporte, idsJSON)
+	rows, err := h.db.QueryContext(ctx,
+		`SELECT id, event_type_id FROM bookings WHERE id IN (SELECT value FROM json_each(?))`, idsJSON)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, area string
-		if err := rows.Scan(&id, &area); err != nil {
+		var id, etID string
+		if err := rows.Scan(&id, &etID); err != nil {
 			return err
 		}
 		if i, ok := idx[id]; ok {
-			out[i].Area = area
+			out[i].Area = team.areaOf(etID)
 		}
 	}
 	return rows.Err()

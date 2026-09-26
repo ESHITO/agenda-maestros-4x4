@@ -53,7 +53,7 @@ func TestTeamGuards_trailingBytesAreStillChecked(t *testing.T) {
 	if rec.Code != http.StatusConflict || !strings.Contains(errorOf(t, rec), "sala de video") {
 		t.Errorf("T location + trailing byte: %d %q; want 409", rec.Code, errorOf(t, rec))
 	}
-	if rec := f.patchET(f.sSlug, `{"routing_mode":"fixed"}x`); rec.Code != http.StatusConflict {
+	if rec := f.patchET(f.sSlug, `{"routing_mode":"round_robin"}x`); rec.Code != http.StatusConflict {
 		t.Errorf("S routing + trailing byte: %d %s; want 409", rec.Code, rec.Body.String())
 	}
 	if got := f.scalar(`SELECT location_type FROM event_types WHERE id = ?`, f.tID); got != "livekit" {
@@ -64,10 +64,10 @@ func TestTeamGuards_trailingBytesAreStillChecked(t *testing.T) {
 	}
 
 	// Reassign: an S booking to someone outside soporte, by an admin.
-	supBooking(t, f, "bS", f.sID, "m5", "2099-03-12T10:00:00Z", "2099-03-12T10:30:00Z")
+	supBooking(t, f, "bS", rf.s5.id, "m5", "2099-03-12T10:00:00Z", "2099-03-12T10:30:00Z")
 	re := f.call(h.TeamReassignGuard(h.ReassignBooking), http.MethodPost, "/v1/bookings/bS/reassign",
 		`{"host_id":"m1"} x`, adm, "id", "bS")
-	if re.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, re), "no es del personal de soporte") {
+	if re.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, re), "no tiene un enlace de Soporte activo") {
 		t.Errorf("S reassign + trailing byte: %d %q; want 400 (same-área rule)", re.Code, errorOf(t, re))
 	}
 	if got := f.scalar(`SELECT host_id FROM bookings WHERE id = 'bS'`); got != "m5" {
@@ -101,7 +101,7 @@ func TestTeamReassign_orphanCopyKeepsMovedAnswers(t *testing.T) {
 	h := f.h
 	_, t2ID := seedEventTypeHTTP(t, h, f.ownerKey)
 	mustExec(t, f.db, `UPDATE event_types SET location_type = 'livekit', location_value = '' WHERE id = ?`, t2ID)
-	f.mustSettings(`{"mentoria_template_id":"` + t2ID + `","soporte_shared_id":"` + f.sID + `"}`)
+	f.mustSettings(`{"mentoria_template_id":"` + t2ID + `","soporte_template_id":"` + f.sID + `"}`)
 	cq := rf.copyQuestion(rf.c1.id)
 	mustStatus(t, f.call(f.guard(handler.TeamOpQuestions, h.DeleteQuestion), http.MethodDelete,
 		"/v1/event-types/"+f.tSlug+"/questions/"+rf.tq, "", f.ownerKey, "slug", f.tSlug, "id", rf.tq), http.StatusNoContent, "delete T's question")

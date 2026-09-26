@@ -104,7 +104,8 @@ func TestTeamCopySlugBase(t *testing.T) {
 }
 
 // The bookings list's notice status (scopedWebhook.receives) must agree with delivery
-// (matchingWebhooks) for copy bookings too: a template-filtered webhook receives them.
+// (matchingWebhooks) for copy bookings too - of the Mentoría template and of the Soporte
+// one alike: a template-filtered webhook receives its copies, never the other's.
 func TestScopedWebhooks_mirrorTemplateAwareMatching(t *testing.T) {
 	h := newTeamInternalHandler(t)
 	ctx := context.Background()
@@ -115,6 +116,12 @@ func TestScopedWebhooks_mirrorTemplateAwareMatching(t *testing.T) {
 		`INSERT INTO event_types (id, user_id, slug, name, duration_minutes) VALUES ('et-c', 'own', 't-men', 'T', 60)`,
 		`INSERT INTO event_types (id, user_id, slug, name, duration_minutes) VALUES ('et-o', 'own', 'o', 'O', 60)`,
 		`INSERT INTO fork_event_type_links (copy_id, template_id, user_id, kind, created_at) VALUES ('et-c', 'et-t', 'men', 'copy', 'x')`,
+		`INSERT INTO users (id, email, name) VALUES ('sup', 's@example.com', 'Soporte')`,
+		`INSERT INTO event_types (id, user_id, slug, name, duration_minutes) VALUES ('et-s', 'own', 's', 'S', 30)`,
+		`INSERT INTO event_types (id, user_id, slug, name, duration_minutes) VALUES ('et-sc', 'own', 's-sup', 'S', 30)`,
+		`INSERT INTO fork_event_type_links (copy_id, template_id, user_id, kind, created_at) VALUES ('et-sc', 'et-s', 'sup', 'copy', 'x')`,
+		`INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('bk-s', 'et-s', 'own', '2026-10-03T14:00:00Z', '2026-10-03T14:30:00Z', 'confirmed')`,
+		`INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('bk-sc', 'et-sc', 'sup', '2026-10-03T14:00:00Z', '2026-10-03T14:30:00Z', 'confirmed')`,
 		`INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('bk-t', 'et-t', 'own', '2026-10-01T14:00:00Z', '2026-10-01T15:00:00Z', 'confirmed')`,
 		`INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('bk-c', 'et-c', 'men', '2026-10-01T14:00:00Z', '2026-10-01T15:00:00Z', 'confirmed')`,
 		`INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('bk-o', 'et-o', 'men', '2026-10-02T14:00:00Z', '2026-10-02T15:00:00Z', 'confirmed')`,
@@ -124,7 +131,7 @@ func TestScopedWebhooks_mirrorTemplateAwareMatching(t *testing.T) {
 		}
 	}
 	events := []string{"booking.created", webhook.EventReminder1h}
-	for _, filter := range [][]string{{"et-t"}, {"et-o"}, nil} {
+	for _, filter := range [][]string{{"et-t"}, {"et-s"}, {"et-t", "et-s"}, {"et-o"}, nil} {
 		if _, err := h.db.Exec(`DELETE FROM webhooks`); err != nil {
 			t.Fatal(err)
 		}
@@ -139,6 +146,8 @@ func TestScopedWebhooks_mirrorTemplateAwareMatching(t *testing.T) {
 			{ID: "bk-t", EventTypeID: "et-t", HostID: "own"},
 			{ID: "bk-c", EventTypeID: "et-c", HostID: "men"},
 			{ID: "bk-o", EventTypeID: "et-o", HostID: "men"},
+			{ID: "bk-s", EventTypeID: "et-s", HostID: "own"},
+			{ID: "bk-sc", EventTypeID: "et-sc", HostID: "sup"},
 		} {
 			for _, ev := range events {
 				mirror := false
@@ -151,6 +160,19 @@ func TestScopedWebhooks_mirrorTemplateAwareMatching(t *testing.T) {
 				}
 				if mirror != delivery {
 					t.Errorf("filter %v, %s, %s: list says %v, delivery says %v", filter, b.ID, ev, mirror, delivery)
+				}
+			}
+		}
+		// And what they agree on: a filter on S carries S's copy, never T's (and back).
+		if len(filter) == 1 && (filter[0] == "et-s" || filter[0] == "et-t") {
+			for id, host := range map[string]string{"bk-sc": "sup", "bk-c": "men"} {
+				got, err := h.webhookSvc.WantsField(ctx, "booking.created", host, id, webhook.FieldEventTypeSlug)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := (id == "bk-sc") == (filter[0] == "et-s")
+				if got != want {
+					t.Errorf("filter %v: %s delivered = %v; want %v", filter, id, got, want)
 				}
 			}
 		}

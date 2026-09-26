@@ -4,6 +4,7 @@
 		api,
 		teamApi,
 		reassignErrorText,
+		isTeamCopy,
 		AREA_LABELS,
 		type Attendance,
 		type Booking,
@@ -69,9 +70,9 @@
 	let total = $state(0);
 	let counts = $state({ upcoming: 0, past: 0 });
 
-	// Options for the filter selects, fetched once. label = what the option reads (the
-	// Mentoría template says it covers every mentor: the server expands its slug to the
-	// template plus all the mentors' copies).
+	// Options for the filter selects, fetched once. label = what the option reads (each
+	// template says it covers everyone of its área: the server expands its slug to the
+	// template plus all its copies).
 	let eventTypes = $state<{ slug: string; name: string; label: string }[]>([]);
 	let members = $state<{ id: string; name: string }[]>([]);
 	let teams = $state<{ id: string; name: string }[]>([]);
@@ -210,13 +211,16 @@
 	// an error banner over a working table, and members can't list users anyway.
 	async function loadFilterOptions() {
 		const opts = new Map<string, { slug: string; name: string; label: string }>();
-		const allMentors = (name: string) => `${name} (todos los mentores)`;
+		const templateLabel = (kind: string | undefined, name: string) =>
+			kind === 'mentoria_template' ? `${name} (todos los mentores)`
+				: kind === 'soporte_template' ? `${name} (todo el personal de soporte)`
+					: name;
 		try {
 			const res = await api.get<{ items: EventType[] }>('/v1/event-types');
 			for (const et of res.items ?? []) {
 				const kind = et.team?.kind;
-				if (kind === 'mentoria_copy') {
-					// Copies never get an option of their own. A mentor's copy stands for the
+				if (isTeamCopy(kind)) {
+					// Copies never get an option of their own. A person's copy stands for the
 					// template (same name, and the server narrows it to what they host); the
 					// owner's list holds every copy, and they all collapse into the template.
 					const slug = et.team?.template_slug;
@@ -226,8 +230,7 @@
 					}
 					continue;
 				}
-				const label = kind === 'mentoria_template' ? allMentors(et.name) : et.name;
-				opts.set(et.slug, { slug: et.slug, name: et.name, label });
+				opts.set(et.slug, { slug: et.slug, name: et.name, label: templateLabel(kind, et.name) });
 			}
 		} catch { /* leave the dropdown empty */ }
 		eventTypes = [...opts.values()];
@@ -238,11 +241,11 @@
 			const ts = await teamApi.getSettings();
 			if (ts.mentoria_template) {
 				const t = ts.mentoria_template;
-				opts.set(t.slug, { slug: t.slug, name: t.name, label: allMentors(t.name) });
+				opts.set(t.slug, { slug: t.slug, name: t.name, label: templateLabel('mentoria_template', t.name) });
 			}
-			if (ts.soporte_shared && !opts.has(ts.soporte_shared.slug)) {
-				const t = ts.soporte_shared;
-				opts.set(t.slug, { slug: t.slug, name: t.name, label: t.name });
+			if (ts.soporte_template) {
+				const t = ts.soporte_template;
+				opts.set(t.slug, { slug: t.slug, name: t.name, label: templateLabel('soporte_template', t.name) });
 			}
 			eventTypes = [...opts.values()];
 		} catch { /* the own/hosted options stay */ }

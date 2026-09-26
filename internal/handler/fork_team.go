@@ -1,49 +1,54 @@
 package handler
 
 // Fork (Agenda Maestros 4x4): áreas and the owner's predefined event types - the reconcile
-// engine. The owner picks two of their own event types in Miembros:
+// engine. The owner picks two of their own event types in Miembros, and both are TEMPLATES
+// that work the same way:
 //
 //   - the Mentoría template T (fork_settings team_mentoria_template_id): every active
-//     person whose área is 'mentoria' gets a COPY of T - their personal booking link,
-//     owned by T's owner, hosted by that mentor alone, kept in step with T;
-//   - the Soporte shared type S (team_soporte_shared_id): one link, round robin among the
-//     active people whose área is 'soporte'.
+//     person whose área is 'mentoria' gets a COPY of T;
+//   - the Soporte template S (fork_settings team_soporte_shared_id - the key keeps its
+//     old name, from when S was one shared round-robin type; it now names the Soporte
+//     template): every active person whose área is 'soporte' gets a COPY of S.
+//
+// A copy is that person's own booking link: owned by the template's owner, hosted by that
+// person alone (required, fixed routing), kept in step with its template. Nobody rotates.
 //
 // ReconcileTeam is the ONLY writer of copies, holders, and the hosts/routing of T and S.
 // It is idempotent: every trigger (boot, team settings, áreas, invites, archive, template
-// edits) just runs it again. Rules, in the order they run:
+// edits) just runs it again. Rules, in the order they run, for each template P (T with
+// the área mentoria, S with the área soporte):
 //
-//  1. Per user U, one transaction: U's copy of the current T is created when U is
-//     eligible (active, área mentoria, not T's owner) and T is not archived, the way
-//     DuplicateEventType copies (INSERT ... SELECT, the values never pass through Go).
-//     Its slug is "{T.slug}-{name}", transliterated, fixed forever (it is the shared link).
-//  2. Every existing copy of T gets T's row by a generic row-value UPDATE over
+//  1. Per user U, one transaction: U's copy of P is created when U is eligible (active,
+//     P's área, not P's owner) and P is not archived, the way DuplicateEventType copies
+//     (INSERT ... SELECT, the values never pass through Go). Its slug is
+//     "{P.slug}-{name}", transliterated, fixed forever (it is the shared link).
+//  2. Every existing copy of P gets P's row by a generic row-value UPDATE over
 //     PRAGMA table_info(event_types) minus teamSyncExcluded, plus the fixed overrides
 //     (owner, fixed routing, empty location_value, not archived, is_active by rule 3).
 //     TestTeamSyncColumns_classified pins the column set, so an upstream column
 //     addition fails CI until someone decides whether it syncs.
-//  3. is_active = U active AND área mentoria AND T not archived AND T still the setting.
-//     T's own is_active is not propagated. Losing eligibility deactivates the copy
-//     (never deletes it: bookings are RESTRICT); regaining it reactivates the same one.
+//  3. is_active = U active AND U's área is P's AND P not archived AND P still the setting
+//     of that área. P's own is_active is not propagated. Losing eligibility deactivates
+//     the copy (never deletes it: bookings are RESTRICT); regaining it reactivates it.
 //  4. Questions are synced IN PLACE through fork_question_links, so copy question ids -
 //     and clients' answers - survive. A copy question whose template question is gone is
-//     deleted if nobody answered it, else parked on T's hidden holder type (answers keep
+//     deleted if nobody answered it, else parked on P's hidden holder type (answers keep
 //     their label; the public form and {tema} no longer see it).
 //  5. event_type_reminders are copied. Not copied: the owner's type-specific
 //     availability rules, hosts, webhook filters, WhatsApp texts (inherited at send time).
-//  6. Copies of any other template (or of none, when the setting is unset) are
+//  6. Copies of any other template (or of none, when a setting is unset) are
 //     deactivated; their links stay, so their bookings keep the old texts and matching.
 //  7. Orphans (a copy whose user was deleted): deleted when it has no bookings and no
 //     answer on its questions (a booking reassigned off it may keep one), else
 //     deactivated. Área rows of missing users and invite roles granted by missing users
 //     are purged. Holders are never deleted.
 //
-// Then, on every run (a single user's run too - their área, archive or availability rules
-// change S's rotation): S's hosts are its active soporte staff WITH weekly hours for S (a
-// global rule or one for S; fork_team_hours.go) as 'rotation' (stable priority by
-// created_at) with round_robin routing, or its owner as the single required host when
-// nobody qualifies; a previously managed S is released back to its owner; T's hosts are
-// locked to [T's owner, required] with fixed routing.
+// Then, on every run: T's and S's hosts are locked to [their owner, required] with fixed
+// routing (this is also what converts an S left in round robin by the retired rotation),
+// and each template's área is recorded in fork_template_areas, so a copy of a template
+// that stopped being a setting still knows whether its bookings are Mentoría or Soporte.
+// The row only ever changes for a type with no copies: PUT /v1/team/settings refuses to
+// make a type with copies the template of the other área.
 //
 // Single-connection pool: every helper takes the transaction, drains each cursor before
 // the next statement, and never calls anything that uses h.db or opens its own tx.
@@ -64,11 +69,15 @@ import (
 	"github.com/calnode/calnode/internal/uid"
 )
 
-// fork_settings keys of the team feature.
+// fork_settings keys of the team feature. forkKeyTeamSoporte keeps its historical name
+// (production has it set): it names the Soporte TEMPLATE.
 const (
-	forkKeyTeamTemplate    = "team_mentoria_template_id"
-	forkKeyTeamSoporte     = "team_soporte_shared_id"
-	forkKeyTeamSoporteLast = "team_soporte_last_managed_id"
+	forkKeyTeamTemplate = "team_mentoria_template_id"
+	forkKeyTeamSoporte  = "team_soporte_shared_id"
+	// forkKeyTeamSoporteLegacy is what the retired rotation wrote: the S it last managed.
+	// The first reconcile after the change releases that type to its owner (fixed) if it
+	// is not a current template, then deletes the key.
+	forkKeyTeamSoporteLegacy = "team_soporte_last_managed_id"
 )
 
 // Áreas (fork_member_areas.area) and link kinds (fork_event_type_links.kind).
@@ -113,9 +122,78 @@ type teamStats struct {
 
 func (s teamStats) changed() bool { return s != teamStats{} }
 
-// teamSettings are the saved fork_settings of the team feature ("" = unset).
+// teamSettings are the saved fork_settings of the team feature ("" = unset): the Mentoría
+// template T and the Soporte template S.
 type teamSettings struct {
-	templateID, soporteID, soporteLastID string
+	templateID, soporteID string
+}
+
+// templateFor is the setting of área ("" for none or an unknown área).
+func (st teamSettings) templateFor(area string) string {
+	switch area {
+	case areaMentoria:
+		return st.templateID
+	case areaSoporte:
+		return st.soporteID
+	}
+	return ""
+}
+
+// currentArea is the área templateID is the setting of, or "".
+func (st teamSettings) currentArea(templateID string) string {
+	switch {
+	case templateID == "":
+		return ""
+	case templateID == st.templateID:
+		return areaMentoria
+	case templateID == st.soporteID:
+		return areaSoporte
+	}
+	return ""
+}
+
+// teamTemplateArea is the área of templateID's copies: the área it is the setting of,
+// else the one recorded while it was (fork_template_areas), else Mentoría - every copy
+// made before Soporte became a template was a Mentoría copy.
+func teamTemplateArea(ctx context.Context, q teamQuerier, st teamSettings, templateID string) (string, error) {
+	if a := st.currentArea(templateID); a != "" {
+		return a, nil
+	}
+	var area string
+	err := q.QueryRowContext(ctx, `SELECT area FROM fork_template_areas WHERE template_id = ?`, templateID).Scan(&area)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && area != areaSoporte) {
+		return areaMentoria, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return area, nil
+}
+
+// teamTemplate is a current template with the área its copies serve.
+type teamTemplate struct {
+	*teamType
+	area string
+}
+
+// loadTeamTemplates returns the current templates (T first, then S), skipping unset or
+// deleted ones. S is ignored should it equal T (PUT refuses that; this keeps one type
+// from being reconciled twice).
+func loadTeamTemplates(ctx context.Context, q teamQuerier, st teamSettings) ([]teamTemplate, error) {
+	var out []teamTemplate
+	for _, c := range []struct{ id, area string }{{st.templateID, areaMentoria}, {st.soporteID, areaSoporte}} {
+		if c.area == areaSoporte && c.id == st.templateID {
+			continue
+		}
+		t, err := loadTeamType(ctx, q, c.id)
+		if err != nil {
+			return nil, err
+		}
+		if t != nil {
+			out = append(out, teamTemplate{teamType: t, area: c.area})
+		}
+	}
+	return out, nil
 }
 
 // teamType is the part of an event type the reconcile needs.
@@ -138,12 +216,12 @@ type teamHost struct {
 
 func teamNow() string { return time.Now().UTC().Format(time.RFC3339) }
 
-// loadTeamSettings reads the three team keys. A missing row is "".
+// loadTeamSettings reads the two team keys. A missing row is "".
 func loadTeamSettings(ctx context.Context, q teamQuerier) (teamSettings, error) {
 	var st teamSettings
 	rows, err := q.QueryContext(ctx,
-		`SELECT key, value FROM fork_settings WHERE key IN (?, ?, ?)`,
-		forkKeyTeamTemplate, forkKeyTeamSoporte, forkKeyTeamSoporteLast)
+		`SELECT key, value FROM fork_settings WHERE key IN (?, ?)`,
+		forkKeyTeamTemplate, forkKeyTeamSoporte)
 	if err != nil {
 		return st, err
 	}
@@ -158,8 +236,6 @@ func loadTeamSettings(ctx context.Context, q teamQuerier) (teamSettings, error) 
 			st.templateID = v
 		case forkKeyTeamSoporte:
 			st.soporteID = v
-		case forkKeyTeamSoporteLast:
-			st.soporteLastID = v
 		}
 	}
 	return st, rows.Err()
@@ -245,8 +321,8 @@ func quoteColumns(cols []string) string {
 
 // ReconcileTeam brings copies, holders and the hosts of T and S in line with the team
 // settings and áreas (see the file comment). userID "" = every user; a user id limits the
-// per-user pass to that person (their copies), while the orphan pass and the S/T host
-// sync always run. Each user is one transaction. Safe to call from any trigger, at any
+// per-user pass to that person (their copies), while the orphan pass and the T/S host
+// lock always run. Each user is one transaction. Safe to call from any trigger, at any
 // time; concurrent calls queue.
 func (h *Handler) ReconcileTeam(ctx context.Context, userID string) (teamStats, error) {
 	teamReconcileMu.Lock()
@@ -257,9 +333,9 @@ func (h *Handler) ReconcileTeam(ctx context.Context, userID string) (teamStats, 
 	if err != nil {
 		return stats, fmt.Errorf("team: load settings: %w", err)
 	}
-	tmpl, err := loadTeamType(ctx, h.db, st.templateID)
+	tmpls, err := loadTeamTemplates(ctx, h.db, st)
 	if err != nil {
-		return stats, fmt.Errorf("team: load template: %w", err)
+		return stats, fmt.Errorf("team: load templates: %w", err)
 	}
 	cols, err := teamSyncColumns(ctx, h.db)
 	if err != nil {
@@ -272,7 +348,7 @@ func (h *Handler) ReconcileTeam(ctx context.Context, userID string) (teamStats, 
 
 	for _, u := range users {
 		if err := h.teamTx(ctx, func(tx *sql.Tx) error {
-			return reconcileTeamUser(ctx, tx, tmpl, cols, u, &stats)
+			return reconcileTeamUser(ctx, tx, tmpls, cols, u, &stats)
 		}); err != nil {
 			return stats, fmt.Errorf("team: user pass: %w", err)
 		}
@@ -283,7 +359,7 @@ func (h *Handler) ReconcileTeam(ctx context.Context, userID string) (teamStats, 
 		return stats, fmt.Errorf("team: orphans: %w", err)
 	}
 	if err := h.teamTx(ctx, func(tx *sql.Tx) error {
-		return reconcileTeamHosts(ctx, tx, st, tmpl)
+		return reconcileTeamHosts(ctx, tx, tmpls)
 	}); err != nil {
 		return stats, fmt.Errorf("team: hosts: %w", err)
 	}
@@ -320,8 +396,8 @@ func (h *Handler) teamTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// reconcileTeamUser is rules 1-6 for one user, inside tx.
-func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpl *teamType, cols []string, u teamUser, stats *teamStats) error {
+// reconcileTeamUser is rules 1-6 for one user and every current template, inside tx.
+func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpls []teamTemplate, cols []string, u teamUser, stats *teamStats) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT copy_id, template_id FROM fork_event_type_links WHERE user_id = ? AND kind = ?`, u.id, linkKindCopy)
 	if err != nil {
@@ -342,10 +418,16 @@ func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpl *teamType, cols []s
 		return err
 	}
 
-	copyID := ""
+	copyOf := map[string]string{} // current template id -> U's copy of it
 	for _, l := range links {
-		if tmpl != nil && l.templateID == tmpl.id {
-			copyID = l.copyID
+		current := false
+		for _, p := range tmpls {
+			if l.templateID == p.id {
+				current = true
+			}
+		}
+		if current {
+			copyOf[l.templateID] = l.copyID
 			continue
 		}
 		// Rule 6: a copy of another (or no) template. Deactivated, link kept.
@@ -353,23 +435,26 @@ func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpl *teamType, cols []s
 			return err
 		}
 	}
-	if tmpl == nil {
-		return nil
-	}
-	eligible := !u.archived && u.area == areaMentoria && u.id != tmpl.userID
-	active := eligible && !tmpl.archived
-	if copyID == "" {
-		if !active {
-			return nil
+	for _, p := range tmpls {
+		eligible := !u.archived && u.area == p.area && u.id != p.userID
+		active := eligible && !p.archived
+		copyID := copyOf[p.id]
+		if copyID == "" {
+			if !active {
+				continue
+			}
+			id, err := createTeamCopy(ctx, tx, p.teamType, cols, u)
+			if err != nil {
+				return err
+			}
+			copyID = id
+			stats.Created++
 		}
-		id, err := createTeamCopy(ctx, tx, tmpl, cols, u)
-		if err != nil {
+		if err := syncTeamCopy(ctx, tx, p.teamType, cols, copyID, u.id, active, stats); err != nil {
 			return err
 		}
-		copyID = id
-		stats.Created++
 	}
-	return syncTeamCopy(ctx, tx, tmpl, cols, copyID, u.id, active, stats)
+	return nil
 }
 
 // createTeamCopy inserts U's copy of tmpl and its link, and returns the copy's id. The row
@@ -776,68 +861,55 @@ func reconcileTeamOrphans(ctx context.Context, tx *sql.Tx, stats *teamStats) err
 	return nil
 }
 
-// reconcileTeamHosts syncs S's rotation, releases a previously managed S, and locks T's
-// hosts (see the file comment).
-func reconcileTeamHosts(ctx context.Context, tx *sql.Tx, st teamSettings, tmpl *teamType) error {
-	sup, err := loadTeamType(ctx, tx, st.soporteID)
+// lockTeamTypeToOwner makes t hosted by its owner alone, required, with fixed routing.
+func lockTeamTypeToOwner(ctx context.Context, tx *sql.Tx, t *teamType) error {
+	if err := setTeamTypeHosts(ctx, tx, t.id, []teamHost{{userID: t.userID, role: "required"}}); err != nil {
+		return err
+	}
+	return setTeamTypeRouting(ctx, tx, t.id, "fixed")
+}
+
+// reconcileTeamHosts locks T's and S's hosts to their owner (converting an S the retired
+// rotation left in round robin), records each template's área, and retires the rotation's
+// leftover setting (see the file comment).
+func reconcileTeamHosts(ctx context.Context, tx *sql.Tx, tmpls []teamTemplate) error {
+	for _, p := range tmpls {
+		if err := lockTeamTypeToOwner(ctx, tx, p.teamType); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO fork_template_areas (template_id, area, updated_at) VALUES (?, ?, ?)
+			ON CONFLICT (template_id) DO UPDATE SET area = excluded.area, updated_at = excluded.updated_at
+			WHERE fork_template_areas.area <> excluded.area`, p.id, p.area, teamNow()); err != nil {
+			return fmt.Errorf("record template área: %w", err)
+		}
+	}
+	var legacyID string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM fork_settings WHERE key = ?`, forkKeyTeamSoporteLegacy).Scan(&legacyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	current := ""
-	if sup != nil {
-		current = sup.id
-		// Only staff whose weekly hours reach S rotate (fork_team_hours.go): one host with
-		// no rules would leave the public page with no slot at all.
-		staff, _, err := loadSoporteStaff(ctx, tx, sup.id)
+	// The type the rotation last managed, if it is no longer a template: back to its owner.
+	current := false
+	for _, p := range tmpls {
+		current = current || p.id == legacyID
+	}
+	if !current {
+		prev, err := loadTeamType(ctx, tx, legacyID)
 		if err != nil {
 			return err
 		}
-		hosts := []teamHost{{userID: sup.userID, role: "required"}}
-		mode := "fixed"
-		if len(staff) > 0 {
-			hosts = hosts[:0]
-			for i, s := range staff {
-				hosts = append(hosts, teamHost{userID: s.id, role: "rotation", priority: i})
-			}
-			mode = "round_robin"
-		}
-		if err := setTeamTypeHosts(ctx, tx, sup.id, hosts); err != nil {
-			return err
-		}
-		if err := setTeamTypeRouting(ctx, tx, sup.id, mode); err != nil {
-			return err
-		}
-	}
-	if st.soporteLastID != current {
-		if st.soporteLastID != "" {
-			prev, err := loadTeamType(ctx, tx, st.soporteLastID)
-			if err != nil {
+		if prev != nil {
+			if err := lockTeamTypeToOwner(ctx, tx, prev); err != nil {
 				return err
 			}
-			if prev != nil {
-				if err := setTeamTypeHosts(ctx, tx, prev.id, []teamHost{{userID: prev.userID, role: "required"}}); err != nil {
-					return err
-				}
-				if err := setTeamTypeRouting(ctx, tx, prev.id, "fixed"); err != nil {
-					return err
-				}
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO fork_settings (key, value) VALUES (?, ?)
-			ON CONFLICT (key) DO UPDATE SET value = excluded.value`, forkKeyTeamSoporteLast, current); err != nil {
-			return err
 		}
 	}
-	if tmpl != nil {
-		if err := setTeamTypeHosts(ctx, tx, tmpl.id, []teamHost{{userID: tmpl.userID, role: "required"}}); err != nil {
-			return err
-		}
-		if err := setTeamTypeRouting(ctx, tx, tmpl.id, "fixed"); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = tx.ExecContext(ctx, `DELETE FROM fork_settings WHERE key = ?`, forkKeyTeamSoporteLegacy)
+	return err
 }
 
 // maxTeamSlugName caps the name part of a copy's slug; the cut falls on a hyphen.

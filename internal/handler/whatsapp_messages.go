@@ -112,7 +112,7 @@ func (h *Handler) writeWhatsAppMessages(w http.ResponseWriter, r *http.Request, 
 // GetWhatsAppMessages handles GET /v1/event-types/{slug}/whatsapp-messages.
 func (h *Handler) GetWhatsAppMessages(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())
-	// A mentor's copy sends its template's texts: shown read-only (fork_team_guards.go).
+	// A copy (of T or S) sends its template's texts: shown read-only (fork_team_guards.go).
 	if h.writeInheritedWhatsApp(w, r, user) {
 		return
 	}
@@ -222,8 +222,8 @@ func (h *Handler) sampleWhatsAppLinks(locType, locValue string) (enlace, cancela
 // saving it would make it; an omitted one = the saved text, else the default) rendered
 // with sample data by the same code as a delivery. The
 // sample meeting is tomorrow at 10:00 in the signed-in user's zone (else America/Lima),
-// with them as {mentor} (for the team's template and Soporte type, a placeholder name:
-// those are sent in the name of whoever attends). {tema} has a sample answer only when the type asks a text
+// with them as {mentor} (for the team's two templates, a placeholder name: those are sent
+// in the name of whoever attends each copy). {tema} has a sample answer only when the type asks a text
 // question - without one, real messages drop that line too. Answers each moment's text
 // plus "timezone" (the sample's zone) and "has_text_question".
 func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request) {
@@ -274,8 +274,8 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 	if mentor == "" {
 		mentor = "tu mentor"
 	}
-	// The team's template and Soporte type are sent in each mentor's (or the rotation's)
-	// name, never the owner's (fork_team_guards.go).
+	// The team's templates are sent in the name of the person attending each copy, never
+	// the owner's (fork_team_guards.go).
 	if name := h.teamPreviewMentor(r.Context(), etID); name != "" {
 		mentor = name
 	}

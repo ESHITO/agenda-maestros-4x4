@@ -350,7 +350,7 @@
 		// (or, for the owner, one created after the page loaded).
 		const missing = teamScope ? 'un tipo de atención nuevo (recarga la página)' : 'un tipo de atención que ya no atiendes';
 		const withCopies = (id: string) =>
-			(eventTypes.find((t) => t.id === id)?.copies ?? 0) > 0 ? ' (incluye la copia de cada mentor)' : '';
+			(eventTypes.find((t) => t.id === id)?.copies ?? 0) > 0 ? ' (incluye la copia personal de cada persona que lo atiende)' : '';
 		return ids.map((id) => (eventTypeLabels.get(id) ? eventTypeLabels.get(id) + withCopies(id) : missing)).join(', ');
 	}
 
@@ -527,10 +527,10 @@
 								<span class="min-w-0">
 									<span class="font-medium">{et.name}</span>{#if !et.owned && et.owner_name}<span class="text-muted-foreground">{` — de ${et.owner_name}`}</span>{/if}
 									<span class="block break-all font-mono text-xs text-muted-foreground">{et.slug}</span>
-									<!-- Fork: the Mentoría template also covers every mentor's copy (copies are
+									<!-- Fork: each template (Mentoría, Soporte) also covers every person's copy (copies are
 									     not listed: the filter matches them through the template). -->
 									{#if et.copies && et.copies > 0}
-										<span class="block text-xs text-muted-foreground">Incluye la copia de cada mentor ({et.copies === 1 ? '1 copia' : `${et.copies} copias`}).</span>
+										<span class="block text-xs text-muted-foreground">Incluye la copia personal de cada persona que lo atiende ({et.copies === 1 ? '1 copia' : `${et.copies} copias`}).</span>
 									{/if}
 								</span>
 							</label>

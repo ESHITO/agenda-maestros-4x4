@@ -411,10 +411,11 @@ type etTeamItem struct {
 		MentorName   string `json:"mentor_name"`
 		Copies       *int   `json:"copies"`
 		CopyLinks    []struct {
-			Slug, URL, MentorName string
-			Active                bool
+			Slug       string `json:"slug"`
+			URL        string `json:"url"`
+			MentorName string `json:"mentor_name"`
+			Active     bool   `json:"active"`
 		} `json:"copy_links"`
-		Hosts []struct{ ID, Name string } `json:"hosts"`
 	} `json:"team"`
 }
 
@@ -431,46 +432,225 @@ func listEventTypesTeam(t *testing.T, f *teamFixture, key string) []etTeamItem {
 	return out.Items
 }
 
-func TestTeamReconcile_soporteRotationFallbackAndRelease(t *testing.T) {
+// S works exactly like T: every active área-soporte person but S's owner gets a copy -
+// owned by S's owner, hosted by that person alone, slug "{S.slug}-{name}" - with the same
+// lifecycle, and S stays hosted by its owner, fixed.
+func TestTeamReconcile_soporteCopies(t *testing.T) {
 	f := newTeamFixture(t)
-	f.mustSettings(`{"soporte_shared_id":"` + f.sID + `"}`)
+	h := f.h
 	routing := func(id string) string { return f.scalar(`SELECT routing_mode FROM event_types WHERE id = ?`, id) }
-	if got := f.hosts(f.sID); !slices.Equal(got, []string{f.ownerID + ":required:0"}) || routing(f.sID) != "fixed" {
-		t.Errorf("S with nobody in soporte: hosts %v, routing %s; want the owner, fixed", got, routing(f.sID))
-	}
+	mustCreated(t, f.call(f.guard(handler.TeamOpQuestions, h.CreateQuestion), http.MethodPost,
+		"/v1/event-types/"+f.sSlug+"/questions", `{"label":"¿En qué te ayudamos?","type":"text","required":true}`,
+		f.ownerKey, "slug", f.sSlug), "create S question")
+	mustStatus(t, f.patchET(f.sSlug, `{"reminders":[2],"description":"Soporte del equipo"}`), http.StatusOK, "patch S")
 	addMember(t, f.db, "s1", "UTC")
 	addMember(t, f.db, "s2", "UTC")
-	mustExec(t, f.db, `UPDATE users SET created_at = '2000-01-02' WHERE id = 's1'`)
-	mustExec(t, f.db, `UPDATE users SET created_at = '2000-01-01' WHERE id = 's2'`) // s2 joined first
-	seedFullAvailabilityDB(t, f.db, "s1") // soporte rotates only with weekly hours
-	seedFullAvailabilityDB(t, f.db, "s2")
+	mustExec(t, f.db, `UPDATE users SET name = 'Ana Peña' WHERE id = 's1'`)
 	f.mustRole("s1", "member", "soporte")
 	f.mustRole("s2", "member", "soporte")
-	if got := f.hosts(f.sID); !slices.Equal(got, []string{"s2:rotation:0", "s1:rotation:1"}) || routing(f.sID) != "round_robin" {
-		t.Errorf("S rotation = %v, routing %s", got, routing(f.sID))
+	f.mustRole(f.ownerID, "", "soporte") // before S is set the owner may take the área
+
+	body := f.mustSettings(`{"soporte_template_id":"` + f.sID + `"}`)
+	warn, _ := body["warnings"].(map[string]any)
+	if warn["copies_created"] != float64(2) || warn["soporte_template_no_webhook"] != true {
+		t.Errorf("warnings = %v; want copies_created 2 and soporte_template_no_webhook", warn)
 	}
-	mustStatus(t, f.call(f.h.TeamReconcileAfter(f.h.ArchiveUser), http.MethodPost, "/v1/users/s2/archive", "", f.ownerKey, "id", "s2"), http.StatusOK, "archive s2")
-	if got := f.hosts(f.sID); !slices.Equal(got, []string{"s1:rotation:0"}) {
-		t.Errorf("S rotation after archiving s2 = %v", got)
+	c1, c2 := f.copyOf(f.sID, "s1"), f.copyOf(f.sID, "s2")
+	if c1.slug != f.sSlug+"-ana-pena" || !c1.active || c1.userID != f.ownerID || c1.routing != "fixed" ||
+		c1.locType != "livekit" || c1.locValue != "" || c1.name != "Soporte 1 a 1" || c1.templateID != f.sID {
+		t.Errorf("s1's copy = %+v", c1)
+	}
+	if c2.slug != f.sSlug+"-mentor-s2" || !c2.active {
+		t.Errorf("s2's copy = %+v", c2)
+	}
+	for id, c := range map[string]teamCopy{"s1": c1, "s2": c2} {
+		if got := f.hosts(c.id); !slices.Equal(got, []string{id + ":required:0"}) {
+			t.Errorf("%s's copy hosts = %v; want only them, required", id, got)
+		}
+	}
+	if got := f.copyOf(f.sID, f.ownerID); got.id != "" {
+		t.Errorf("S's owner got a copy of S: %+v", got)
+	}
+	if got := f.hosts(f.sID); !slices.Equal(got, []string{f.ownerID + ":required:0"}) || routing(f.sID) != "fixed" {
+		t.Errorf("S: hosts %v, routing %s; want the owner, fixed", got, routing(f.sID))
+	}
+	if got := f.scalar(`SELECT description FROM event_types WHERE id = ?`, c1.id); got != "Soporte del equipo" {
+		t.Errorf("copy description = %q", got)
+	}
+	if got := f.scalar(`SELECT group_concat(hours_before) FROM event_type_reminders WHERE event_type_id = ?`, c1.id); got != "2" {
+		t.Errorf("copy reminders = %q; want 2", got)
+	}
+	if got := f.scalar(`SELECT COUNT(*) FROM event_type_questions q JOIN fork_question_links l ON l.copy_question_id = q.id WHERE q.event_type_id = ? AND q.label = '¿En qué te ayudamos?'`, c1.id); got != "1" {
+		t.Errorf("linked copy questions = %s; want 1", got)
+	}
+	if got := f.scalar(`SELECT area FROM fork_template_areas WHERE template_id = ?`, f.sID); got != "soporte" {
+		t.Errorf("recorded área of S = %q; want soporte", got)
 	}
 
-	// A new S: the previous one is released back to its owner.
-	s2Slug, s2ID := seedEventTypeHTTP(t, f.h, f.ownerKey)
-	_ = s2Slug
-	mustExec(t, f.db, `UPDATE event_types SET location_type = 'livekit' WHERE id = ?`, s2ID)
-	f.mustSettings(`{"soporte_shared_id":"` + s2ID + `"}`)
-	if got := f.hosts(f.sID); !slices.Equal(got, []string{f.ownerID + ":required:0"}) || routing(f.sID) != "fixed" {
-		t.Errorf("released S: hosts %v, routing %s", got, routing(f.sID))
+	// A template edit reaches the copies (the questions too); the slug never changes.
+	mustStatus(t, f.patchET(f.sSlug, `{"name":"Soporte técnico","duration_minutes":40}`), http.StatusOK, "rename S")
+	if got := f.copyOf(f.sID, "s1"); got.name != "Soporte técnico" || got.duration != 40 || got.slug != c1.slug {
+		t.Errorf("after the S edit: %+v", got)
 	}
-	if got := f.hosts(s2ID); !slices.Equal(got, []string{"s1:rotation:0"}) {
-		t.Errorf("new S rotation = %v", got)
+	mustCreated(t, f.call(f.guard(handler.TeamOpQuestions, h.CreateQuestion), http.MethodPost,
+		"/v1/event-types/"+f.sSlug+"/questions", `{"label":"Otra","type":"text"}`, f.ownerKey, "slug", f.sSlug), "second S question")
+	if got := f.scalar(`SELECT COUNT(*) FROM event_type_questions WHERE event_type_id = ?`, c1.id); got != "2" {
+		t.Errorf("copy questions after adding one to S = %s; want 2", got)
 	}
-	if got := f.scalar(`SELECT value FROM fork_settings WHERE key = 'team_soporte_last_managed_id'`); got != s2ID {
-		t.Errorf("last managed = %q; want the new S", got)
+
+	// Moving to Mentoría: the Soporte copy is deactivated (kept), a Mentoría copy appears
+	// once T is set; back to Soporte reactivates the SAME copy.
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `"}`)
+	f.mustRole("s2", "member", "mentoria")
+	if got := f.copyOf(f.sID, "s2"); got.id != c2.id || got.active {
+		t.Errorf("s2's S copy after moving to Mentoría = %+v; want the same copy, inactive", got)
 	}
-	f.mustSettings(`{"soporte_shared_id":null}`)
-	if got := f.hosts(s2ID); !slices.Equal(got, []string{f.ownerID + ":required:0"}) || routing(s2ID) != "fixed" {
-		t.Errorf("unset S not released: hosts %v, routing %s", got, routing(s2ID))
+	if got := f.copyOf(f.tID, "s2"); got.id == "" || !got.active {
+		t.Errorf("s2's T copy = %+v; want an active one", got)
+	}
+	f.mustRole("s2", "member", "soporte")
+	if got := f.copyOf(f.sID, "s2"); got.id != c2.id || !got.active {
+		t.Errorf("s2's S copy back in Soporte = %+v; want the same copy, active", got)
+	}
+	if f.copyOf(f.tID, "s2").active {
+		t.Error("s2's T copy stayed active after leaving Mentoría")
+	}
+
+	// Archive / restore; archiving S; unsetting S.
+	mustStatus(t, f.call(h.TeamReconcileAfter(h.ArchiveUser), http.MethodPost, "/v1/users/s1/archive", "", f.ownerKey, "id", "s1"), http.StatusOK, "archive s1")
+	if f.copyOf(f.sID, "s1").active {
+		t.Error("an archived support person's copy is still active")
+	}
+	mustStatus(t, f.call(h.TeamReconcileAfter(h.RestoreUser), http.MethodPost, "/v1/users/s1/restore", "", f.ownerKey, "id", "s1"), http.StatusOK, "restore s1")
+	if !f.copyOf(f.sID, "s1").active {
+		t.Error("a restored support person's copy is not active again")
+	}
+	mustStatus(t, f.patchET(f.sSlug, `{"archived":true}`), http.StatusOK, "archive S")
+	if f.copyOf(f.sID, "s1").active {
+		t.Error("the copy of an archived S is still active")
+	}
+	mustStatus(t, f.patchET(f.sSlug, `{"archived":false}`), http.StatusOK, "unarchive S")
+	body = f.mustSettings(`{"soporte_template_id":null}`)
+	if warn, _ := body["warnings"].(map[string]any); warn["copies_deactivated"] != float64(2) {
+		t.Errorf("unset S: warnings %v; want copies_deactivated 2", warn)
+	}
+	if f.copyOf(f.sID, "s1").active || f.copyOf(f.sID, "s2").active {
+		t.Error("an S copy stayed active with S unset")
+	}
+	// The old name of the field still sets S (an older panel).
+	f.mustSettings(`{"soporte_shared_id":"` + f.sID + `"}`)
+	if got := f.copyOf(f.sID, "s1"); got.id != c1.id || !got.active {
+		t.Errorf("S set again through soporte_shared_id: %+v; want the original copy, active", got)
+	}
+
+	// A copy of an old Soporte template keeps its área after S changes.
+	s2Slug, s2ID := seedEventTypeHTTP(t, h, f.ownerKey)
+	mustExec(t, f.db, `UPDATE event_types SET location_type = 'livekit', location_value = '' WHERE id = ?`, s2ID)
+	f.mustSettings(`{"soporte_template_id":"` + s2ID + `"}`)
+	if got := f.copyOf(f.sID, "s1"); got.id != c1.id || got.active {
+		t.Errorf("old S's copy = %+v; want kept, inactive", got)
+	}
+	if got := f.copyOf(s2ID, "s1"); got.id == "" || !got.active || got.slug != s2Slug+"-ana-pena" {
+		t.Errorf("new S's copy = %+v", got)
+	}
+	got := mustJSON(t, f.call(h.GetEventType, http.MethodGet, "/", "", f.ownerKey, "slug", c1.slug), http.StatusOK, "GET old S copy")
+	if team, _ := got["team"].(map[string]any); team["kind"] != "soporte_copy" {
+		t.Errorf("old S copy team = %v; want kind soporte_copy", got["team"])
+	}
+}
+
+// The production case: S was left in round robin by the retired rotation, hosted by two
+// área-soporte people with hours (Ersum, an admin, and Yersinio, a member), the owner in
+// área Mentoría owning T. The first reconcile after the change gives S back to its owner,
+// fixed, makes one copy per support person, and retires the rotation's setting.
+func TestTeamReconcile_convertsRotationSoporte(t *testing.T) {
+	f := newTeamFixture(t)
+	supAddAdmin(t, f, "ersum")
+	addMember(t, f.db, "yersinio", "UTC")
+	mustExec(t, f.db, `UPDATE users SET name = 'Ersum' WHERE id = 'ersum'`)
+	mustExec(t, f.db, `UPDATE users SET name = 'Yersinio' WHERE id = 'yersinio'`)
+	seedFullAvailabilityDB(t, f.db, "ersum")
+	seedFullAvailabilityDB(t, f.db, "yersinio")
+	// The state the rotation left, written straight to the tables.
+	for _, q := range []string{
+		`INSERT INTO fork_member_areas (user_id, area, updated_at) VALUES ('ersum', 'soporte', 'x'), ('yersinio', 'soporte', 'x')`,
+		`INSERT INTO fork_settings (key, value) VALUES ('team_mentoria_template_id', '` + f.tID + `'),
+		     ('team_soporte_shared_id', '` + f.sID + `'), ('team_soporte_last_managed_id', '` + f.sID + `')`,
+		`UPDATE event_types SET routing_mode = 'round_robin' WHERE id = '` + f.sID + `'`,
+		`DELETE FROM event_type_hosts WHERE event_type_id = '` + f.sID + `'`,
+		`INSERT INTO event_type_hosts (id, event_type_id, user_id, role, priority) VALUES
+		     ('h1', '` + f.sID + `', 'ersum', 'rotation', 0), ('h2', '` + f.sID + `', 'yersinio', 'rotation', 1)`,
+	} {
+		mustExec(t, f.db, q)
+	}
+
+	stats, err := f.h.ReconcileTeam(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Created != 2 {
+		t.Errorf("created = %d; want 2 (one S copy per support person)", stats.Created)
+	}
+	if got := f.hosts(f.sID); !slices.Equal(got, []string{f.ownerID + ":required:0"}) {
+		t.Errorf("S hosts after the conversion = %v; want the owner, required", got)
+	}
+	if got := f.scalar(`SELECT routing_mode FROM event_types WHERE id = ?`, f.sID); got != "fixed" {
+		t.Errorf("S routing = %q; want fixed", got)
+	}
+	for id, slug := range map[string]string{"ersum": f.sSlug + "-ersum", "yersinio": f.sSlug + "-yersinio"} {
+		c := f.copyOf(f.sID, id)
+		if c.id == "" || !c.active || c.slug != slug || c.userID != f.ownerID || c.routing != "fixed" {
+			t.Errorf("%s's S copy = %+v; want active, slug %s, owned by the owner, fixed", id, c, slug)
+		}
+		if got := f.hosts(c.id); !slices.Equal(got, []string{id + ":required:0"}) {
+			t.Errorf("%s's copy hosts = %v", id, got)
+		}
+		if f.slotsOf(c.slug) == 0 {
+			t.Errorf("%s's copy has no slots with full hours", id)
+		}
+	}
+	if got := f.scalar(`SELECT COUNT(*) FROM fork_settings WHERE key = 'team_soporte_last_managed_id'`); got != "0" {
+		t.Error("the rotation's leftover setting was not retired")
+	}
+	if got := f.scalar(`SELECT value FROM fork_settings WHERE key = 'team_soporte_shared_id'`); got != f.sID {
+		t.Errorf("team_soporte_shared_id = %q; the stored key must keep naming S", got)
+	}
+	if f.slotsOf(f.sSlug) == 0 {
+		t.Error("S has no slots after the conversion (its owner has full hours)")
+	}
+	// Idempotent: a second pass changes nothing.
+	if again, err := f.h.ReconcileTeam(context.Background(), ""); err != nil || again.Created != 0 || again.Deactivated != 0 {
+		t.Errorf("second pass: %+v, %v; want no change", again, err)
+	}
+
+	// The API speaks the new model.
+	view := mustJSON(t, f.call(f.h.GetTeamSettings, http.MethodGet, "/v1/team/settings", "", f.ownerKey), http.StatusOK, "GET team settings")
+	if _, old := view["soporte_shared"]; old {
+		t.Errorf("soporte_shared is still in the answer: %v", view)
+	}
+	sup, _ := view["soporte_template"].(map[string]any)
+	links, _ := sup["copy_links"].([]any)
+	if sup["id"] != f.sID || sup["slug"] != f.sSlug || sup["copies"] != float64(2) || len(links) != 2 {
+		t.Fatalf("soporte_template = %v", sup)
+	}
+	if l := links[0].(map[string]any); l["mentor_name"] != "Ersum" || l["slug"] != f.sSlug+"-ersum" || l["active"] != true ||
+		!strings.HasSuffix(l["url"].(string), "/book/"+f.sSlug+"-ersum") {
+		t.Errorf("first S copy link = %v", l)
+	}
+	admView := mustJSON(t, f.call(f.h.GetTeamSettings, http.MethodGet, "/v1/team/settings", "", "member-key-ersum"), http.StatusOK, "admin GET")
+	if sup, _ := admView["soporte_template"].(map[string]any); sup["copy_links"] != nil || sup["copies"] != float64(2) {
+		t.Errorf("admin's soporte_template = %v; want copies but no copy_links", sup)
+	}
+	for _, key := range []string{"member-key-yersinio", f.ownerKey} {
+		me := mustJSON(t, f.call(f.h.GetMe, http.MethodGet, "/v1/users/me", "", key), http.StatusOK, "me")
+		pl, _ := me["personal_link"].(map[string]any)
+		want := f.sSlug + "-yersinio"
+		if key == f.ownerKey {
+			want = f.tSlug // the owner's link is T, as before
+		}
+		if pl["slug"] != want {
+			t.Errorf("/me personal_link = %v; want %s", me["personal_link"], want)
+		}
 	}
 }
 
@@ -479,11 +659,11 @@ func TestTeamGuards(t *testing.T) {
 	h := f.h
 	addMember(t, f.db, "m1", "UTC")
 	addMember(t, f.db, "s1", "UTC")
-	seedFullAvailabilityDB(t, f.db, "s1") // soporte rotates only with weekly hours
 	f.mustRole("m1", "member", "mentoria")
 	f.mustRole("s1", "member", "soporte")
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.sID + `"}`)
 	c := f.copyOf(f.tID, "m1")
+	sc := f.copyOf(f.sID, "s1")
 
 	want409 := func(rec *httptest.ResponseRecorder, what, contains string) {
 		t.Helper()
@@ -492,39 +672,55 @@ func TestTeamGuards(t *testing.T) {
 			t.Errorf("%s: error %q; want it to say %q", what, msg, contains)
 		}
 	}
-	// Every edit of a copy is refused, pointing at the template.
-	copyMsg := "Esta es la copia de «Mentoría privada» para Mentor m1"
-	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"patch":     f.patchET(c.slug, `{"name":"x"}`),
-		"delete":    f.call(f.guard(handler.TeamOpDelete, h.DeleteEventType), http.MethodDelete, "/", "", f.ownerKey, "slug", c.slug),
-		"duplicate": f.call(f.guard(handler.TeamOpDuplicate, h.DuplicateEventType), http.MethodPost, "/", "", f.ownerKey, "slug", c.slug),
-		"transfer":  f.call(f.guard(handler.TeamOpTransfer, h.TransferEventType), http.MethodPost, "/", `{"expected_owner_id":"`+f.ownerID+`","new_owner_id":"m1"}`, f.ownerKey, "slug", c.slug),
-		"hosts":     f.call(f.guard(handler.TeamOpHostsPut, h.SetEventTypeHosts), http.MethodPut, "/", `{"hosts":[{"user_id":"m1","role":"required"}]}`, f.ownerKey, "slug", c.slug),
-		"question":  f.call(f.guard(handler.TeamOpQuestions, h.CreateQuestion), http.MethodPost, "/", `{"label":"x","type":"text"}`, f.ownerKey, "slug", c.slug),
-		"whatsapp":  f.call(f.guard(handler.TeamOpWhatsAppWrite, h.PutWhatsAppMessages), http.MethodPut, "/", `{"created":"x"}`, f.ownerKey, "slug", c.slug),
-		"preview":   f.call(f.guard(handler.TeamOpWhatsAppWrite, h.PreviewWhatsAppMessages), http.MethodPost, "/", `{}`, f.ownerKey, "slug", c.slug),
+	// Every edit of a copy - of T or of S - is refused, pointing at the template.
+	for _, cc := range []struct {
+		slug, person, msg string
+	}{
+		{c.slug, "m1", "Esta es la copia de «Mentoría privada» para Mentor m1"},
+		{sc.slug, "s1", "Esta es la copia de «Soporte 1 a 1» para Mentor s1"},
 	} {
-		want409(rec, "copy "+name, copyMsg)
+		for name, rec := range map[string]*httptest.ResponseRecorder{
+			"patch":     f.patchET(cc.slug, `{"name":"x"}`),
+			"delete":    f.call(f.guard(handler.TeamOpDelete, h.DeleteEventType), http.MethodDelete, "/", "", f.ownerKey, "slug", cc.slug),
+			"duplicate": f.call(f.guard(handler.TeamOpDuplicate, h.DuplicateEventType), http.MethodPost, "/", "", f.ownerKey, "slug", cc.slug),
+			"transfer":  f.call(f.guard(handler.TeamOpTransfer, h.TransferEventType), http.MethodPost, "/", `{"expected_owner_id":"`+f.ownerID+`","new_owner_id":"`+cc.person+`"}`, f.ownerKey, "slug", cc.slug),
+			"hosts":     f.call(f.guard(handler.TeamOpHostsPut, h.SetEventTypeHosts), http.MethodPut, "/", `{"hosts":[{"user_id":"`+cc.person+`","role":"required"}]}`, f.ownerKey, "slug", cc.slug),
+			"question":  f.call(f.guard(handler.TeamOpQuestions, h.CreateQuestion), http.MethodPost, "/", `{"label":"x","type":"text"}`, f.ownerKey, "slug", cc.slug),
+			"whatsapp":  f.call(f.guard(handler.TeamOpWhatsAppWrite, h.PutWhatsAppMessages), http.MethodPut, "/", `{"created":"x"}`, f.ownerKey, "slug", cc.slug),
+			"preview":   f.call(f.guard(handler.TeamOpWhatsAppWrite, h.PreviewWhatsAppMessages), http.MethodPost, "/", `{}`, f.ownerKey, "slug", cc.slug),
+		} {
+			want409(rec, cc.person+" copy "+name, cc.msg)
+		}
 	}
 	if got := f.copyOf(f.tID, "m1"); got.userID != f.ownerID {
 		t.Errorf("the copy changed owner: %+v", got)
 	}
+	if got := f.copyOf(f.sID, "s1"); got.userID != f.ownerID || got.name != "Soporte 1 a 1" {
+		t.Errorf("the S copy changed: %+v", got)
+	}
 
-	// T and S.
-	want409(f.call(f.guard(handler.TeamOpTransfer, h.TransferEventType), http.MethodPost, "/", `{"expected_owner_id":"`+f.ownerID+`","new_owner_id":"m1"}`, f.ownerKey, "slug", f.tSlug), "transfer T", "no se transfieren")
-	want409(f.call(f.guard(handler.TeamOpHostsPut, h.SetEventTypeHosts), http.MethodPut, "/", `{"hosts":[{"user_id":"m1","role":"required"}]}`, f.ownerKey, "slug", f.tSlug), "hosts T", "Miembros")
-	want409(f.patchET(f.tSlug, `{"routing_mode":"round_robin"}`), "routing T", "reparto")
-	want409(f.patchET(f.tSlug, `{"location_type":"zoom"}`), "location T", "sala de video")
-	want409(f.call(f.guard(handler.TeamOpDelete, h.DeleteEventType), http.MethodDelete, "/", "", f.ownerKey, "slug", f.tSlug), "delete T with copies", "copias")
-	want409(f.patchET(f.sSlug, `{"routing_mode":"fixed"}`), "routing S", "reparto")
-	want409(f.call(f.guard(handler.TeamOpDelete, h.DeleteEventType), http.MethodDelete, "/", "", f.ownerKey, "slug", f.sSlug), "delete S", "Soporte")
+	// T and S: the same guards.
+	for _, tt := range []struct{ slug, copiesMsg string }{
+		{f.tSlug, "tiene copias de los mentores"},
+		{f.sSlug, "tiene copias del personal de soporte"},
+	} {
+		want409(f.call(f.guard(handler.TeamOpTransfer, h.TransferEventType), http.MethodPost, "/", `{"expected_owner_id":"`+f.ownerID+`","new_owner_id":"m1"}`, f.ownerKey, "slug", tt.slug), "transfer "+tt.slug, "no se transfieren")
+		want409(f.call(f.guard(handler.TeamOpHostsPut, h.SetEventTypeHosts), http.MethodPut, "/", `{"hosts":[{"user_id":"m1","role":"required"}]}`, f.ownerKey, "slug", tt.slug), "hosts "+tt.slug, "Miembros")
+		want409(f.patchET(tt.slug, `{"routing_mode":"round_robin"}`), "routing "+tt.slug, "reparto")
+		want409(f.patchET(tt.slug, `{"location_type":"zoom"}`), "location "+tt.slug, "sala de video")
+		want409(f.call(f.guard(handler.TeamOpDelete, h.DeleteEventType), http.MethodDelete, "/", "", f.ownerKey, "slug", tt.slug), "delete "+tt.slug+" with copies", tt.copiesMsg)
+	}
 
-	// Validate on change: the editor's whole-form PATCH of S with the routing it has.
+	// Validate on change: the editor's whole-form PATCH of S with the routing it has; the
+	// edit reaches the copy.
 	mustStatus(t, f.patchET(f.sSlug,
-		`{"name":"Soporte técnico","routing_mode":"round_robin","rr_strategy":"even","location_type":"livekit","location_value":"","duration_minutes":40}`),
+		`{"name":"Soporte técnico","routing_mode":"fixed","rr_strategy":"even","location_type":"livekit","location_value":"","duration_minutes":40}`),
 		http.StatusOK, "whole-form PATCH of S")
-	if got := f.hosts(f.sID); !slices.Equal(got, []string{"s1:rotation:0"}) {
-		t.Errorf("S rotation after its PATCH = %v", got)
+	if got := f.hosts(f.sID); !slices.Equal(got, []string{f.ownerID + ":required:0"}) {
+		t.Errorf("S hosts after its PATCH = %v; want the owner", got)
+	}
+	if got := f.copyOf(f.sID, "s1"); got.name != "Soporte técnico" || got.duration != 40 {
+		t.Errorf("S copy after the S PATCH = %+v", got)
 	}
 
 	// Holders: every mutation refused.
@@ -537,7 +733,7 @@ func TestTeamGuards(t *testing.T) {
 		return f.call(h.TeamTransferOwnershipGuard(h.TransferOwnership), http.MethodPost, "/v1/users/m1/transfer-ownership", "", f.ownerKey, "id", "m1")
 	}
 	want409(transfer(), "transfer ownership", "Primero quita los tipos predefinidos")
-	f.mustSettings(`{"mentoria_template_id":null,"soporte_shared_id":null}`)
+	f.mustSettings(`{"mentoria_template_id":null,"soporte_template_id":null}`)
 	mustStatus(t, transfer(), http.StatusOK, "transfer ownership after unsetting")
 }
 
@@ -578,16 +774,34 @@ func TestTeamRole_matrix(t *testing.T) {
 			t.Errorf("%s: %d; want %d — %s", name, rec.Code, c.want, rec.Body.String())
 		}
 	}
-	// The owner's own área; not Mentoría while their type is the template.
+	// The owner's own área; neither Mentoría nor Soporte while they own that template.
 	body := mustJSON(t, f.setRole(f.ownerKey, f.ownerID, "", "soporte"), http.StatusOK, "owner's own área")
 	if body["tier"] != "owner" || area(f.ownerID) != "soporte" {
 		t.Errorf("owner's own área: %v, stored %q", body, area(f.ownerID))
 	}
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)
-	mustStatus(t, f.setRole(f.ownerKey, f.ownerID, "", "mentoria"), http.StatusBadRequest, "owner as mentor of their own template")
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `"}`)
+	mustStatus(t, f.setRole(f.ownerKey, f.ownerID, "", "soporte"), http.StatusOK, "owner in soporte while S is unset")
+	f.mustSettings(`{"soporte_template_id":"` + f.sID + `"}`)
+	for a, want := range map[string]string{
+		"mentoria": "Tu enlace de Mentoría es la plantilla «Mentoría privada»",
+		"soporte":  "Tu enlace de Soporte es la plantilla «Soporte 1 a 1»",
+	} {
+		body := mustJSON(t, f.setRole(f.ownerKey, f.ownerID, "", a), http.StatusBadRequest, "owner in "+a+" of their own template")
+		if msg, _ := body["error"].(string); !strings.Contains(msg, want) {
+			t.Errorf("owner in %s: %q; want %q", a, msg, want)
+		}
+	}
+	mustStatus(t, f.setRole(f.ownerKey, f.ownerID, "", ""), http.StatusOK, "owner with no área")
+	if f.copyOf(f.sID, f.ownerID).id != "" || f.copyOf(f.tID, f.ownerID).id != "" {
+		t.Error("the owner got a copy of their own template")
+	}
 
-	// Leaving an área reports the upcoming sessions left behind in it.
-	mustExec(t, f.db, `INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('up1', ?, 'm2', '2099-05-01T10:00:00Z', '2099-05-01T10:30:00Z', 'confirmed')`, f.sID)
+	// Leaving an área reports the upcoming sessions left behind in it (on their S copy).
+	sc := f.copyOf(f.sID, "m2")
+	if sc.id == "" {
+		t.Fatal("m2 (área soporte) has no S copy")
+	}
+	mustExec(t, f.db, `INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status) VALUES ('up1', ?, 'm2', '2099-05-01T10:00:00Z', '2099-05-01T10:30:00Z', 'confirmed')`, sc.id)
 	body = mustJSON(t, f.setRole("adm-key", "m2", "member", "mentoria"), http.StatusOK, "m2 soporte -> mentoria")
 	if body["upcoming_in_previous_area"] != float64(1) || body["area"] != "mentoria" || body["tier"] != "member" {
 		t.Errorf("answer = %v; want upcoming_in_previous_area 1", body)
@@ -694,11 +908,15 @@ func TestTeamBookings_areaFilterAndPublicShape(t *testing.T) {
 	oSlug, oID := seedEventTypeHTTP(t, f.h, f.ownerKey)
 	_ = oSlug
 	addMember(t, f.db, "m1", "UTC")
+	addMember(t, f.db, "s1", "UTC")
 	f.mustRole("m1", "member", "mentoria")
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)
+	f.mustRole("s1", "member", "soporte")
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.sID + `"}`)
 	c := f.copyOf(f.tID, "m1")
+	sc := f.copyOf(f.sID, "s1")
 	for _, b := range []struct{ id, et, host, day string }{
 		{"bT", f.tID, f.ownerID, "10"}, {"bC", c.id, "m1", "11"}, {"bS", f.sID, f.ownerID, "12"}, {"bO", oID, f.ownerID, "13"},
+		{"bSC", sc.id, "s1", "14"},
 	} {
 		mustExec(t, f.db, `INSERT INTO bookings (id, event_type_id, host_id, start_at, end_at, status, location_type, location_value)
 			VALUES (?, ?, ?, ?, ?, 'confirmed', 'livekit', 'https://example.com/room')`,
@@ -722,10 +940,13 @@ func TestTeamBookings_areaFilterAndPublicShape(t *testing.T) {
 	}
 	for query, want := range map[string][]string{
 		"?scope=all&area=mentoria":                           {"bC", "bT"},
-		"?scope=all&area=soporte":                            {"bS"},
+		"?scope=all&area=soporte":                            {"bS", "bSC"},
 		"?scope=all&event_type=" + f.tSlug:                   {"bC", "bT"}, // the template's whole family
+		"?scope=all&event_type=" + f.sSlug:                   {"bS", "bSC"},
 		"?scope=all&event_type=" + f.tSlug + "&area=soporte": nil,
+		"?scope=all&event_type=" + f.sSlug + "&area=soporte": {"bS", "bSC"},
 		"?scope=all&event_type=" + c.slug:                    {"bC"},
+		"?scope=all&event_type=" + sc.slug:                   {"bSC"},
 	} {
 		if got := ids(list(f.ownerKey, query)); !slices.Equal(got, want) {
 			t.Errorf("%s: %v; want %v", query, got, want)
@@ -736,12 +957,15 @@ func TestTeamBookings_areaFilterAndPublicShape(t *testing.T) {
 	for _, it := range all.Items {
 		areas[it.ID] = it.Area
 	}
-	if areas["bT"] != "mentoria" || areas["bC"] != "mentoria" || areas["bS"] != "soporte" || areas["bO"] != "" {
+	if areas["bT"] != "mentoria" || areas["bC"] != "mentoria" || areas["bS"] != "soporte" || areas["bSC"] != "soporte" || areas["bO"] != "" {
 		t.Errorf("item areas = %v", areas)
 	}
-	// A mentor still sees only their own, whatever the filter.
+	// A mentor or a support person still sees only their own, whatever the filter.
 	if got := ids(list("member-key-m1", "?scope=all&area=mentoria")); !slices.Equal(got, []string{"bC"}) {
 		t.Errorf("mentor's area=mentoria: %v; want only their own bC", got)
+	}
+	if got := ids(list("member-key-s1", "?scope=all&area=soporte")); !slices.Equal(got, []string{"bSC"}) {
+		t.Errorf("support person's area=soporte: %v; want only their own bSC", got)
 	}
 	mustStatus(t, f.call(f.h.ListBookings, http.MethodGet, "/v1/bookings?area=ventas", "", f.ownerKey), http.StatusBadRequest, "bad area")
 
@@ -766,7 +990,9 @@ func TestTeamSettings_validationAndRead(t *testing.T) {
 	f := newTeamFixture(t)
 	seedRoleUser(t, f.db, "adm", "adm@example.com", 1, 0, "adm-key")
 	addMember(t, f.db, "m1", "UTC")
+	addMember(t, f.db, "s1", "UTC")
 	f.mustRole("m1", "member", "mentoria")
+	f.mustRole("s1", "member", "soporte")
 	plainSlug, plainID := seedEventTypeHTTP(t, f.h, f.ownerKey)
 	_ = plainSlug
 	mustExec(t, f.db, `UPDATE event_types SET location_type = 'zoom' WHERE id = ?`, plainID)
@@ -775,11 +1001,12 @@ func TestTeamSettings_validationAndRead(t *testing.T) {
 
 	mustStatus(t, f.putSettings("adm-key", `{"mentoria_template_id":"`+f.tID+`"}`), http.StatusForbidden, "admin PUT")
 	for name, c := range map[string]struct{ body, contains string }{
-		"same id":     {`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.tID + `"}`, "distintos"},
+		"same id":     {`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.tID + `"}`, "distintos"},
+		"same, alias": {`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.tID + `"}`, "distintos"},
 		"not livekit": {`{"mentoria_template_id":"` + plainID + `"}`, "sala de video"},
-		"not owner's": {`{"soporte_shared_id":"mine"}`, "no es tuyo"},
-		"archived":    {`{"soporte_shared_id":"arch"}`, "archivado"},
-		"missing":     {`{"soporte_shared_id":"nope"}`, "no existe"},
+		"not owner's": {`{"soporte_template_id":"mine"}`, "no es tuyo"},
+		"archived":    {`{"soporte_template_id":"arch"}`, "archivado"},
+		"missing":     {`{"soporte_template_id":"nope"}`, "no existe"},
 	} {
 		body := mustJSON(t, f.putSettings(f.ownerKey, c.body), http.StatusBadRequest, name)
 		if msg, _ := body["error"].(string); !strings.Contains(msg, c.contains) {
@@ -788,22 +1015,27 @@ func TestTeamSettings_validationAndRead(t *testing.T) {
 	}
 	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `"}`)
 	c := f.copyOf(f.tID, "m1")
-	body := mustJSON(t, f.putSettings(f.ownerKey, `{"soporte_shared_id":"`+c.id+`"}`), http.StatusBadRequest, "copy as S")
+	body := mustJSON(t, f.putSettings(f.ownerKey, `{"soporte_template_id":"`+c.id+`"}`), http.StatusBadRequest, "copy as S")
 	if msg, _ := body["error"].(string); !strings.Contains(msg, "copia de un mentor") {
 		t.Errorf("copy as S: %q", msg)
 	}
 	// Validate on change: T's stored location no longer livekit, re-sent unchanged = fine.
 	mustExec(t, f.db, `UPDATE event_types SET location_type = 'zoom' WHERE id = ?`, f.tID)
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.sID + `"}`)
 	mustExec(t, f.db, `UPDATE event_types SET location_type = 'livekit' WHERE id = ?`, f.tID)
+	sc := f.copyOf(f.sID, "s1")
+	body = mustJSON(t, f.putSettings(f.ownerKey, `{"mentoria_template_id":"`+sc.id+`"}`), http.StatusBadRequest, "S copy as T")
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "copia de una persona de soporte") {
+		t.Errorf("S copy as T: %q", msg)
+	}
 
 	adminView := mustJSON(t, f.call(f.h.GetTeamSettings, http.MethodGet, "/v1/team/settings", "", "adm-key"), http.StatusOK, "admin GET")
 	tmpl, _ := adminView["mentoria_template"].(map[string]any)
 	if adminView["can_edit"] != false || tmpl["copies"] != float64(1) || tmpl["copy_links"] != nil || tmpl["slug"] != f.tSlug {
 		t.Errorf("admin view = %v", adminView)
 	}
-	if sup, _ := adminView["soporte_shared"].(map[string]any); sup["id"] != f.sID {
-		t.Errorf("soporte_shared = %v", adminView["soporte_shared"])
+	if sup, _ := adminView["soporte_template"].(map[string]any); sup["id"] != f.sID || sup["slug"] != f.sSlug || sup["copies"] != float64(1) || sup["copy_links"] != nil {
+		t.Errorf("admin's soporte_template = %v", adminView["soporte_template"])
 	}
 	ownerView := mustJSON(t, f.call(f.h.GetTeamSettings, http.MethodGet, "/v1/team/settings", "", f.ownerKey), http.StatusOK, "owner GET")
 	links, _ := ownerView["mentoria_template"].(map[string]any)["copy_links"].([]any)
@@ -831,11 +1063,23 @@ func TestTeamSettings_validationAndRead(t *testing.T) {
 			if pl, _ := u["personal_link"].(map[string]any); pl["slug"] != f.tSlug {
 				t.Errorf("owner's personal link = %v; want the template", u["personal_link"])
 			}
+		case "s1":
+			pl, _ := u["personal_link"].(map[string]any)
+			if u["area"] != "soporte" || pl["slug"] != sc.slug || pl["active"] != true || !strings.HasSuffix(pl["url"].(string), "/book/"+sc.slug) {
+				t.Errorf("s1 row = area %v, personal_link %v", u["area"], u["personal_link"])
+			}
 		case "adm":
 			if u["personal_link"] != nil || u["area"] != "" {
 				t.Errorf("adm row = %v", u)
 			}
 		}
+	}
+	if sup, _ := ownerView["soporte_template"].(map[string]any); sup != nil {
+		if links, _ := sup["copy_links"].([]any); len(links) != 1 || links[0].(map[string]any)["slug"] != sc.slug {
+			t.Errorf("owner's soporte_template.copy_links = %v", sup["copy_links"])
+		}
+	} else {
+		t.Error("owner GET has no soporte_template")
 	}
 	me := mustJSON(t, f.call(f.h.GetMe, http.MethodGet, "/v1/users/me", "", "member-key-m1"), http.StatusOK, "me")
 	if pl, _ := me["personal_link"].(map[string]any); me["area"] != "mentoria" || pl["slug"] != c.slug {
@@ -847,14 +1091,21 @@ func TestTeamWebhooks_guardsAndEventTypeList(t *testing.T) {
 	f := newTeamFixture(t)
 	h := f.h
 	addMember(t, f.db, "m1", "UTC")
+	addMember(t, f.db, "s1", "UTC")
 	f.mustRole("m1", "member", "mentoria")
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `"}`)
+	f.mustRole("s1", "member", "soporte")
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.sID + `"}`)
 	c := f.copyOf(f.tID, "m1")
+	sc := f.copyOf(f.sID, "s1")
 	create := func(key, body string) *httptest.ResponseRecorder {
 		return f.call(h.TeamWebhookGuard(h.CreateWebhook), http.MethodPost, "/v1/webhooks", body, key)
 	}
+	body := mustJSON(t, create(f.ownerKey, `{"url":"https://example.com/hook","events":["booking.created"],"event_type_ids":["`+sc.id+`"]}`), http.StatusBadRequest, "filter lists an S copy")
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "copia de una persona de soporte") || !strings.Contains(msg, "«Soporte 1 a 1»") {
+		t.Errorf("S copy in filter: %q", msg)
+	}
 
-	body := mustJSON(t, create("member-key-m1", `{"url":"https://example.com/hook","events":["booking.created"],"fields":["id","whatsapp_message"]}`), http.StatusForbidden, "member selects whatsapp_message")
+	body = mustJSON(t, create("member-key-m1", `{"url":"https://example.com/hook","events":["booking.created"],"fields":["id","whatsapp_message"]}`), http.StatusForbidden, "member selects whatsapp_message")
 	if msg, _ := body["error"].(string); !strings.Contains(msg, "propietario") {
 		t.Errorf("member whatsapp_message: %q", msg)
 	}
@@ -885,20 +1136,20 @@ func TestTeamWebhooks_guardsAndEventTypeList(t *testing.T) {
 		} `json:"items"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &out)
-	sawT := false
+	saw := map[string]bool{}
 	for _, it := range out.Items {
-		if it.ID == c.id {
-			t.Error("the webhook list offers a mentor's copy")
+		if it.ID == c.id || it.ID == sc.id {
+			t.Errorf("the webhook list offers a copy (%s)", it.ID)
 		}
-		if it.ID == f.tID {
-			sawT = true
+		if it.ID == f.tID || it.ID == f.sID {
+			saw[it.ID] = true
 			if it.Copies != 1 {
-				t.Errorf("T copies = %d; want 1", it.Copies)
+				t.Errorf("%s copies = %d; want 1", it.ID, it.Copies)
 			}
 		}
 	}
-	if !sawT {
-		t.Error("the template is missing from the webhook list")
+	if !saw[f.tID] || !saw[f.sID] {
+		t.Errorf("a template is missing from the webhook list: %v", saw)
 	}
 }
 
@@ -906,10 +1157,21 @@ func TestTeamWhatsApp_copyInheritsAndPreviewNames(t *testing.T) {
 	f := newTeamFixture(t)
 	h := f.h
 	addMember(t, f.db, "m1", "UTC")
+	addMember(t, f.db, "s1", "UTC")
 	f.mustRole("m1", "member", "mentoria")
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)
+	f.mustRole("s1", "member", "soporte")
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.sID + `"}`)
 	c := f.copyOf(f.tID, "m1")
+	sc := f.copyOf(f.sID, "s1")
 	mustStatus(t, f.call(h.PutWhatsAppMessages, http.MethodPut, "/", `{"created":"Hola {nombre}, soy {mentor}"}`, f.ownerKey, "slug", f.tSlug), http.StatusOK, "save T texts")
+	mustStatus(t, f.call(h.PutWhatsAppMessages, http.MethodPut, "/", `{"created":"Soporte: {nombre} con {mentor}"}`, f.ownerKey, "slug", f.sSlug), http.StatusOK, "save S texts")
+	for _, key := range []string{f.ownerKey, "member-key-s1"} {
+		got := mustJSON(t, f.call(h.GetWhatsAppMessages, http.MethodGet, "/", "", key, "slug", sc.slug), http.StatusOK, "GET S copy texts")
+		from, _ := got["inherited_from"].(map[string]any)
+		if got["created"] != "Soporte: {nombre} con {mentor}" || got["read_only"] != true || from["slug"] != f.sSlug || from["name"] != "Soporte 1 a 1" {
+			t.Errorf("S copy texts = %v", got)
+		}
+	}
 
 	for _, key := range []string{f.ownerKey, "member-key-m1"} {
 		got := mustJSON(t, f.call(h.GetWhatsAppMessages, http.MethodGet, "/", "", key, "slug", c.slug), http.StatusOK, "GET copy texts")

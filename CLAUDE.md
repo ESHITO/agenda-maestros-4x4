@@ -343,35 +343,52 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   positional scans stay, `Role()` never returns `support`, it grants nothing (`support_tier_test.go`),
   `SetUserRole` refuses it with a Spanish 400, and `RetireSupportTier` (boot) turns any leftover flag into
   área soporte. The 00066 migration comment is history.
-- **Predefined types** (`fork_settings`: `team_mentoria_template_id` = T, `team_soporte_shared_id` = S,
-  owner-only `PUT /v1/team/settings`). Every active área-mentoría user except T's owner gets a **copy** of
-  T (`fork_event_type_links` kind `copy`, owned by T's owner, hosted by the mentor, slug stable forever);
-  S rotates among the área-soporte users. `ReconcileTeam` (`handler/fork_team.go`) is the single idempotent
-  Go engine: boot from `server.New` only (never `BuildHandler`, which `calnode mcp` also runs), and after a
-  2xx of every trigger (route wrappers in `server.go`). Field sync is a row-value UPDATE over `PRAGMA
-  table_info(event_types)` minus an exclusion list - **an upstream column addition fails
+- **Two templates, one model** (`fork_settings`: `team_mentoria_template_id` = T "Mentoría privada",
+  `team_soporte_shared_id` = S "Soporte 1 a 1" - the key keeps its old name, production has it set, and it
+  now names the Soporte **template**; owner-only `PUT /v1/team/settings`, body `mentoria_template_id` /
+  `soporte_template_id`, `soporte_shared_id` still read as an alias). **Nobody rotates any more.** Every
+  active user of an área except that template's owner gets a **copy** of its template (`fork_event_type_links`
+  kind `copy`, owned by the template's owner, hosted by that person alone - required, fixed routing - slug
+  `{template slug}-{name}` stable forever): mentors get copies of T, support people copies of S. A copy stays
+  active only while its template is the CURRENT setting of its person's área. T and S themselves are locked
+  to [their owner, required], fixed; they ARE the owner's links (no copy for the owner, and `PUT team-role`
+  refuses the owner the área of a template they own, Spanish 400). `ReconcileTeam` (`handler/fork_team.go`)
+  is the single idempotent Go engine: boot from `server.New` only (never `BuildHandler`, which `calnode mcp`
+  also runs), and after a 2xx of every trigger (route wrappers in `server.go`). Field sync is a row-value
+  UPDATE over `PRAGMA table_info(event_types)` minus an exclusion list - **an upstream column addition fails
   `TestTeamSyncColumns_classified` until you classify it.** Questions sync in place through
   `fork_question_links`; a retired question with answers is parked on a hidden **holder** type. Copies are
   deactivated, never deleted (bookings are RESTRICT).
-- **S rotates only among staff with weekly hours** (`fork_team_hours.go`: a global rule or one for S that holds
-  at least one slot of S's duration, aligned like `hostsByStart`; overrides never count; ONE unparseable
-  rule in that scope disqualifies the person, since POST accepts it and it makes GetSlots 500 for all of S),
-  else S's owner alone - one host with no rules once took S from 319 slots to 0.
-  POST/PATCH/DELETE `/v1/availability-rules` reconcile the caller (`TeamReconcileAfterCaller`); the rest
-  shows up as `has_availability` (`GET /v1/users`) and `soporte_shared.waiting` (`GET /v1/team/settings`).
-- **Guards** (`fork_team_guards.go`, Spanish 409s): copies and holders are read-only (edit T); T and S
-  refuse transfer, hosts PUT, routing changes and leaving `livekit`; ownership transfer is refused while
-  either setting is set. Webhook filters list T, never a copy: `matchingWebhooks` also matches a copy's
-  template (`webhook/fork_team.go`, a const clause), mirrored in `scopedWebhooks`. A copy sends T's
-  WhatsApp texts. Only the owner may select `whatsapp_message`.
+- **A copy's área** is its template's: the current setting, else `fork_template_areas` (EnsureTeamSchema;
+  the reconcile records each template's área while it is a setting), else Mentoría (every copy made before S
+  became a template). It decides `mentoria_copy` vs `soporte_copy`, the bookings' `area`, `?area=` and the
+  reassign family, so an old template's bookings keep their área after the setting changes. Because it is
+  one value per template, `PUT /v1/team/settings` refuses (Spanish 400) to make a type that already has
+  copies the template of the OTHER área (swapping T and S included): that would relabel every existing
+  session and offer it to the other área's people.
+- **The retired rotation** (S in round robin among área-soporte staff with hours) is converted by the first
+  reconcile after the change: S's hosts back to its owner, fixed, one copy per support person; the leftover
+  `team_soporte_last_managed_id` key releases the type it names (if not a template) and is deleted.
+  Sessions the rotation booked stay on S with their host; "Pasar a otra persona" moves one onto a copy.
+- **`has_availability`** (`GET /v1/users`, `fork_team_hours.go`): whether the person's weekly rules can hold
+  one slot of THEIR link (their copy, or the template for its owner) - a global rule or one for that copy,
+  aligned like `hostsByStart`; overrides never count; ONE unparseable rule in that scope means false (POST
+  accepts it and it makes GetSlots 500). The panel shows false as "Sin horario". POST/PATCH/DELETE
+  `/v1/availability-rules` still reconcile the caller (`TeamReconcileAfterCaller`), a no-op today.
+- **Guards** (`fork_team_guards.go`, Spanish 409s): copies of either template and holders are read-only
+  (edit the template); T and S alike refuse transfer, hosts PUT, routing changes, leaving `livekit` and DELETE
+  while they have copies; ownership transfer is refused while either setting is set. Webhook filters list a
+  template, never a copy: `matchingWebhooks` also matches a copy's template (`webhook/fork_team.go`, a const
+  clause), mirrored in `scopedWebhooks`; `GET /v1/webhooks/event-types` hides copies and counts them on their
+  template. A copy sends its template's WhatsApp texts. Only the owner may select `whatsapp_message`.
 - **Supervision.** Owner and admins see every booking (`scope=all`), read answers, and "Pasar a otra
-  persona" (`TeamReassignGuard`: same-área rule; `teamReassignHost` moves host, seat, `event_type_id` to the
-  new host's copy and remaps answers in one tx; fresh LiveKit host link, `fork_livekit_host_links`).
+  persona" (`TeamReassignGuard`: same-área rule, identical for both áreas - the template's owner or a person
+  with an ACTIVE copy of it; `teamReassignHost` moves host, seat, `event_type_id` to the new host's copy (or
+  the template, for its owner) and remaps answers in one tx; fresh LiveKit host link, `fork_livekit_host_links`).
   Attendance = our token mints (`fork_livekit_mints`) refined by LiveKit webhook sessions
   (`fork_livekit_sessions`), computed per list page (`fork_attendance.go`).
 - **Known, out of scope:** staff creating bookings for clients; per-person summary; the owner
-  rescheduling others' sessions (the MCP `reschedule_booking` tool still lets admins do it); a manage-page
-  reschedule on round-robin S may 409 when only another host is free (upstream behaviour).
+  rescheduling others' sessions (the MCP `reschedule_booking` tool still lets admins do it).
 
 ## Email - two transports, and the SMTP trap
 

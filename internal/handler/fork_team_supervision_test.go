@@ -175,12 +175,14 @@ func TestTeamAnswers_accessMatrix(t *testing.T) {
 	}
 }
 
-// teamReassignFixture: T (with one text question) and S set; mentors m1 and m2 (active
-// copies), m4 with no área, soporte staff m5 and m6. bC is on m1's copy, answered.
+// teamReassignFixture: T and S set, each with one text question; mentors m1 and m2
+// (active T copies), m4 with no área, support people m5 and m6 (active S copies). bC is
+// on m1's copy, answered.
 type teamReassignFixture struct {
 	*teamFixture
-	c1, c2 teamCopy
-	tq     string // T's question
+	c1, c2 teamCopy // m1's and m2's copies of T
+	s5, s6 teamCopy // m5's and m6's copies of S
+	tq, sq string   // T's and S's question
 }
 
 func newTeamReassignFixture(t *testing.T) *teamReassignFixture {
@@ -188,27 +190,30 @@ func newTeamReassignFixture(t *testing.T) *teamReassignFixture {
 	mustCreated(t, f.call(f.guard(handler.TeamOpQuestions, f.h.CreateQuestion), http.MethodPost,
 		"/v1/event-types/"+f.tSlug+"/questions", `{"label":"¿Qué quieres trabajar?","type":"text","required":true}`,
 		f.ownerKey, "slug", f.tSlug), "create T question")
+	mustCreated(t, f.call(f.guard(handler.TeamOpQuestions, f.h.CreateQuestion), http.MethodPost,
+		"/v1/event-types/"+f.sSlug+"/questions", `{"label":"¿En qué te ayudamos?","type":"text","required":true}`,
+		f.ownerKey, "slug", f.sSlug), "create S question")
 	for _, id := range []string{"m1", "m2", "m4", "m5", "m6"} {
 		addMember(t, f.db, id, "UTC")
 	}
-	seedFullAvailabilityDB(t, f.db, "m5") // soporte rotates only with weekly hours
-	seedFullAvailabilityDB(t, f.db, "m6")
 	f.mustRole("m1", "member", "mentoria")
 	f.mustRole("m2", "member", "mentoria")
 	f.mustRole("m5", "member", "soporte")
 	f.mustRole("m6", "member", "soporte")
-	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_shared_id":"` + f.sID + `"}`)
-	rf := &teamReassignFixture{teamFixture: f, c1: f.copyOf(f.tID, "m1"), c2: f.copyOf(f.tID, "m2")}
+	f.mustSettings(`{"mentoria_template_id":"` + f.tID + `","soporte_template_id":"` + f.sID + `"}`)
+	rf := &teamReassignFixture{teamFixture: f, c1: f.copyOf(f.tID, "m1"), c2: f.copyOf(f.tID, "m2"),
+		s5: f.copyOf(f.sID, "m5"), s6: f.copyOf(f.sID, "m6")}
 	rf.tq = f.scalar(`SELECT id FROM event_type_questions WHERE event_type_id = ?`, f.tID)
+	rf.sq = f.scalar(`SELECT id FROM event_type_questions WHERE event_type_id = ?`, f.sID)
 	supBooking(t, f, "bC", rf.c1.id, "m1", "2099-03-10T10:00:00Z", "2099-03-10T10:30:00Z")
 	mustExec(t, f.db, `INSERT INTO booking_answers (id, booking_id, question_id, value) VALUES ('ans-bC', 'bC', ?, 'Ventas')`,
 		rf.copyQuestion(rf.c1.id))
 	return rf
 }
 
-// copyQuestion is copyID's question linked to T's question.
+// copyQuestion is copyID's question linked to its template's question (T's or S's).
 func (rf *teamReassignFixture) copyQuestion(copyID string) string {
-	return rf.scalar(`SELECT copy_question_id FROM fork_question_links WHERE copy_id = ? AND template_question_id = ?`, copyID, rf.tq)
+	return rf.scalar(`SELECT copy_question_id FROM fork_question_links WHERE copy_id = ? AND template_question_id IN (?, ?)`, copyID, rf.tq, rf.sq)
 }
 
 func (rf *teamReassignFixture) state(bookingID string) string {
@@ -283,15 +288,44 @@ func TestTeamReassign_sameAreaMoveAndRemap(t *testing.T) {
 		t.Errorf("busy: %d %q", rec.Code, errorOf(t, rec))
 	}
 
-	// Soporte: only soporte staff; the type does not move.
-	supBooking(t, f, "bS", f.sID, "m5", "2099-03-12T10:00:00Z", "2099-03-12T10:30:00Z")
-	if rec := rf.reassign(f.ownerKey, "bS", "m1"); rec.Code != http.StatusBadRequest ||
-		!strings.Contains(errorOf(t, rec), "no es del personal de soporte") {
-		t.Errorf("S booking to a mentor: %d %q", rec.Code, errorOf(t, rec))
+	// Soporte works the same: a session on m5's S copy, answered, passes only to S's owner
+	// or another support person with an active copy, and moves onto their copy with the
+	// answer remapped; never across áreas.
+	supBooking(t, f, "bS", rf.s5.id, "m5", "2099-03-12T10:00:00Z", "2099-03-12T10:30:00Z")
+	mustExec(t, f.db, `INSERT INTO booking_answers (id, booking_id, question_id, value) VALUES ('ans-bS', 'bS', ?, 'No entra el audio')`,
+		rf.copyQuestion(rf.s5.id))
+	beforeS := rf.state("bS")
+	for _, host := range []string{"m1", "m4"} {
+		if rec := rf.reassign(f.ownerKey, "bS", host); rec.Code != http.StatusBadRequest ||
+			!strings.Contains(errorOf(t, rec), "no tiene un enlace de Soporte activo") {
+			t.Errorf("S booking to %s: %d %q", host, rec.Code, errorOf(t, rec))
+		}
+	}
+	if got := rf.state("bS"); got != beforeS {
+		t.Fatalf("a refused Soporte reassign wrote: %s -> %s", beforeS, got)
 	}
 	mustStatus(t, rf.reassign(f.ownerKey, "bS", "m6"), http.StatusOK, "S booking to m6")
-	if got := rf.state("bS"); got != "m6|"+f.sID+"|m6:1|" {
-		t.Errorf("S booking after the reassign: %s", got)
+	if got, want := rf.state("bS"), "m6|"+rf.s6.id+"|m6:1|"+rf.copyQuestion(rf.s6.id); got != want {
+		t.Errorf("S booking after the reassign to m6: %s; want %s", got, want)
+	}
+	mustStatus(t, rf.reassign(f.ownerKey, "bS", f.ownerID), http.StatusOK, "S booking to S's owner")
+	if got, want := rf.state("bS"), f.ownerID+"|"+f.sID+"|"+f.ownerID+":1|"+rf.sq; got != want {
+		t.Errorf("S booking after the reassign to the owner: %s; want %s", got, want)
+	}
+	if got := f.scalar(`SELECT value FROM booking_answers WHERE id = 'ans-bS'`); got != "No entra el audio" {
+		t.Errorf("the client's Soporte answer = %q", got)
+	}
+	// A session on S itself (the retired rotation left some, hosted by support people)
+	// moves onto the new host's copy.
+	supBooking(t, f, "bS0", f.sID, "m5", "2099-03-14T10:00:00Z", "2099-03-14T10:30:00Z")
+	mustStatus(t, rf.reassign(f.ownerKey, "bS0", "m6"), http.StatusOK, "S-itself booking to m6")
+	if got := rf.state("bS0"); got != "m6|"+rf.s6.id+"|m6:1|" {
+		t.Errorf("S-itself booking after the reassign: %s", got)
+	}
+	// And a Mentoría session never goes to a support person.
+	if rec := rf.reassign(f.ownerKey, "bC", "m6"); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(errorOf(t, rec), "no tiene un enlace de Mentoría activo") {
+		t.Errorf("Mentoría booking to a support person: %d %q", rec.Code, errorOf(t, rec))
 	}
 
 	// Any other type: the upstream rule (anyone active).
@@ -332,8 +366,11 @@ func TestTeamReassignCandidates(t *testing.T) {
 	f.mustRole("m3", "member", "mentoria")
 	mustStatus(t, f.call(f.h.TeamReconcileAfter(f.h.ArchiveUser), http.MethodPost, "/v1/users/m3/archive", "", f.ownerKey, "id", "m3"), http.StatusOK, "archive m3")
 	a1 := supAddAdmin(t, f, "a1")
-	supBooking(t, f, "bS", f.sID, "m5", "2099-03-12T10:00:00Z", "2099-03-12T10:30:00Z")
+	supBooking(t, f, "bS", rf.s5.id, "m5", "2099-03-12T10:00:00Z", "2099-03-12T10:30:00Z")
 	supBooking(t, f, "bO", oID, f.ownerID, "2099-03-13T10:00:00Z", "2099-03-13T10:30:00Z")
+	addMember(t, f.db, "m7", "UTC") // área soporte, archived: no candidate
+	f.mustRole("m7", "member", "soporte")
+	mustStatus(t, f.call(f.h.TeamReconcileAfter(f.h.ArchiveUser), http.MethodPost, "/v1/users/m7/archive", "", f.ownerKey, "id", "m7"), http.StatusOK, "archive m7")
 
 	cands := func(key, bookingID string) []string {
 		t.Helper()
@@ -354,8 +391,8 @@ func TestTeamReassignCandidates(t *testing.T) {
 	if got, want := cands(f.ownerKey, "bC"), []string{"m2:mentoria", f.ownerID + ":"}; !slices.Equal(got, want) {
 		t.Errorf("bC candidates = %v; want %v", got, want)
 	}
-	// Soporte: the other soporte staff.
-	if got, want := cands(a1, "bS"), []string{"m6:soporte"}; !slices.Equal(got, want) {
+	// Soporte, the same rule: S's owner and the support people with an active copy.
+	if got, want := cands(a1, "bS"), []string{"m6:soporte", f.ownerID + ":"}; !slices.Equal(got, want) {
 		t.Errorf("bS candidates = %v; want %v", got, want)
 	}
 	// Any other type: every active person but the host.

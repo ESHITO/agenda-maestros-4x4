@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
-	import { api, teamApi, copyText, type EventType, type TeamSettings, type AvailabilityRule, type CopyLink } from '$lib/api';
+	import { api, teamApi, copyText, isTeamCopy, isTeamTemplate, type EventType, type TeamSettings, type TeamTemplate, type AvailabilityRule, type CopyLink } from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { Button } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
@@ -23,27 +23,27 @@
 	// copies while the request is in flight.
 	let duplicating = $state('');
 
-	// Fork: predefined types. The team settings (admins) name the Soporte rotation and,
-	// for the owner, the mentors' links when the list item does not carry them. The
-	// availability rules tell a mentor / support person that nobody can book them yet.
+	// Fork: predefined types. The team settings (admins) give the owner the copies' links
+	// when the list item does not carry them. The availability rules tell a mentor or
+	// support person that nobody can book them yet.
 	let settings = $state<TeamSettings | null>(null);
 	let hasRules = $state<boolean | null>(null);
 	let openCopies = $state<Record<string, boolean>>({});
 
 	// A copy is owned by the template's owner, so the owner's list holds every copy: they
-	// are reached through the template card instead (one link per mentor). The mentor sees
-	// their own copy (owned = false) as a read-only predefined type.
-	const listed = $derived(items.filter((et) => !(et.team?.kind === 'mentoria_copy' && et.owned !== false)));
+	// are reached through the template card instead (one link per person). The mentor or
+	// support person sees their own copy (owned = false) as a read-only predefined type.
+	const listed = $derived(items.filter((et) => !(isTeamCopy(et.team?.kind) && et.owned !== false)));
 
 	let filter = $state<'active' | 'archived'>('active');
 	const visible = $derived(listed.filter((et) => (filter === 'archived' ? !!et.archived : !et.archived)));
 	const archivedCount = $derived(listed.filter((et) => et.archived).length);
 	const activeCount = $derived(listed.length - archivedCount);
 
-	// A predefined type this person attends (their copy, the shared Soporte, or the
-	// template they own) is useless without availability: say so.
+	// A predefined type this person attends (their copy, or a template they own) is useless
+	// without availability: say so.
 	const attendsPredefined = $derived(
-		listed.some((et) => !et.archived && et.team && (et.owned === false || et.team.kind === 'mentoria_template'))
+		listed.some((et) => !et.archived && et.team && (et.owned === false || isTeamTemplate(et.team.kind)))
 	);
 
 	async function load() {
@@ -106,9 +106,8 @@
 		}
 	}
 
-	// Fork: archiving the Mentoría template switches off every mentor's copy (a copy is
-	// active only while its template is not archived), and archiving the Soporte type
-	// leaves nothing to book for Soporte. Both ask first.
+	// Fork: archiving a template switches off every copy of it (a copy is active only while
+	// its template is not archived): ask first.
 	let archiveOpen = $state(false);
 	let archiveTarget = $state<EventType | null>(null);
 	let archiveTitle = $state('');
@@ -116,13 +115,13 @@
 
 	function askArchive(et: EventType) {
 		const kind = et.team?.kind;
-		const n = kind === 'mentoria_template' ? copiesOf(et) : 0;
-		if (!et.archived && kind === 'mentoria_template' && n > 0) {
+		const n = isTeamTemplate(kind) ? copiesOf(et) : 0;
+		if (!et.archived && n > 0) {
+			const whose = kind === 'soporte_template'
+				? (n === 1 ? 'La copia de la persona de soporte dejará' : `Las ${n} copias del personal de soporte dejarán`)
+				: (n === 1 ? 'La copia del mentor dejará' : `Las ${n} copias de los mentores dejarán`);
 			archiveTitle = `¿Archivar la plantilla «${et.name}»?`;
-			archiveDescription = `${n === 1 ? 'La copia del mentor dejará' : `Las ${n} copias de los mentores dejarán`} de aceptar reservas: los enlaces personales se desactivan hasta que la restaures. Las reservas ya hechas se conservan.`;
-		} else if (!et.archived && kind === 'soporte_shared') {
-			archiveTitle = `¿Archivar «${et.name}»?`;
-			archiveDescription = 'Es el tipo de Soporte: nadie podrá reservar Soporte hasta que lo restaures. Las reservas ya hechas se conservan.';
+			archiveDescription = `${whose} de aceptar reservas: los enlaces personales se desactivan hasta que la restaures. Las reservas ya hechas se conservan.`;
 		} else {
 			archive(et, !et.archived);
 			return;
@@ -136,11 +135,9 @@
 			await api.patch(`/v1/event-types/${et.slug}`, { archived });
 			const kind = et.team?.kind;
 			toast.success(
-				archived && kind === 'mentoria_template' && copiesOf(et) > 0
-					? 'Plantilla archivada: los enlaces de los mentores ya no aceptan reservas'
-					: archived && kind === 'soporte_shared'
-						? 'Tipo de Soporte archivado: nadie puede reservarlo'
-						: archived ? 'Tipo de atención archivado' : 'Tipo de atención restaurado'
+				archived && isTeamTemplate(kind) && copiesOf(et) > 0
+					? 'Plantilla archivada: los enlaces personales ya no aceptan reservas'
+					: archived ? 'Tipo de atención archivado' : 'Tipo de atención restaurado'
 			);
 			await load();
 		} catch (e: any) {
@@ -187,19 +184,19 @@
 		else toast.error('No se pudo copiar; mantén pulsado el enlace para copiarlo.');
 	}
 
-	// The mentors' links of the template: from the list item, else from the settings (both
+	// A template's entry in the settings (Mentoría or Soporte), matched by id.
+	function settingsOf(et: EventType): TeamTemplate | null {
+		if (settings?.mentoria_template?.id === et.id) return settings.mentoria_template;
+		if (settings?.soporte_template?.id === et.id) return settings.soporte_template;
+		return null;
+	}
+	// The copies' links of a template: from the list item, else from the settings (both
 	// owner-only on the server).
 	function copyLinksOf(et: EventType): CopyLink[] {
-		if (et.team?.copy_links) return et.team.copy_links;
-		if (settings?.mentoria_template?.id === et.id) return settings.mentoria_template.copy_links ?? [];
-		return [];
+		return et.team?.copy_links ?? settingsOf(et)?.copy_links ?? [];
 	}
 	function copiesOf(et: EventType): number {
-		return et.team?.copies ?? settings?.mentoria_template?.copies ?? copyLinksOf(et).length;
-	}
-	// S's rotation: from the list item (the server sends it to everyone who sees S), else the settings.
-	function soporteHostsOf(et: EventType): { id: string; name: string }[] {
-		return et.team?.hosts ?? settings?.soporte_shared?.hosts ?? [];
+		return et.team?.copies ?? settingsOf(et)?.copies ?? copyLinksOf(et).length;
 	}
 </script>
 
@@ -301,8 +298,8 @@
 									<Badge variant="secondary" class="text-[10px]">Predefinido por el propietario</Badge>
 								{:else if kind === 'mentoria_template'}
 									<Badge variant="secondary" class="text-[10px]">Plantilla de Mentoría</Badge>
-								{:else if kind === 'soporte_shared'}
-									<Badge variant="secondary" class="text-[10px]">Soporte compartido</Badge>
+								{:else if kind === 'soporte_template'}
+									<Badge variant="secondary" class="text-[10px]">Plantilla de Soporte</Badge>
 								{:else if readOnly}
 									<Badge variant="secondary" class="text-[10px]">Eres anfitrión</Badge>
 								{/if}
@@ -312,15 +309,18 @@
 							</div>
 							<p class="break-all text-xs text-muted-foreground">/book/{et.slug} · {et.duration_minutes} min</p>
 
-							{#if kind === 'mentoria_template' && !readOnly}
+							{#if isTeamTemplate(kind) && !readOnly}
 								{@const n = copiesOf(et)}
 								{@const links = copyLinksOf(et)}
+								{@const sup = kind === 'soporte_template'}
+								{@const per = sup ? 'una por persona de soporte' : 'una por mentor'}
+								{@const whose = sup ? 'del personal de soporte' : 'de los mentores'}
 								<p class="text-sm text-muted-foreground">
-									{n === 1 ? '1 copia (una por mentor)' : `${n} copias (una por mentor)`}. Las copias siguen los cambios de esta plantilla.
+									{n === 1 ? `1 copia (${per})` : `${n} copias (${per})`}. Las copias siguen los cambios de esta plantilla.
 								</p>
 								{#if links.length > 0}
 									<button type="button" class="text-xs font-medium text-primary underline-offset-2 hover:underline" aria-expanded={!!openCopies[et.id]} onclick={() => (openCopies = { ...openCopies, [et.id]: !openCopies[et.id] })}>
-										{openCopies[et.id] ? 'Ocultar enlaces de los mentores' : 'Ver enlaces de los mentores'}
+										{openCopies[et.id] ? `Ocultar enlaces ${whose}` : `Ver enlaces ${whose}`}
 									</button>
 									{#if openCopies[et.id]}
 										<ul class="mt-1 space-y-1.5">
@@ -336,25 +336,8 @@
 										</ul>
 									{/if}
 								{/if}
-							{:else if kind === 'soporte_shared' && !readOnly}
-								{@const soporteHosts = soporteHostsOf(et)}
-								<p class="text-sm text-muted-foreground">
-									{#if !et.team?.hosts && !settings}
-										Se reparte entre el personal de soporte (se asigna en Miembros).
-									{:else if soporteHosts.length > 1}
-										Se reparte por turnos entre: {soporteHosts.map((h) => h.name).join(', ')}.
-									{:else if soporteHosts.length === 1}
-										Lo atiende {soporteHosts[0].name}.
-									{:else}
-										Nadie tiene el área Soporte: lo atiendes tú. Asígnala en Miembros.
-									{/if}
-								</p>
 							{:else if kind && readOnly}
-								<p class="text-sm text-muted-foreground">
-									{kind === 'soporte_shared'
-										? 'Se reparte por turnos entre el personal de soporte. Lo configura el propietario.'
-										: 'Tu enlace personal. Lo configura el propietario; tú defines tu disponibilidad.'}
-								</p>
+								<p class="text-sm text-muted-foreground">Tu enlace personal. Lo configura el propietario; tú defines tu disponibilidad.</p>
 							{/if}
 						</div>
 
@@ -378,9 +361,9 @@
 							<Button variant="ghost" size="sm" onclick={() => askArchive(et)}>
 								{et.archived ? 'Restaurar' : 'Archivar'}
 							</Button>
-							<!-- Fork: the server refuses deleting T while it has copies and S while it is
-							     the Soporte type (409), so the button is not offered then. -->
-							{#if !(kind === 'mentoria_template' && copiesOf(et) > 0) && kind !== 'soporte_shared'}
+							<!-- Fork: the server refuses deleting a template while it has copies (409),
+							     so the button is not offered then. -->
+							{#if !(isTeamTemplate(kind) && copiesOf(et) > 0)}
 								<Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" onclick={() => del(et.slug)}>Eliminar</Button>
 							{/if}
 						{/if}
