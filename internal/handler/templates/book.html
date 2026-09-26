@@ -57,7 +57,7 @@ body {
   position: absolute;
   visibility: hidden;
   white-space: nowrap;
-  font-size: .6875rem;
+  font-size: .8125rem; /* = .tz-wrapper select in booking.css */
   font-family: inherit;
 }
 
@@ -75,6 +75,12 @@ body {
   .cal-col { border-right: none; border-bottom: 1px solid #e5e7eb; padding: 1.25rem 1rem; }
   .cal-grid { grid-template-columns: repeat(7, 1fr); width: 100%; }
   .ch, .cd { width: 100%; }
+  /* Phones: the month card spans the column, with bigger day targets. */
+  .cal-card { width: 100%; }
+  .cd { height: 46px; font-size: 1rem; }
+  /* The right column (and its empty state) is hidden on the calendar step, so the
+     "pick a day" prompt shows under the card instead. */
+  .cal-tip { display: flex; }
   .right-col { padding: 1.25rem 1rem; }
   /* Step-flow: show one section at a time (calendar ⇄ right pane). */
   .card.m-right .info, .card.m-right .cal-col { display: none; }
@@ -164,13 +170,16 @@ body {
       </span>
       <span id="tz-sizer" aria-hidden="true"></span>
     </p>
+    <!-- The "pick a day" prompt under the card, for phones only (booking.css .cal-tip):
+         there the step-flow hides the right column that holds #empty-hint. -->
+    <p id="cal-tip" class="empty-state cal-tip"><span class="empty-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg></span><span>{{call .T "select_day_hint"}}</span></p>
   </section>
 
   <!-- Right column -->
   <section class="right-col" aria-live="polite">
 
     <!-- Empty state (before a day is chosen) -->
-    <p id="empty-hint" class="hint">{{call .T "select_day_hint"}}</p>
+    <p id="empty-hint" class="empty-state"><span class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg></span><span>{{call .T "select_day_hint"}}</span></p>
     <!-- Why the nearest times are missing, shown only when the minimum-notice policy is
          what removed them (the server says which days it hit). It sits here, outside the
          slot list, because a day the policy emptied completely is greyed out in the
@@ -184,6 +193,7 @@ body {
         {{call .T "back"}}
       </button>
       <p class="slots-header" id="slots-date"></p>
+      <p class="slots-duration"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span>{{.DurationLabel}}</span></p>
       <div id="slots-list" class="slots-list"></div>
     </div>
 
@@ -519,8 +529,10 @@ body {
     const daysInMonth = new Date(navYear, navMonth + 1, 0).getDate();
     const startOffset = dowIndex(first); // 0=Mon offset
 
-    $('month-label').textContent =
-      first.toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' });
+    // Month in bold, year in regular weight (booking.css .ml-month / .ml-year).
+    $('month-label').innerHTML =
+      `<span class="ml-month">${esc(first.toLocaleDateString(LOCALE, { month: 'long' }))}</span> ` +
+      `<span class="ml-year">${esc(first.toLocaleDateString(LOCALE, { year: 'numeric' }))}</span>`;
 
     const thisMonFirst = new Date(today.getFullYear(), today.getMonth(), 1);
     const navFirst     = new Date(navYear, navMonth, 1);
@@ -529,7 +541,9 @@ body {
       ? navFirst >= new Date(maxDate.getFullYear(), maxDate.getMonth(), 1)
       : false;
 
-    let h = DOW_LABELS.map(d => `<div class="ch">${d}</div>`).join('');
+    // The weekday row lives in the card's header band (#cal-dow), not in the day grid.
+    $('cal-dow').innerHTML = DOW_LABELS.map(d => `<div class="ch">${d}</div>`).join('');
+    let h = '';
     for (let i = 0; i < startOffset; i++) h += '<div></div>';
 
     for (let d = 1; d <= daysInMonth; d++) {
@@ -591,11 +605,6 @@ body {
     el.classList.toggle('hidden', !show);
   }
 
-  let selectedPeriod = null;
-  function slotPeriod(slot) {
-    const hour = Number(new Intl.DateTimeFormat('en-GB', {timeZone: TZ, hour: 'numeric', hourCycle: 'h23'}).format(new Date(slot.start)));
-    return hour < 12 ? 0 : hour < 17 ? 1 : 2;
-  }
   function fillSlots(list, ds) {
     // Only when this specific day lost starts to the policy - saying it on a day the
     // policy did not touch would be noise attached to the wrong cause.
@@ -618,16 +627,12 @@ body {
     // Taken entries render as disabled buttons so they keep the same box and rhythm as
     // bookable ones, and are announced as unavailable rather than read out as a plain
     // time. `disabled` is what actually prevents picking one; the click guard below is
-    // the second line, not the first.
-    const periods = [...new Set(slotsCache.map(slotPeriod))].sort();
-    if (!periods.includes(selectedPeriod)) selectedPeriod = periods[0];
-    const labels = ['time_morning', 'time_afternoon', 'time_evening'];
-    const buttons = slotsCache.map((s, i) => ({s, i})).filter(({s}) => slotPeriod(s) === selectedPeriod).map(({s, i}) => s.taken
-      ? `<button class="slot-btn taken" disabled aria-label="${fmtTime(s.start)} - ${t('slot_taken')}">${fmtTime(s.start)}</button>`
-      : `<button class="slot-btn" data-i="${i}">${fmtTime(s.start)}</button>`
+    // the second line, not the first. Every time of the day in one list (Calendly-style),
+    // no morning/afternoon/evening tabs.
+    list.innerHTML = slotsCache.map((s, i) => s.taken
+      ? `<button type="button" class="slot-btn taken" disabled aria-label="${fmtTime(s.start)} - ${t('slot_taken')}">${fmtTime(s.start)}</button>`
+      : `<button type="button" class="slot-btn" data-i="${i}">${fmtTime(s.start)}</button>`
     ).join('');
-    const choices = periods.map(period => `<button type="button" data-period="${period}" aria-pressed="${period === selectedPeriod}">${esc(t(labels[period]))}</button>`).join('');
-    list.innerHTML = `<div class="time-periods" role="group" aria-label="${esc(t('time_period'))}">${choices}</div><div class="time-grid">${buttons}</div>`;
     // Only meaningful for opted-in event types: when every time on the day is gone,
     // say so, rather than leaving a list of struck-through times to be inferred from.
     if (slotsCache.length && !slotsCache.some(s => !s.taken)) {
@@ -645,6 +650,7 @@ body {
     restoreDefaultHosts();
     renderCal();
     $('empty-hint').classList.add('hidden');
+    $('cal-tip').classList.add('hidden');
     renderNoticeHint(); // a day is chosen now, so the standalone hint stands down
     showView('slots-view');
     setStep('right');
@@ -673,14 +679,8 @@ body {
     }
   }
 
+  // One tap on a time opens the form (pickSlot): no intermediate confirm step.
   $('slots-list').addEventListener('click', e => {
-    const period = e.target.closest('[data-period]');
-    if (period) {
-      selectedPeriod = Number(period.dataset.period);
-      fillSlots($('slots-list'), toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate()));
-      $('slots-list').querySelector(`[data-period="${selectedPeriod}"]`).focus();
-      return;
-    }
     const btn = e.target.closest('.slot-btn');
     if (!btn || btn.disabled) return;
     pickSlot(+btn.dataset.i);

@@ -71,90 +71,152 @@
 /* ── Calendar column ─────────────────────────────── */
 .cal-col {
   flex: 0 0 auto;
-  padding: 2rem 1.5rem 2rem 2rem;
+  padding: 1.75rem 1.25rem 1.75rem 1.5rem;
   border-right: 1px solid #e5e7eb;
+}
+
+/* The month sits in ONE rounded card: a solid header band on the brand accent carries
+ * the month title, the prev/next arrows AND the weekday row; the day grid sits below on
+ * white. The band and the selected day follow each instance's branding through
+ * --booking-accent / --booking-accent-text (set on <body> by the pages and on the host
+ * element by the widget), so text on the band always uses the contrast colour computed
+ * server-side for that accent. Markup: calendarGrid in _shared.html (book + manage) and
+ * calPane() in embed.js - keep the three in step.
+ *
+ * Tints use color-mix(); every such declaration comes right after a neutral fallback,
+ * which is what a browser without color-mix() (older phones) keeps. */
+.cal-card {
+  width: 312px;
+  max-width: 100%;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 8px 24px rgba(16,24,40,.08);
+  overflow: hidden;
+}
+.cal-band {
+  background: var(--booking-accent, #111827);
+  color: var(--booking-accent-text, #fff);
+  padding: .75rem .5rem .375rem;
 }
 
 .cal-nav {
   display: flex;
   align-items: center;
-  margin-bottom: 1rem;
-  gap: .5rem;
+  gap: .375rem;
+  padding: 0 .125rem .625rem .5rem;
 }
 .cal-nav button {
-  width: 28px; height: 28px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  border-radius: 6px;
+  width: 36px; height: 36px;
+  border: 1px solid rgba(127,127,127,.35);
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  background: rgba(127,127,127,.16);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 9px;
   cursor: pointer;
-  color: #6b7280;
+  color: inherit;
   display: flex; align-items: center; justify-content: center;
-  transition: background .12s, color .12s;
+  transition: background .12s, opacity .12s;
   flex-shrink: 0;
 }
-.cal-nav button:hover:not(:disabled) { background: #f9fafb; color: #111827; }
-.cal-nav button:disabled { opacity: .3; cursor: default; }
+.cal-nav button:hover:not(:disabled) {
+  background: rgba(127,127,127,.28);
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+.cal-nav button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.cal-nav button:disabled { opacity: .35; cursor: default; }
+/* Month in bold, year in regular weight ("Septiembre 2026"); both spans are written by
+ * the calendar render of each surface. */
 .month-label {
   flex: 1;
-  font-size: .9375rem;
-  font-weight: 600;
-  color: #111827;
+  min-width: 0;
+  font-size: 1.0625rem;
+  font-weight: 400;
+  line-height: 1.3;
+  color: inherit;
 }
+.month-label .ml-month { font-weight: 700; text-transform: capitalize; }
 
+/* Weekday row (inside the band) and day grid (on white) share the same seven columns
+ * and the same side inset, so the letters sit exactly over their days. */
+.cal-dow,
 .cal-grid {
   display: grid;
-  grid-template-columns: repeat(7, 40px);
+  grid-template-columns: repeat(7, 1fr);
   gap: 2px;
 }
+.cal-grid { padding: .5rem; }
 .ch {
-  width: 40px; height: 28px;
+  height: 28px;
   text-align: center;
-  font-size: .6875rem;
-  font-weight: 500;
-  color: #9ca3af;
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: inherit;
   display: flex; align-items: center; justify-content: center;
 }
 .cd {
-  width: 40px; height: 40px;
+  width: 100%; height: 42px;
   border: none; background: none;
-  border-radius: 8px;
-  font-size: .875rem;
+  border-radius: 10px;
+  font: inherit;
+  font-size: .9375rem;
+  font-variant-numeric: tabular-nums;
   color: #374151;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: background .1s, color .1s;
   position: relative;
 }
-.cd.available { background: #f3f4f6; }
-.cd.available:hover { background: #e5e7eb; }
-.cd.sel { background: #111827 !important; color: #fff !important; font-weight: 600; }
+/* Bookable day: bold number on a light tint of the accent. */
+.cd.available {
+  font-weight: 700;
+  color: #111827;
+  background: #f3f4f6;
+  background: color-mix(in srgb, var(--booking-accent, #111827) 18%, #fff);
+}
+.cd.available:hover {
+  background: #e5e7eb;
+  background: color-mix(in srgb, var(--booking-accent, #111827) 30%, #fff);
+}
+.cd:focus-visible { outline: 2px solid #111827; outline-offset: 2px; z-index: 1; }
+/* Today: a small dot under the number, in the number's own colour. */
 .cd.today::after {
   content: '';
   position: absolute;
-  bottom: 4px;
+  bottom: 5px;
   left: 50%; transform: translateX(-50%);
-  width: 4px; height: 4px;
+  width: 5px; height: 5px;
   border-radius: 50%;
   background: currentColor;
 }
-.cd.sel.today::after { background: #fff; }
-.cd:disabled { color: #d1d5db; cursor: default; background: none !important; }
+/* Not bookable: faded number, no fill. */
+.cd:disabled { color: #b4bac4; font-weight: 400; cursor: default; background: none !important; }
 
+/* Time zone selector, under the calendar card: a quiet pill. */
 .tz-label {
-  margin-top: .875rem;
-  font-size: .6875rem;
-  color: #9ca3af;
+  margin-top: .75rem;
+  font-size: .8125rem;
+  color: #6b7280;
 }
 .tz-wrapper {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: .375rem;
+  max-width: 100%;
+  padding: .375rem .75rem;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
 }
 .tz-wrapper select {
   appearance: none;
   -webkit-appearance: none;
-  font-size: .6875rem;
-  color: #9ca3af;
+  min-width: 0;
+  max-width: 100%;
+  font-size: .8125rem;
+  color: #4b5563;
   font-family: inherit;
   background: none;
   border: none;
@@ -163,8 +225,39 @@
   outline: none;
 }
 .tz-wrapper svg { pointer-events: none; color: #9ca3af; flex-shrink: 0; }
+.tz-wrapper:hover { border-color: #d1d5db; }
 .tz-wrapper:hover select,
-.tz-wrapper:hover svg { color: #6b7280; }
+.tz-wrapper:hover svg { color: #111827; }
+.tz-wrapper:focus-within { border-color: #111827; }
+
+/* "Pick a day" empty state: a tap icon over a short sentence. #empty-hint in book.html's
+ * right column, the reschedule list's first state in manage.html, and the widget's right
+ * pane. .cal-tip is the same state placed UNDER the calendar card, shown only where the
+ * step-flow hides the right column (phones; each surface turns it on in its own
+ * responsive layer). */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  padding: 3rem 1rem;
+  text-align: center;
+  font-size: .9375rem;
+  line-height: 1.45;
+  color: #4b5563;
+}
+.empty-icon {
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  color: #374151;
+  background: #f3f4f6;
+  background: color-mix(in srgb, var(--booking-accent, #111827) 14%, #fff);
+}
+.cal-tip { display: none; flex-direction: row; gap: .625rem; padding: 1rem 0 0; text-align: left; }
+.cal-tip .empty-icon { width: 40px; height: 40px; }
 
 /* ── Right column ────────────────────────────────── */
 .right-col {
@@ -174,22 +267,64 @@
 }
 .hidden { display: none !important; }
 
-/* Slots */
-.slots-header { font-size: .9375rem; font-weight: 600; margin-bottom: 1rem; color: #111827; }
-.slots-list { display: flex; flex-direction: column; gap: .5rem; max-height: 340px; overflow-y: auto; }
+/* Slots - Calendly-style: the chosen day as a heading, the duration under it, then
+ * EVERY time of that day in one vertical list of full-width outlined buttons (no
+ * morning/afternoon/evening tabs). Tapping a time goes straight on: to the booking form
+ * on book.html and the widget, to the existing reschedule step on manage.html. The list
+ * grows with the page (no inner scroll box), so a long day scrolls naturally on phones.
+ *
+ * The time text is the accent darkened with black, not the raw accent: a light accent
+ * such as turquoise #4fd7ff reads at ~1.6:1 on white, the darkened mix at ~5:1. */
+.slots-header {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: .25rem;
+  color: #111827;
+}
+.slots-header::first-letter { text-transform: uppercase; }
+.slots-duration {
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  margin-bottom: 1rem;
+  font-size: .8125rem;
+  color: #6b7280;
+}
+.slots-duration svg { flex-shrink: 0; color: #9ca3af; }
+.slots-list { display: flex; flex-direction: column; gap: .5rem; }
 .slot-btn {
-  padding: .625rem 1rem;
-  border: 1.5px solid #e5e7eb;
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  padding: .75rem 1rem;
+  border: 1.5px solid #d1d5db;
+  border: 1.5px solid color-mix(in srgb, var(--booking-accent, #111827) 70%, #fff);
   background: #fff;
   border-radius: 8px;
-  font-size: .875rem;
-  font-weight: 500;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
   color: #111827;
+  color: color-mix(in srgb, var(--booking-accent, #111827) 55%, #000);
   cursor: pointer;
   text-align: center;
   transition: border-color .12s, background .12s;
 }
-.slot-btn:hover { border-color: #111827; background: #f9fafb; }
+.slot-btn:hover {
+  border-color: #111827;
+  border-color: var(--booking-accent, #111827);
+  background: #f9fafb;
+  background: color-mix(in srgb, var(--booking-accent, #111827) 10%, #fff);
+}
+.slot-btn:focus-visible {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
+  background: #f9fafb;
+  background: color-mix(in srgb, var(--booking-accent, #111827) 10%, #fff);
+}
 .slot-btn.sel   { background: #111827; color: #fff; border-color: #111827; }
 
 /* Already booked, shown only when the event type opts in (show_taken_slots).
@@ -199,14 +334,20 @@
    without relying on colour alone. */
 .slot-btn.taken {
   background: #f9fafb;
-  border-color: #f3f4f6;
+  border-color: #e5e7eb;
   border-style: dashed;
+  font-weight: 500;
   color: #9ca3af;
   cursor: not-allowed;
   text-decoration: line-through;
   text-decoration-color: #d1d5db;
 }
-.slot-btn.taken:hover { border-color: #f3f4f6; background: #f9fafb; }
+.slot-btn.taken:hover { border-color: #e5e7eb; background: #f9fafb; }
+.slots-list .hint { margin-top: .25rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cd, .slot-btn, .cal-nav button { transition: none; }
+}
 
 .hint { font-size: .8125rem; color: #9ca3af; }
 
@@ -596,11 +737,7 @@
 .demo-banner strong { font-weight: 600; }
 .demo-banner a { color: inherit; text-decoration: underline; font-weight: 600; }
 
-.slots-list { max-height: none; overflow: visible; }
-.time-periods { display: flex; gap: 4px; padding: 4px; background: #f3f4f6; border-radius: 8px; }
-.time-periods button { flex: 1; min-width: 0; padding: 10px 4px; border: 0; border-radius: 6px; background: transparent; color: #374151; font: inherit; font-size: 12px; cursor: pointer; }
-.time-periods button[aria-pressed="true"] { background: white; color: #111827; box-shadow: 0 1px 3px #0002; font-weight: 600; }
-.time-periods button:focus-visible { outline: 2px solid #111827; outline-offset: 2px; }
-.time-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; }
-.time-grid .slot-btn { padding: 12px 4px; font-variant-numeric: tabular-nums; }
+/* Brand accent: the selected day, a selected time and the primary button fill with the
+ * instance's accent (set on <body> by the pages, on the host element by the widget). */
 .cd.sel, .slot-btn.sel, .btn-primary { background: var(--booking-accent, #111827) !important; border-color: var(--booking-accent, #111827); color: var(--booking-accent-text, #fff) !important; }
+.cd.sel { font-weight: 700; }

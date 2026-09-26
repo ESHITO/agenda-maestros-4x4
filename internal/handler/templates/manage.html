@@ -47,8 +47,8 @@ body {
 /* .powered-by footer styles live in booking.css (shared with the booking page). */
 
 /* Page-specific id hooks + tweaks layered on the shared sheet. */
-#month-label { flex: 1; font-size: .9375rem; font-weight: 600; color: #111827; }
-#tz-sizer { position: absolute; visibility: hidden; white-space: nowrap; font-size: .6875rem; font-family: inherit; }
+/* #month-label is styled by booking.css (.month-label, inside the calendar card's band). */
+#tz-sizer { position: absolute; visibility: hidden; white-space: nowrap; font-size: .8125rem; font-family: inherit; } /* = .tz-wrapper select */
 .tz-wrapper select { max-width: 190px; }
 
 /* ── Manage-specific views ──────────────────────── */
@@ -113,6 +113,12 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   .cal-col { border-right: none; border-bottom: 1px solid #e5e7eb; padding: 1.25rem 1rem; }
   .cal-grid { grid-template-columns: repeat(7, 1fr); width: 100%; }
   .ch, .cd { width: 100%; }
+  /* Phones: the month card spans the column, with bigger day targets (same as book.html). */
+  .cal-card { width: 100%; }
+  .cd { height: 46px; font-size: 1rem; }
+  /* The reschedule list (and its "pick a day" state) is hidden on the calendar step, so
+     the prompt shows under the card instead. */
+  .cal-tip { display: flex; }
   .right-col { padding: 1.25rem 1rem; }
   /* Reschedule step-flow: calendar step shows info + calendar (slots hidden); slots
      step shows just the times (info + calendar hidden). Toggled by m-rcal/m-rslots. */
@@ -197,6 +203,8 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       {{call .T "back"}}
     </button>
     {{template "calendarGrid" .}}
+    <!-- The "pick a day" prompt under the card, phones only (booking.css .cal-tip). -->
+    <p id="cal-tip" class="empty-state cal-tip"><span class="empty-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg></span><span>{{call .T "select_day_hint"}}</span></p>
   </section>
 
   <section class="right-col" aria-live="polite">
@@ -216,7 +224,8 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
         {{call .T "back"}}
       </button>
       <p class="slots-header" id="slots-date">{{call .T "select_a_date"}}</p>
-      <div id="slots-list" class="slots-list"><p class="hint">{{call .T "pick_day_hint"}}</p></div>
+      <p class="slots-duration"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span>{{.DurationLabel}}</span></p>
+      <div id="slots-list" class="slots-list"><p class="empty-state"><span class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg></span><span>{{call .T "pick_day_hint"}}</span></p></div>
     </div>
 
     <!-- Confirm reschedule -->
@@ -418,14 +427,19 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     const daysInMonth = new Date(navYear, navMonth + 1, 0).getDate();
     const startOffset = dowIndex(first);
 
-    $('month-label').textContent = first.toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' });
+    // Month in bold, year in regular weight (booking.css .ml-month / .ml-year).
+    $('month-label').innerHTML =
+      `<span class="ml-month">${esc(first.toLocaleDateString(LOCALE, { month: 'long' }))}</span> ` +
+      `<span class="ml-year">${esc(first.toLocaleDateString(LOCALE, { year: 'numeric' }))}</span>`;
 
     const thisMonFirst = new Date(today.getFullYear(), today.getMonth(), 1);
     const navFirst = new Date(navYear, navMonth, 1);
     $('prev-btn').disabled = navFirst <= thisMonFirst;
     $('next-btn').disabled = maxDate ? navFirst >= new Date(maxDate.getFullYear(), maxDate.getMonth(), 1) : false;
 
-    let h = DOW_LABELS.map(d => `<div class="ch">${d}</div>`).join('');
+    // The weekday row lives in the card's header band (#cal-dow), not in the day grid.
+    $('cal-dow').innerHTML = DOW_LABELS.map(d => `<div class="ch">${d}</div>`).join('');
+    let h = '';
     for (let i = 0; i < startOffset; i++) h += '<div></div>';
 
     for (let d = 1; d <= daysInMonth; d++) {
@@ -478,6 +492,21 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     p.textContent = text;
     return p;
   }
+  // The "pick a day" empty state (booking.css .empty-state): the tap icon over the hint.
+  // The icon is a static constant; the text goes in through textContent.
+  const TAP_ICON = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>';
+  function pickDayEmpty() {
+    const p = document.createElement('p');
+    p.className = 'empty-state';
+    const icon = document.createElement('span');
+    icon.className = 'empty-icon';
+    icon.innerHTML = TAP_ICON;
+    const text = document.createElement('span');
+    text.textContent = t('pick_day_hint');
+    p.appendChild(icon);
+    p.appendChild(text);
+    return p;
+  }
   function noticeHintText() {
     return MIN_NOTICE_LABEL ? BookingLogic.fmt(t('min_notice_hint'), [MIN_NOTICE_LABEL]) : '';
   }
@@ -490,18 +519,13 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     if (!list) return;
     const notice = noticeDates.size > 0 ? noticeHintText() : '';
     list.innerHTML = '';
-    list.appendChild(hintP(t('pick_day_hint')));
+    list.appendChild(pickDayEmpty());
     if (notice) list.appendChild(hintP(notice, 'notice-hint'));
   }
 
-  let selectedPeriod = null;
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-  function slotPeriod(slot) {
-    const hour = Number(new Intl.DateTimeFormat('en-GB', {timeZone: TZ, hour: 'numeric', hourCycle: 'h23'}).format(new Date(slot.start)));
-    return hour < 12 ? 0 : hour < 17 ? 1 : 2;
   }
   function fillSlots(list, ds) {
     // Only when this specific day lost starts to the policy - saying it on a day the
@@ -525,15 +549,11 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     }
     // Taken entries are disabled buttons: same box as a bookable slot, announced as
     // unavailable. `disabled` is what prevents picking one; the click guard is backup.
-    const periods = [...new Set(slotsCache.map(slotPeriod))].sort();
-    if (!periods.includes(selectedPeriod)) selectedPeriod = periods[0];
-    const labels = ['time_morning', 'time_afternoon', 'time_evening'];
-    const buttons = slotsCache.map((s, i) => ({s, i})).filter(({s}) => slotPeriod(s) === selectedPeriod).map(({s, i}) => s.taken
-      ? `<button class="slot-btn taken" disabled aria-label="${fmtTime(s.start)} - ${t('slot_taken')}">${fmtTime(s.start)}</button>`
-      : `<button class="slot-btn" data-i="${i}">${fmtTime(s.start)}</button>`
+    // Every time of the day in one list (Calendly-style), no morning/afternoon/evening tabs.
+    list.innerHTML = slotsCache.map((s, i) => s.taken
+      ? `<button type="button" class="slot-btn taken" disabled aria-label="${fmtTime(s.start)} - ${t('slot_taken')}">${fmtTime(s.start)}</button>`
+      : `<button type="button" class="slot-btn" data-i="${i}">${fmtTime(s.start)}</button>`
     ).join('');
-    const choices = periods.map(period => `<button type="button" data-period="${period}" aria-pressed="${period === selectedPeriod}">${esc(t(labels[period]))}</button>`).join('');
-    list.innerHTML = `<div class="time-periods" role="group" aria-label="${esc(t('time_period'))}">${choices}</div><div class="time-grid">${buttons}</div>`;
     if (slotsCache.length && !slotsCache.some(s => !s.taken)) {
       list.insertAdjacentHTML('beforeend', `<p class="hint">${t('all_times_taken')}</p>`);
     }
@@ -547,6 +567,7 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     pickedDate = new Date(y, m, d);
     pickedSlot = null;
     renderCal();
+    $('cal-tip').classList.add('hidden'); // a day is chosen: the prompt under the card stands down
     setRStep('slots'); // mobile: advance from the calendar to the times
     $('slots-date').textContent = fmtDate(pickedDate);
     const list = $('slots-list');
@@ -575,13 +596,6 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   }
 
   $('slots-list').addEventListener('click', e => {
-    const period = e.target.closest('[data-period]');
-    if (period) {
-      selectedPeriod = Number(period.dataset.period);
-      fillSlots($('slots-list'), toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate()));
-      $('slots-list').querySelector(`[data-period="${selectedPeriod}"]`).focus();
-      return;
-    }
     const btn = e.target.closest('.slot-btn');
     if (!btn || btn.disabled) return;
     const i = +btn.dataset.i;
@@ -600,7 +614,7 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     setRStep('cal'); // mobile: start on the calendar step
     if (!pickedDate) {
       $('slots-date').textContent = t('select_a_date');
-      $('slots-list').innerHTML = `<p class="hint">${t('pick_day_hint')}</p>`;
+      renderPickDayHint();
     }
     loadMonthAvailability(navYear, navMonth);
   });

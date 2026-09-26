@@ -129,19 +129,26 @@
 
 {{define "demoBanner"}}{{if .DemoMode}}<div class="demo-banner"><strong>{{call .T "demo_public_label"}}</strong> — {{call .T "demo_public_text"}} <a href="https://github.com/Calnode/calnode" target="_blank" rel="noopener noreferrer">{{call .T "demo_view_source"}}</a></div>{{end}}{{end}}
 
-{{/* Month nav + the day grid. The grid (#cal) is empty here and filled by
-     booking-logic.js. Each page wraps this in its own <section> (book shows it
-     inline + a timezone picker; manage starts it hidden + adds a Back button). */}}
-{{define "calendarGrid"}}<div class="cal-nav">
-      <span id="month-label" class="month-label" aria-live="polite"></span>
-      <button id="prev-btn" aria-label="{{call .T "prev_month_aria"}}">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-      </button>
-      <button id="next-btn" aria-label="{{call .T "next_month_aria"}}">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-      </button>
-    </div>
-    <div id="cal" class="cal-grid" role="grid"></div>{{end}}
+{{/* Month card: a header band (month title + prev/next + weekday row) over the day
+     grid. #month-label, #cal-dow and #cal are empty here and filled by each page's
+     renderCal (book.html / manage.html); embed.js builds the same classes in calPane().
+     Each page wraps this in its own <section> (book shows it inline + a timezone picker;
+     manage starts it hidden + adds a Back button). Styled in booking.css (.cal-card). */}}
+{{define "calendarGrid"}}<div class="cal-card">
+      <div class="cal-band">
+        <div class="cal-nav">
+          <span id="month-label" class="month-label" aria-live="polite"></span>
+          <button type="button" id="prev-btn" aria-label="{{call .T "prev_month_aria"}}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <button type="button" id="next-btn" aria-label="{{call .T "next_month_aria"}}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+        <div id="cal-dow" class="cal-dow"></div>
+      </div>
+      <div id="cal" class="cal-grid" role="grid"></div>
+    </div>{{end}}
 
 {{/* Event meta line (duration · location · price) for the info panel. Location and
      price are omitted when their label is empty, so a page that doesn't set them

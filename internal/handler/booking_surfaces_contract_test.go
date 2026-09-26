@@ -52,6 +52,16 @@ func TestBookingSurfacesShareStructuralHooks(t *testing.T) {
 		"slots-list",   // slot-button container
 		"slots-header", // selected-day header
 		"slot-btn",     // a time-slot button
+		// Month card (booking.css): the header band carries the month title, the arrows
+		// AND the weekday row; the day grid sits under it.
+		"cal-card",       // the rounded month card
+		"cal-band",       // its accent header band
+		"cal-dow",        // the weekday row, inside the band
+		"ml-month",       // month name (bold) in the month label
+		"slots-duration", // the duration line under the selected-day header
+		"empty-state",    // the "pick a day" state (tap icon + hint)
+		"empty-icon",
+		"cal-tip", // the same state under the card, for the narrow step-flow
 	}
 
 	for _, h := range hooks {
@@ -59,6 +69,18 @@ func TestBookingSurfacesShareStructuralHooks(t *testing.T) {
 			if !strings.Contains(src, h) {
 				t.Errorf("structural hook %q missing from %s — the booking surfaces have drifted; "+
 					"add it to all three (book.html, manage.html, embed.js) or adjust this contract", h, name)
+			}
+		}
+	}
+
+	// The morning/afternoon/evening tabs are gone from every surface: all of a day's
+	// times show in one list (Calendly-style). One surface bringing them back would put
+	// the three out of step again.
+	for _, gone := range []string{"time-periods", "data-period", "time_morning", "slotPeriod"} {
+		for name, src := range surfaces {
+			if strings.Contains(src, gone) {
+				t.Errorf("%q found in %s — the time-of-day tabs were removed from all three "+
+					"booking surfaces; show every time of the day in the single slot list", gone, name)
 			}
 		}
 	}

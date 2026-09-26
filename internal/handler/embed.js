@@ -338,8 +338,10 @@
   var SVG_CLOCK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
   var SVG_PIN = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
   var SVG_CARD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>';
-  var SVG_PREV = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
-  var SVG_NEXT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+  var SVG_PREV = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>';
+  var SVG_NEXT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>';
+  // The "pick a day" tap icon - the same SVG book.html and manage.html render.
+  var SVG_TAP = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>';
   var SVG_BACK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
   var SVG_CHECK = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
   var SVG_X = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
@@ -424,6 +426,12 @@
       '.cal-col{border-right:none;border-bottom:1px solid #e5e7eb;}' +
       '.cal-grid{grid-template-columns:repeat(7,1fr);width:100%;}' +
       '.ch,.cd{width:100%;}' +
+      // Same as the pages' phone layer: the month card spans the pane, bigger day
+      // targets, and the "pick a day" prompt under the card (the right pane is hidden
+      // on the calendar step).
+      '.cal-card{width:100%;}' +
+      '.cd{height:46px;font-size:1rem;}' +
+      '.cal-tip{display:flex;}' +
     '}' +
     // Step-flow: when narrow, show one step at a time. Calendar step keeps the info
     // banner (so you see what you are booking); the slot/form/confirm step shows just
@@ -724,7 +732,10 @@
     calPane() {
       var self = this, st = this.state, first = st.month;
       var grid = el('div', { class: 'cal-grid' });
-      this.dow.forEach(function (d) { grid.appendChild(el('div', { class: 'ch', text: d })); });
+      // The weekday row lives in the card's header band, not in the day grid (same
+      // markup as calendarGrid in _shared.html; styled by booking.css .cal-card).
+      var dowRow = el('div', { class: 'cal-dow' });
+      this.dow.forEach(function (d) { dowRow.appendChild(el('div', { class: 'ch', text: d })); });
       for (var i = 0; i < mondayIndex(first); i++) grid.appendChild(el('div', { class: 'cd', text: '' }));
       var days = endOfMonth(first).getDate(), todayKey = ymd(new Date());
       for (var d = 1; d <= days; d++) {
@@ -736,16 +747,32 @@
         else btn.addEventListener('click', (function (k) { return function () { self.state.day = k; self.state.view = 'pick'; self.render(); }; })(key));
         grid.appendChild(btn);
       }
-      var prev = el('button', { 'aria-label': t(this.i18n, 'prev_month_aria'), html: SVG_PREV });
+      var prev = el('button', { type: 'button', 'aria-label': t(this.i18n, 'prev_month_aria'), html: SVG_PREV });
       prev.disabled = !(startOfMonth(first) > startOfMonth(new Date()));
       prev.addEventListener('click', function () { self.nav(-1); });
-      var next = el('button', { 'aria-label': t(this.i18n, 'next_month_aria'), html: SVG_NEXT });
+      var next = el('button', { type: 'button', 'aria-label': t(this.i18n, 'next_month_aria'), html: SVG_NEXT });
       next.addEventListener('click', function () { self.nav(1); });
-      var nav = el('div', { class: 'cal-nav' }, [
-        el('span', { class: 'month-label', text: first.toLocaleDateString(this.locale, { month: 'long', year: 'numeric' }) }),
-        prev, next,
+      // Month in bold, year in regular weight (booking.css .ml-month / .ml-year).
+      var monthLabel = el('span', { class: 'month-label' }, [
+        el('span', { class: 'ml-month', text: first.toLocaleDateString(this.locale || [], { month: 'long' }) }),
+        document.createTextNode(' '),
+        el('span', { class: 'ml-year', text: first.toLocaleDateString(this.locale || [], { year: 'numeric' }) }),
       ]);
-      return el('section', { class: 'cal-col' }, [nav, grid, el('p', { class: 'tz-label', text: t(this.i18n, 'times_shown_in') + TZ })]);
+      var nav = el('div', { class: 'cal-nav' }, [monthLabel, prev, next]);
+      var card = el('div', { class: 'cal-card' }, [el('div', { class: 'cal-band' }, [nav, dowRow]), grid]);
+      var kids = [card, el('p', { class: 'tz-label', text: t(this.i18n, 'times_shown_in') + TZ })];
+      // The "pick a day" prompt under the card, shown only in the narrow step-flow
+      // (STYLE turns .cal-tip on there), where the right pane is hidden.
+      if (!st.day) kids.push(this.emptyState('empty-state cal-tip'));
+      return el('section', { class: 'cal-col' }, kids);
+    }
+
+    // emptyState — the "pick a day" state: tap icon over the hint (booking.css .empty-state).
+    emptyState(cls) {
+      return el('p', { class: cls }, [
+        el('span', { class: 'empty-icon', html: SVG_TAP }),
+        el('span', { text: t(this.i18n, 'select_day_hint') }),
+      ]);
     }
 
     // noticeHint — the minimum-notice explanation, or '' when the event type sets none.
@@ -781,42 +808,26 @@
       else if (st.view === 'confirm') inner = this.confirmView(st.slot);
       else if (st.day) {
         var list = (st.slotsByDay[st.day] || []).slice().sort(function (a, b) { return a.start < b.start ? -1 : 1; });
+        // Every time of the day in one vertical list (Calendly-style), no
+        // morning/afternoon/evening tabs. One tap on a time opens the form.
         var listEl = el('div', { class: 'slots-list' });
-        var periodFor = function (slot) {
-          var hour = Number(new Intl.DateTimeFormat('en-GB', {timeZone: TZ, hour: 'numeric', hourCycle: 'h23'}).format(new Date(slot.start)));
-          return hour < 12 ? 0 : hour < 17 ? 1 : 2;
-        };
-        var periods = Array.from(new Set(list.map(periodFor))).sort();
-        if (periods.indexOf(st.period) === -1) st.period = periods[0];
-        var choices = el('div', { class: 'time-periods', role: 'group', 'aria-label': t(this.i18n, 'time_period') });
-        periods.forEach(function (period) {
-          var button = el('button', { type: 'button', 'data-period': String(period), 'aria-pressed': String(period === st.period), text: t(self.i18n, ['time_morning', 'time_afternoon', 'time_evening'][period]) });
-          button.addEventListener('click', function () {
-            st.period = period;
-            self.render();
-            self.shadowRoot.querySelector('[data-period="' + period + '"]').focus();
-          });
-          choices.appendChild(button);
-        });
-        var grid = el('div', { class: 'time-grid' });
-        if (list.length) listEl.appendChild(choices);
-        listEl.appendChild(grid);
-        list.filter(function (s) { return periodFor(s) === st.period; }).forEach(function (s) {
+        list.forEach(function (s) {
           if (s.taken) {
             // Disabled rather than click-guarded: it keeps the same box as a bookable
             // slot and is announced as unavailable instead of read out as a plain time.
             var d = el('button', {
+              type: 'button',
               class: 'slot-btn taken',
               text: timeLabel(s.start, self.locale),
               'aria-label': timeLabel(s.start, self.locale) + ' - ' + t(self.i18n, 'slot_taken'),
             });
             d.disabled = true;
-            grid.appendChild(d);
+            listEl.appendChild(d);
             return;
           }
-          var b = el('button', { class: 'slot-btn', text: timeLabel(s.start, self.locale) });
+          var b = el('button', { type: 'button', class: 'slot-btn', text: timeLabel(s.start, self.locale) });
           b.addEventListener('click', function () { self.state.slot = s; self.state.view = 'form'; self.render(); });
-          grid.appendChild(b);
+          listEl.appendChild(b);
         });
         if (!list.length) {
           // Name the day, and the host when there is one: a bare "No available times."
@@ -837,12 +848,15 @@
         if (st.degraded) {
           listEl.appendChild(el('p', { class: 'hint notice-hint', text: t(self.i18n, 'calendar_degraded_notice') }));
         }
-        inner = el('div', {}, [el('p', { class: 'slots-header', text: list[0] ? shortDay(list[0].start, self.locale) : this.dayHeader(st.day) }), listEl]);
+        // The chosen day as the heading, the duration under it, then the times.
+        var duration = el('p', { class: 'slots-duration', html: SVG_CLOCK });
+        duration.appendChild(el('span', { text: this.info.duration_label || (this.info.duration_minutes + ' min') }));
+        inner = el('div', {}, [el('p', { class: 'slots-header', text: list[0] ? shortDay(list[0].start, self.locale) : this.dayHeader(st.day) }), duration, listEl]);
       } else {
         // Before a day is chosen. The notice line belongs here as well as in the list: a
         // day the policy emptied completely is greyed out in the calendar, so this is the
         // only place the explanation can be reached.
-        var kids = [el('p', { class: 'hint', text: t(this.i18n, 'select_day_hint') })];
+        var kids = [this.emptyState('empty-state')];
         if (notice && st.noticeDates && st.noticeDates.length) {
           kids.push(el('p', { class: 'hint notice-hint', text: notice }));
         }
