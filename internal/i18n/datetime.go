@@ -46,11 +46,11 @@ func (l *Locale) FormatDate(t time.Time) string {
 // what Intl.DateTimeFormat already renders client-side for these locales on book.html/
 // manage.html/embed.js, so server-rendered emails agree with the page instead of defaulting
 // to a hardcoded 12-hour clock regardless of locale.
+//
+// Fork: the fork's 12-hour override (fork_clock.go, on by default) wins over clock_format,
+// so Spanish renders "9:00 p. m." here and on the pages alike.
 func (l *Locale) FormatTimeOfDay(t time.Time) string {
-	if l.T("clock_format") == "24h" {
-		return t.Format("15:04")
-	}
-	return t.Format("3:04 PM")
+	return l.formatClock(t, l.Uses12h())
 }
 
 // FormatDateTime combines FormatDate and FormatTimeOfDay — e.g. "Mon 22 Jun 2026, 9:00 AM".

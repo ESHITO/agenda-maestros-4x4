@@ -139,9 +139,9 @@ type WhatsAppValues struct {
 	Mentor   string // {mentor}: who attends (the booking's primary host)
 	Tipo     string // {tipo}: the event type's name
 	Tema     string // {tema}: answer to the event type's FIRST 'text' question
-	Fecha    string // {fecha}: start_local_long, "martes 30 de septiembre de 2026, 10:00"
+	Fecha    string // {fecha}: start_local_long, "martes 30 de septiembre de 2026, 10:00 a. m."
 	Dia      string // {dia}: "martes 30 de septiembre"
-	Hora     string // {hora}: "10:00"
+	Hora     string // {hora}: "10:00 a. m." (12-hour clock, internal/i18n/fork_clock.go)
 	Enlace   string // {enlace}: location_value, the ATTENDEE's join link (a /e short link in a delivery)
 	Cancelar string // {cancelar}: manage_url, the cancel/reschedule link (a /c short link in a delivery)
 	Motivo   string // {motivo}: the cancellation reason (cancelled only)
@@ -186,7 +186,10 @@ var markerRE = regexp.MustCompile(`\{\s*([\p{L}_]+)\s*\}`)
 //   - an unknown marker ("{precio}") is left exactly as written;
 //   - WhatsApp formatting (*negrita*, _cursiva_, ~tachado~) and emojis are plain text
 //     here and pass through untouched. Values are inserted once and never re-scanned, so
-//     a client who types "{cancelar}" as their name cannot pull a link into the text.
+//     a client who types "{cancelar}" as their name cannot pull a link into the text;
+//   - a value that already ends in "." eats ONE period written right after its marker: the
+//     12-hour {hora} is "10:00 a. m." (internal/i18n/fork_clock.go), and "a las {hora}."
+//     must read "a las 10:00 a. m.", not "a. m..".
 //
 // Blank lines left behind by a dropped line are collapsed, and the text is trimmed.
 func RenderWhatsApp(tmpl string, v WhatsAppValues) string {
@@ -195,20 +198,28 @@ func RenderWhatsApp(tmpl string, v WhatsAppValues) string {
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		drop := false
-		rendered := markerRE.ReplaceAllStringFunc(line, func(m string) string {
-			sub := markerRE.FindStringSubmatch(m)
-			val, known := v.lookup(strings.ToLower(sub[1]))
+		var b strings.Builder
+		last := 0
+		for _, m := range markerRE.FindAllStringSubmatchIndex(line, -1) {
+			b.WriteString(line[last:m[0]])
+			last = m[1]
+			val, known := v.lookup(strings.ToLower(line[m[2]:m[3]]))
 			if !known {
-				return m
+				b.WriteString(line[m[0]:m[1]])
+				continue
 			}
 			val = strings.Join(strings.Fields(val), " ")
 			if val == "" {
 				drop = true
 			}
-			return val
-		})
+			if strings.HasSuffix(val, ".") && strings.HasPrefix(line[last:], ".") {
+				last++ // "{hora}." with "10:00 a. m." → one period, not two
+			}
+			b.WriteString(val)
+		}
+		b.WriteString(line[last:])
 		if !drop {
-			out = append(out, rendered)
+			out = append(out, b.String())
 		}
 	}
 	// Collapse runs of blank lines and trim blank lines at both ends.

@@ -92,7 +92,8 @@ var (
 )
 
 // longDateTime is start_local_long: an unambiguous date for a WhatsApp message, e.g.
-// "martes 9 de marzo de 2027, 09:00" in Spanish (this fork's audience - FORCE_LOCALE=es).
+// "martes 9 de marzo de 2027, 9:00 a. m." in Spanish (this fork's audience - FORCE_LOCALE=es;
+// the 12-hour clock is the fork's override, internal/i18n/fork_clock.go).
 // Other locales have no long-name table and get start_local's text.
 func longDateTime(loc *i18n.Locale, t time.Time) string {
 	if loc == nil || (loc.Code != "es" && !strings.HasPrefix(loc.Code, "es-")) {

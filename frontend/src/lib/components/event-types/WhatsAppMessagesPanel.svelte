@@ -31,9 +31,9 @@
 		{ key: '{mentor}', help: 'Quién atiende la sesión' },
 		{ key: '{tipo}', help: 'Nombre de este tipo de atención' },
 		{ key: '{tema}', help: 'Lo que el cliente respondió en la primera pregunta de texto (por ejemplo «¿Qué te gustaría hablar en esta sesión?»)' },
-		{ key: '{fecha}', help: 'Fecha y hora completas, en la hora del cliente: «martes 30 de septiembre de 2026, 10:00»' },
+		{ key: '{fecha}', help: 'Fecha y hora completas, en la hora del cliente: «martes 30 de septiembre de 2026, 10:00 a. m.»' },
 		{ key: '{dia}', help: 'Día en palabras, en la hora del cliente: «martes 30 de septiembre»' },
-		{ key: '{hora}', help: 'Solo la hora, en la hora del cliente: «10:00»' },
+		{ key: '{hora}', help: 'Solo la hora, en la hora del cliente: «10:00 a. m.»' },
 		{ key: '{enlace}', help: 'Enlace para que el cliente entre a la sesión' },
 		{ key: '{cancelar}', help: 'Enlace para que el cliente cancele o cambie la fecha' },
 		{ key: '{motivo}', help: 'Motivo de la cancelación (solo en «Cancelación»)' }
@@ -231,7 +231,7 @@
 			{#if preview}
 				<div class="space-y-3 rounded-md border bg-muted/30 p-3 sm:p-4">
 					<p class="text-xs text-muted-foreground">
-						Ejemplo con datos ficticios: cliente «María Pérez», sesión mañana a las 10:00
+						Ejemplo con datos ficticios: cliente «María Pérez», sesión mañana a las 10:00 a. m.
 						(hora de {preview.timezone.replaceAll('_', ' ')}), atendida por ti. Así lo recibiría el cliente.
 						{#if !preview.has_text_question}
 							Este tipo de atención no tiene preguntas de texto, así que <code class="font-mono">{'{tema}'}</code> siempre queda vacío y su línea no se envía.

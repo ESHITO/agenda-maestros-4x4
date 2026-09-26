@@ -221,10 +221,10 @@ func TestJobWebhookReminder_enqueuesDelivery(t *testing.T) {
 	if data["id"] != id || data["attendee_phone"] != "+51987654321" || data["attendee_whatsapp"] != "51987654321" {
 		t.Errorf("data = %v", data)
 	}
-	if data["start_local_time"] != "10:00" { // Lima wall clock, 24 h Spanish clock
-		t.Errorf("start_local_time = %v; want 10:00 (attendee's zone)", data["start_local_time"])
+	if data["start_local_time"] != "10:00 a. m." { // Lima wall clock, the fork's 12 h clock
+		t.Errorf("start_local_time = %v; want 10:00 a. m. (attendee's zone)", data["start_local_time"])
 	}
-	if s, _ := data["start_local"].(string); !strings.HasSuffix(s, ", 10:00") {
+	if s, _ := data["start_local"].(string); !strings.HasSuffix(s, ", 10:00 a. m.") {
 		t.Errorf("start_local = %v", data["start_local"])
 	}
 	// manage_url is a working /manage link for THIS booking (a fresh, additive token).

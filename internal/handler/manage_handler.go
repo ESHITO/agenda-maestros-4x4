@@ -83,6 +83,10 @@ type managePageData struct {
 	I18NJSON template.JS
 	// LocaleForced (FORCE_LOCALE) hides the language switcher in the shared footer.
 	LocaleForced bool
+	// Hour12 (fork) is loc.Uses12h(): the page renders slot and booking times on the
+	// 12-hour clock ("5:00 p. m.") when true. Decided server-side, once, in
+	// internal/i18n/fork_clock.go, so the page and the emails can't disagree.
+	Hour12 bool
 	// Rebookable (fork): the event type is still active and public, so /book/{slug} opens
 	// (BookPage 404s otherwise). Gates the "choose another date" links after a cancellation.
 	Rebookable bool
@@ -201,6 +205,7 @@ func (h *Handler) renderManage(w http.ResponseWriter, r *http.Request, data mana
 	data.DemoMode = h.demoMode
 	data.Locale = loc.Code
 	data.LocaleForced = h.localeForced()
+	data.Hour12 = loc.Uses12h()
 	data.T = loc.T
 	i18nJSON, _ := loc.JSON()
 	data.I18NJSON = template.JS(i18nJSON) // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block

@@ -158,9 +158,9 @@ func TestEnqueue_forkFieldsFromDatabase(t *testing.T) {
 	for k, want := range map[string]string{
 		"attendee_phone":    "+51987654321",
 		"attendee_whatsapp": "51987654321",
-		"start_local":       "vie 25 sept 2026, 09:00", // Lima (UTC-5), not Madrid (16:00)
+		"start_local":       "vie 25 sept 2026, 9:00 a. m.", // Lima (UTC-5), not Madrid (16:00)
 		"start_local_date":  "vie 25 sept 2026",
-		"start_local_time":  "09:00",
+		"start_local_time":  "9:00 a. m.",
 		"manage_url":        "https://citas.example.com/manage/abc",
 	} {
 		if env.Data[k] != want {

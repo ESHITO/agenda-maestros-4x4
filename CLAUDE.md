@@ -154,6 +154,21 @@ globs the directory; the switcher, the fallback dropdown and the public API payl
 - Three guards police a new file: same-keys, printf-verb parity (uses `fmt` as the oracle),
   and `TestDateTablesMatchCLDR`, which cross-checks the date tables against `Intl` via node.
   Run `go test ./internal/i18n/`.
+- **Fork: every time a client sees is on the 12-hour clock** - "9:00 a. m.", "5:00 p. m.",
+  "12:30 p. m." (owner: "DEBE DECIR AM Y PM"), although CLDR and so `es.json`'s
+  `clock_format` say Spanish is 24h. **Do not edit `clock_format`** (the CLDR test polices it);
+  the override is `internal/i18n/fork_clock.go`, ON by default (no Railway variable),
+  `CLOCK_12H=false` turns it off (`config.DisableClock12h`, applied in `server.New`). ONE
+  switch: `Locale.Uses12h()` feeds `FormatTimeOfDay` (emails, `start_local*`, WhatsApp
+  `{hora}`/`{fecha}`, the assistant's slot `label`) and is handed to the browser as
+  `Hour12` → `HOUR12` (book.html, manage.html → `BookingLogic.formatTime(iso, tz, locale,
+  hour12)`) and as `hour12` in the `/public` payload (embed.js's `timeLabel` mirror). The
+  browser gets it as `hourCycle: 'h12'`, never Intl's `hour12` option (which may print
+  "0:30 a. m."). AM/PM markers per language: `dayPeriods` in `fork_clock.go`, cross-checked
+  against `Intl` by `TestClock12hMatchesCLDR`. A page time that bypasses `fmtTime` /
+  `timeLabel` (e.g. a bare `toLocaleTimeString`) silently goes back to 24h. `RenderWhatsApp`
+  eats one "." written right after a marker whose value ends in "." ("a las {hora}." →
+  "a las 5:00 p. m.", not "p. m.."). The admin SPA is untouched (it follows each profile).
 - Tests use `ja`/`ko` to mean "a language we don't ship". If you add either,
   `assertUnsupported`/`requireUnsupported` fail loudly and tell you what to change.
 - **Every non-English locale is an LLM draft with no native review.** Structure is verified;
@@ -267,7 +282,7 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   stranger), `attendee_whatsapp` (digits only, wa.me), `start_local` / `start_local_date` /
   `start_local_time` (attendee zone - a stored `UTC` counts as unknown and falls back to the
   host's - in `FORCE_LOCALE`, else the booker's locale, else `es`), `start_local_long`
-  ("martes 9 de marzo de 2027, 09:00": the short Spanish forms make "mar" both martes and
+  ("martes 9 de marzo de 2027, 9:00 a. m.": the short Spanish forms make "mar" both martes and
   marzo; long names are a Spanish table in `fork_fields.go`, other locales get start_local's
   text), `start_local_timezone` (the zone those texts are really in - `attendee_timezone`
   stays the raw stored value and can say `UTC`), `manage_url` (`/manage/{token}`; the

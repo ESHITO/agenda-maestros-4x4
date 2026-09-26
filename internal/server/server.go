@@ -15,6 +15,7 @@ import (
 	"github.com/calnode/calnode/internal/demo"
 	"github.com/calnode/calnode/internal/gcal"
 	"github.com/calnode/calnode/internal/handler"
+	"github.com/calnode/calnode/internal/i18n"
 	"github.com/calnode/calnode/internal/livekit"
 	"github.com/calnode/calnode/internal/llm"
 	"github.com/calnode/calnode/internal/mailer"
@@ -49,6 +50,13 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 		} else {
 			logger.Warn("FORCE_LOCALE ignored: not a supported locale", "locale", cfg.ForceLocale)
 		}
+	}
+	// Fork: every client-facing time is on the 12-hour clock ("5:00 p. m.") unless
+	// CLOCK_12H=false. The override is on by default in internal/i18n (fork_clock.go), so a
+	// Config literal (tests) leaves it on; only an explicit opt-out turns it off.
+	if cfg.DisableClock12h {
+		i18n.SetClock12h(false)
+		logger.Info("client-facing times follow each locale's own clock (CLOCK_12H=false)")
 	}
 	// Fork: REMINDER_MORNING_HOUR for the booking.reminder_morning webhook. Validate has
 	// already refused a malformed value; an empty one (Config literals in tests) keeps 08:00.

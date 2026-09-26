@@ -68,10 +68,18 @@
 
 
   // formatTime — "1:30 PM" in the selected tz.
-  function formatTime(iso, tz, locale) {
-    return new Intl.DateTimeFormat(locale || [], {
-      timeZone: tz, hour: 'numeric', minute: '2-digit'
-    }).format(new Date(iso));
+  //
+  // hour12 is the server's clock choice (the page's HOUR12, from Locale.Uses12h in
+  // internal/i18n/fork_clock.go — this fork turns the 12-hour clock on for every client):
+  // true → "5:00 p. m." in Spanish, false → "17:00", omitted → the locale's own default.
+  // It is passed as hourCycle, not as Intl's hour12 option: hour12:true may pick h11 for
+  // a 24h locale on some engines, which would print midnight as "0:30 a. m.";
+  // h12 always gives "12:30 a. m.", the same as the Go side (time.Format "3:04").
+  // embed.js mirrors this in its own timeLabel; keep the two in step.
+  function formatTime(iso, tz, locale, hour12) {
+    var opts = { timeZone: tz, hour: 'numeric', minute: '2-digit' };
+    if (typeof hour12 === 'boolean') opts.hourCycle = hour12 ? 'h12' : 'h23';
+    return new Intl.DateTimeFormat(locale || [], opts).format(new Date(iso));
   }
 
   // formatDay — a date label in the selected tz. style 'short' → "Mon, Jan 15"; 'long' →

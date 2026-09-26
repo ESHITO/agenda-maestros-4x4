@@ -325,6 +325,9 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   const SOLE_HOST        = {{.SoleHostName}};
   const MIN_NOTICE_LABEL = {{.MinNoticeLabel}};
   const LOCALE      = "{{.Locale}}";
+  // HOUR12 (fork): the server's clock choice (Locale.Uses12h, internal/i18n/fork_clock.go),
+  // so every time on this page reads "5:00 p. m." exactly like the emails and WhatsApp.
+  const HOUR12      = {{.Hour12}};
   const I18N        = window.__CALNODE_I18N || {};
   function t(key) { return I18N[key] || key; } // key itself as a last-resort fallback, matching Locale.T server-side
 
@@ -347,14 +350,14 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
 
   // LOCALE (resolved server-side), not [] (the browser's own) — see the matching
   // comment in book.html / internal-docs/i18n-plan.md.
-  function fmtTime(iso) { return BookingLogic.formatTime(iso, TZ, LOCALE); }
+  function fmtTime(iso) { return BookingLogic.formatTime(iso, TZ, LOCALE, HOUR12); }
   function fmtDate(d) {
     return d.toLocaleDateString(LOCALE, { weekday: 'long', month: 'long', day: 'numeric' });
   }
   function fmtDatetime(iso) {
     const d = new Date(iso);
     return d.toLocaleDateString(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: TZ }) +
-           ' · ' + d.toLocaleTimeString(LOCALE, { hour: 'numeric', minute: '2-digit', timeZone: TZ });
+           ' · ' + fmtTime(iso);
   }
   function toDateStr(y, m, d) { return `${y}-${pad(m+1)}-${pad(d)}`; }
 

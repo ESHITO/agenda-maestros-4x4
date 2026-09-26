@@ -363,7 +363,17 @@
   function dayKey(iso) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso)); }
   // locale is the resolved server-side locale (this.locale), not the browser's own
   // ([]) — see the matching fix/comment in book.html / internal-docs/i18n-plan.md.
-  function timeLabel(iso, locale) { return new Intl.DateTimeFormat(locale || [], { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(new Date(iso)); }
+  //
+  // hour12 is the server's clock choice (the /public payload's "hour12", Locale.Uses12h in
+  // internal/i18n/fork_clock.go; this fork: true → "5:00 p. m."). A DELIBERATE MIRROR of
+  // BookingLogic.formatTime (booking-logic.js), which this file does not load: same
+  // hourCycle h12/h23 mapping (never Intl's hour12 option, which can give "0:30 a. m."),
+  // same "omitted → locale default". Change one, change the other.
+  function timeLabel(iso, locale, hour12) {
+    var opts = { timeZone: TZ, hour: 'numeric', minute: '2-digit' };
+    if (typeof hour12 === 'boolean') opts.hourCycle = hour12 ? 'h12' : 'h23';
+    return new Intl.DateTimeFormat(locale || [], opts).format(new Date(iso));
+  }
   function shortDay(iso, locale) { return new Intl.DateTimeFormat(locale || [], { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(iso)); }
   function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -506,6 +516,8 @@
         this.style.setProperty('--booking-accent-text', this.info.booking_accent_foreground || '#ffffff');
         this.locale = this.info.locale || '';
         this.i18n = this.info.i18n || {};
+        // Fork: the server's 12h/24h choice for every time the widget shows (see timeLabel).
+        this.hour12 = typeof this.info.hour12 === 'boolean' ? this.info.hour12 : undefined;
         this.dow = dowLabels(this.locale);
         this.setAttribute('lang', this.locale || 'en'); // accessibility: announce the resolved language
         this.questions = (r[1] && r[1].items) || [];
@@ -818,14 +830,14 @@
             var d = el('button', {
               type: 'button',
               class: 'slot-btn taken',
-              text: timeLabel(s.start, self.locale),
-              'aria-label': timeLabel(s.start, self.locale) + ' - ' + t(self.i18n, 'slot_taken'),
+              text: timeLabel(s.start, self.locale, self.hour12),
+              'aria-label': timeLabel(s.start, self.locale, self.hour12) + ' - ' + t(self.i18n, 'slot_taken'),
             });
             d.disabled = true;
             listEl.appendChild(d);
             return;
           }
-          var b = el('button', { type: 'button', class: 'slot-btn', text: timeLabel(s.start, self.locale) });
+          var b = el('button', { type: 'button', class: 'slot-btn', text: timeLabel(s.start, self.locale, self.hour12) });
           b.addEventListener('click', function () { self.state.slot = s; self.state.view = 'form'; self.render(); });
           listEl.appendChild(b);
         });
@@ -1269,7 +1281,7 @@
           cta.disabled = false; cta.textContent = t(self.i18n, 'confirm_booking');
         });
       });
-      return el('div', {}, [back, el('p', { class: 'slot-label', text: shortDay(slot.start, this.locale) + ' · ' + timeLabel(slot.start, this.locale) }), form]);
+      return el('div', {}, [back, el('p', { class: 'slot-label', text: shortDay(slot.start, this.locale) + ' · ' + timeLabel(slot.start, this.locale, this.hour12) }), form]);
     }
 
     confirmView(slot) {
@@ -1277,7 +1289,7 @@
         el('div', { class: 'confirm-icon', html: SVG_CHECK }),
         el('div', { class: 'confirm-view' }, [
           el('h3', { text: t(this.i18n, 'booking_confirmed') }),
-          el('p', { class: 'when', text: shortDay(slot.start, this.locale) + ' · ' + timeLabel(slot.start, this.locale) }),
+          el('p', { class: 'when', text: shortDay(slot.start, this.locale) + ' · ' + timeLabel(slot.start, this.locale, this.hour12) }),
           el('p', { class: 'sub', text: t(this.i18n, 'confirmation_email_sent') }),
         ]),
       ]);

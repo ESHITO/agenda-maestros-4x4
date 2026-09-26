@@ -105,7 +105,7 @@ func TestWhatsAppMessagesAPI_preview(t *testing.T) {
 
 	p := mustJSON(t, slugCall(h, h.PreviewWhatsAppMessages, http.MethodPost, path, slug, body, key), http.StatusOK, "preview")
 	created, _ := p["created"].(string)
-	if !strings.HasPrefix(created, "Hola María Pérez, tu Test Meeting con Test Host es el ") || !strings.Contains(created, " a las 10:00.") {
+	if !strings.HasPrefix(created, "Hola María Pérez, tu Test Meeting con Test Host es el ") || !strings.Contains(created, " a las 10:00 a. m.\n") { // 12 h clock, and "{hora}." not "a. m.."
 		t.Errorf("preview created = %q", created)
 	}
 	if strings.Contains(created, "Tema:") {

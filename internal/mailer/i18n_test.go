@@ -38,9 +38,14 @@ func TestSendConfirmation_attendeeLocaleTranslatesButHostStaysEnglish(t *testing
 	if !strings.Contains(org.HTML, `lang="es"`) {
 		t.Errorf("organizer HTML missing lang=es: %q", org.HTML)
 	}
-	// 2026-06-15 09:00 UTC is a Monday — Spanish clock_format is 24h, so no "AM"/"PM".
+	// 2026-06-15 09:00 UTC is a Monday. Fork: the 12-hour override (internal/i18n/
+	// fork_clock.go) puts it as "lun 15 jun 2026, 9:00 a. m." - the Spanish suffix, never
+	// the English "AM"/"PM".
+	if !strings.Contains(org.Text, "lun 15 jun 2026, 9:00 a. m.") || !strings.Contains(org.Text, "9:30 a. m.") {
+		t.Errorf("organizer body should use the 12h clock with a. m. in Spanish: %q", org.Text)
+	}
 	if strings.Contains(org.Text, "AM") || strings.Contains(org.Text, "PM") {
-		t.Errorf("organizer body should use a 24h clock in Spanish: %q", org.Text)
+		t.Errorf("organizer body should use the Spanish a. m./p. m., not AM/PM: %q", org.Text)
 	}
 	if !strings.Contains(org.Text, "lun 15 jun 2026") {
 		t.Errorf("organizer body missing Spanish weekday/month names: %q", org.Text)

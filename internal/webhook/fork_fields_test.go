@@ -68,7 +68,7 @@ func TestEnrichForkFields_phoneAndLocalStart(t *testing.T) {
 	s.enrichForkFields(&bd, forkInputs{
 		// The first USABLE phone answer wins; an empty optional one is skipped.
 		phoneAnswers:   []string{"", "+51 987-654-321", "+34 600 000 000"},
-		attendeeTZ:     "America/Lima", // UTC-5: 14:00Z is 09:00 there
+		attendeeTZ:     "America/Lima", // UTC-5: 14:00Z is 9:00 a. m. there
 		hostTZ:         "Europe/Madrid",
 		attendeeLocale: "es",
 	})
@@ -76,13 +76,13 @@ func TestEnrichForkFields_phoneAndLocalStart(t *testing.T) {
 		t.Errorf("phone = (%q, %q)", bd.attendeePhone, bd.attendeeWhatsApp)
 	}
 	// Spanish CLDR abbreviates September as "sept".
-	if bd.startLocal != "vie 25 sept 2026, 09:00" {
+	if bd.startLocal != "vie 25 sept 2026, 9:00 a. m." {
 		t.Errorf("start_local = %q; want the attendee's (Lima) wall clock, not the host's", bd.startLocal)
 	}
-	if bd.startLocalDate != "vie 25 sept 2026" || bd.startLocalTime != "09:00" {
+	if bd.startLocalDate != "vie 25 sept 2026" || bd.startLocalTime != "9:00 a. m." {
 		t.Errorf("start_local_date/time = %q / %q", bd.startLocalDate, bd.startLocalTime)
 	}
-	if bd.startLocalLong != "viernes 25 de septiembre de 2026, 09:00" {
+	if bd.startLocalLong != "viernes 25 de septiembre de 2026, 9:00 a. m." {
 		t.Errorf("start_local_long = %q", bd.startLocalLong)
 	}
 	if bd.startLocalTZ != "America/Lima" {
@@ -116,10 +116,14 @@ func TestEnrichForkFields_skipsNumbersWithoutCountryCode(t *testing.T) {
 func TestLongDateTime(t *testing.T) {
 	es, en := i18n.Get("es"), i18n.Get("en")
 	wed := time.Date(2027, 3, 10, 9, 0, 0, 0, time.UTC)
-	if got := longDateTime(es, wed); got != "miércoles 10 de marzo de 2027, 09:00" {
+	if got := longDateTime(es, wed); got != "miércoles 10 de marzo de 2027, 9:00 a. m." {
 		t.Errorf("es = %q", got)
 	}
-	if got := longDateTime(es, time.Date(2027, 3, 9, 18, 5, 0, 0, time.UTC)); got != "martes 9 de marzo de 2027, 18:05" {
+	if got := longDateTime(es, time.Date(2027, 3, 9, 18, 5, 0, 0, time.UTC)); got != "martes 9 de marzo de 2027, 6:05 p. m." {
+		t.Errorf("es = %q", got)
+	}
+	// The owner's own example: the 12-hour clock with "p. m.", no leading zero.
+	if got := longDateTime(es, time.Date(2026, 9, 25, 17, 0, 0, 0, time.UTC)); got != "viernes 25 de septiembre de 2026, 5:00 p. m." {
 		t.Errorf("es = %q", got)
 	}
 	// No long table for other locales: start_local's text.
@@ -142,7 +146,7 @@ func TestEnrichForkFields_fallbacks(t *testing.T) {
 	if bd.attendeePhone != "+573001234567" || bd.attendeeWhatsApp != "573001234567" {
 		t.Errorf("phone fallback = (%q, %q)", bd.attendeePhone, bd.attendeeWhatsApp)
 	}
-	if bd.startLocal != "vie 25 sept 2026, 09:00" {
+	if bd.startLocal != "vie 25 sept 2026, 9:00 a. m." {
 		t.Errorf("start_local = %q; want host zone + Spanish", bd.startLocal)
 	}
 	// attendee_timezone still says the stored "UTC"; this says what start_local used.
@@ -160,7 +164,7 @@ func TestEnrichForkFields_fallbacks(t *testing.T) {
 	if bd.attendeePhone != "" || bd.attendeeWhatsApp != "" {
 		t.Errorf("phone should be empty, got (%q, %q)", bd.attendeePhone, bd.attendeeWhatsApp)
 	}
-	if bd.startLocal != "vie 25 sept 2026, 14:00" {
+	if bd.startLocal != "vie 25 sept 2026, 2:00 p. m." {
 		t.Errorf("start_local = %q; want UTC + forced Spanish", bd.startLocal)
 	}
 	if s.SetForceLocale("ja") {
@@ -173,10 +177,10 @@ func TestBuildData_forkFields(t *testing.T) {
 		core:             BookingPayload{ID: "b1", ManageURL: "https://citas.example.com/manage/tok"},
 		attendeePhone:    "+51987654321",
 		attendeeWhatsApp: "51987654321",
-		startLocal:       "vie 25 sept 2026, 09:00",
+		startLocal:       "vie 25 sept 2026, 9:00 a. m.",
 		startLocalDate:   "vie 25 sept 2026",
-		startLocalTime:   "09:00",
-		startLocalLong:   "viernes 25 de septiembre de 2026, 09:00",
+		startLocalTime:   "9:00 a. m.",
+		startLocalLong:   "viernes 25 de septiembre de 2026, 9:00 a. m.",
 		startLocalTZ:     "America/Lima",
 	}
 	fork := []string{FieldAttendeePhone, FieldAttendeeWhatsApp, FieldStartLocal,
@@ -191,9 +195,9 @@ func TestBuildData_forkFields(t *testing.T) {
 	d := buildData(bd, fork)
 	want := map[string]string{
 		FieldAttendeePhone: "+51987654321", FieldAttendeeWhatsApp: "51987654321",
-		FieldStartLocal: "vie 25 sept 2026, 09:00", FieldStartLocalDate: "vie 25 sept 2026",
-		FieldStartLocalTime: "09:00", FieldManageURL: "https://citas.example.com/manage/tok",
-		FieldStartLocalLong: "viernes 25 de septiembre de 2026, 09:00", FieldStartLocalTZ: "America/Lima",
+		FieldStartLocal: "vie 25 sept 2026, 9:00 a. m.", FieldStartLocalDate: "vie 25 sept 2026",
+		FieldStartLocalTime: "9:00 a. m.", FieldManageURL: "https://citas.example.com/manage/tok",
+		FieldStartLocalLong: "viernes 25 de septiembre de 2026, 9:00 a. m.", FieldStartLocalTZ: "America/Lima",
 	}
 	for k, v := range want {
 		if d[k] != v {

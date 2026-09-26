@@ -119,7 +119,8 @@ func (d BookingData) BannerOpacityCSS() string {
 
 // WhenFmt renders the booking time as a single human line in the organizer's timezone and
 // resolved locale, e.g. "Mon 22 Jun 2026, 9:00 AM – 9:20 AM NZST" (English) or
-// "lun 22 jun 2026, 21:00 – 21:20 NZST" (Spanish, 24h clock).
+// "lun 22 jun 2026, 9:00 p. m. – 9:20 p. m. NZST" (Spanish: this fork's 12-hour override,
+// internal/i18n/fork_clock.go; with CLOCK_12H=false it is CLDR's 24h "21:00 – 21:20").
 func (d BookingData) WhenFmt() string {
 	tzLoc, err := time.LoadLocation(d.OrganizerTimezone)
 	if err != nil {

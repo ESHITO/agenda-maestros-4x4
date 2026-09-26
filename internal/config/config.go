@@ -59,6 +59,14 @@ type Config struct {
 	// on borrowed computers set to English. Unsupported codes are ignored at boot.
 	ForceLocale string
 
+	// DisableClock12h (fork, CLOCK_12H=false) returns client-facing times to each locale's
+	// own CLDR clock (Spanish "17:00"). Default (unset or true): every time a client sees -
+	// booking/manage pages, the embed widget, emails, the calendar invite, the webhook's
+	// start_local* fields and WhatsApp {hora}/{fecha} - is on the 12-hour clock with the
+	// language's AM/PM, "5:00 p. m." (owner's request). Inverted so a Config{} literal keeps
+	// the fork default. See internal/i18n/fork_clock.go.
+	DisableClock12h bool
+
 	// ReminderMorningHour (fork, REMINDER_MORNING_HOUR, "HH:MM", default "08:00") is when
 	// the booking.reminder_morning webhook fires: that clock time on the day of the
 	// meeting, in the ATTENDEE's zone. Validate refuses a malformed value.
@@ -154,6 +162,7 @@ func Load() *Config {
 		EmbedAllowedOrigins: splitCSV(getEnv("EMBED_ALLOWED_ORIGINS", "")),
 		DataDir:             getEnv("DATA_DIR", "data"),
 		ForceLocale:         strings.TrimSpace(getEnv("FORCE_LOCALE", "")),
+		DisableClock12h:     !getBool("CLOCK_12H", true),
 		ReminderMorningHour: strings.TrimSpace(getEnv("REMINDER_MORNING_HOUR", DefaultReminderMorningHour)),
 		TrustedProxyCIDRs:   splitCSV(getEnv("TRUSTED_PROXY_CIDRS", "")),
 

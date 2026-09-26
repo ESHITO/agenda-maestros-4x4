@@ -57,6 +57,26 @@ test('formatTime / formatDay respect tz', () => {
   assert.match(B.formatDay(iso, 'America/New_York', 'long', 'en-US'), /June 14/);
 });
 
+// The fork's 12-hour clock (hour12 from the server, Locale.Uses12h): Spanish reads
+// "5:00 p. m." like the emails and the admin panel. Browsers put a (narrow) no-break
+// space inside "p. m."; normalised here so the assertion is about the text.
+test('formatTime follows the server clock choice (hour12)', () => {
+  const sp = (s) => s.replace(/[\u00a0\u202f]/g, ' ');
+  const at = (hm) => '2026-09-25T' + hm + ':00Z';
+  assert.equal(sp(B.formatTime(at('17:00'), 'UTC', 'es', true)), '5:00 p. m.');
+  assert.equal(sp(B.formatTime(at('09:00'), 'UTC', 'es', true)), '9:00 a. m.');
+  assert.equal(sp(B.formatTime(at('12:30'), 'UTC', 'es', true)), '12:30 p. m.');
+  // Half past midnight is 12:30 a. m. (h12), never 0:30 a. m. (h11).
+  assert.equal(sp(B.formatTime(at('00:30'), 'UTC', 'es', true)), '12:30 a. m.');
+  assert.equal(sp(B.formatTime(at('09:05'), 'UTC', 'es', true)), '9:05 a. m.');
+  // Selected tz still decides the hour: 22:00 UTC is 5:00 p. m. in Lima (UTC-5).
+  assert.equal(sp(B.formatTime(at('22:00'), 'America/Lima', 'es', true)), '5:00 p. m.');
+  // Explicitly off → 24h; omitted → the locale's own default (Spanish CLDR is 24h).
+  assert.equal(B.formatTime(at('17:00'), 'UTC', 'es', false), '17:00');
+  assert.equal(B.formatTime(at('17:00'), 'UTC', 'es'), '17:00');
+  assert.equal(sp(B.formatTime(at('17:00'), 'UTC', 'en', true)), '5:00 PM');
+});
+
 test('mergeDaySlots interleaves taken slots in time order and tags them', () => {
   const free = [{ start: '2026-06-15T09:00:00Z' }, { start: '2026-06-15T11:00:00Z' }];
   const taken = [{ start: '2026-06-15T10:00:00Z' }];

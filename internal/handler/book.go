@@ -92,6 +92,10 @@ type bookPageData struct {
 	I18NJSON template.JS
 	// LocaleForced (FORCE_LOCALE) hides the language switcher in the shared footer.
 	LocaleForced bool
+	// Hour12 (fork) is loc.Uses12h(): the page renders slot and booking times on the
+	// 12-hour clock ("5:00 p. m.") when true. Decided server-side, once, in
+	// internal/i18n/fork_clock.go, so the page and the emails can't disagree.
+	Hour12 bool
 	// Tracking
 	HeadHTML         template.HTML // operator-configured <head> code injection (trusted)
 	GTMContainerID   string        // native GTM container (validated GTM-XXXX); "" = off
@@ -422,7 +426,10 @@ func (h *Handler) PublicEventType(w http.ResponseWriter, r *http.Request) {
 		"logo_url":           abs(brand.LogoURL),
 		"banner_url":         abs(brand.BannerURL),
 		"locale":             loc.Code,
-		"i18n":               json.RawMessage(i18nJSON),
+		// hour12 (fork): the widget's clock, the same server-side choice the booking page
+		// gets as Hour12 (internal/i18n/fork_clock.go).
+		"hour12": loc.Uses12h(),
+		"i18n":   json.RawMessage(i18nJSON),
 	})
 }
 
@@ -546,6 +553,7 @@ func (h *Handler) BookPage(w http.ResponseWriter, r *http.Request) {
 		PriceLabel:          formatPrice(priceCents, currency),
 		Locale:              loc.Code,
 		LocaleForced:        h.localeForced(),
+		Hour12:              loc.Uses12h(),
 		T:                   loc.T,
 		I18NJSON:            template.JS(i18nJSON), // #nosec G203 -- json.Marshal output, which escapes <,>,& by default; safe for embedding in a <script> block
 		PriceCents:          priceCents,

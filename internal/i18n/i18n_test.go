@@ -238,23 +238,60 @@ func TestFormatDate_patternIsDataDrivenPerLocale(t *testing.T) {
 func TestFormatDateTime(t *testing.T) {
 	// Monday 2026-06-22, 09:05 — a fixed reference so weekday/month names are unambiguous.
 	moment := time.Date(2026, time.June, 22, 9, 5, 0, 0, time.UTC)
+	afternoon := time.Date(2026, time.June, 22, 15, 30, 0, 0, time.UTC)
 
+	// Fork default: the 12-hour override (fork_clock.go) is on, so Spanish reads
+	// "9:05 a. m." like the admin panel does — the owner's "DEBE DECIR AM Y PM".
+	if !Clock12h() {
+		t.Fatal("the fork's 12-hour override must be on by default")
+	}
 	if got := Default().FormatDateTime(moment); got != "Mon 22 Jun 2026, 9:05 AM" {
 		t.Errorf("English FormatDateTime = %q", got)
 	}
-	if got := Get("es").FormatDateTime(moment); got != "lun 22 jun 2026, 09:05" {
-		t.Errorf("Spanish FormatDateTime = %q", got)
+	if got := Get("es").FormatDateTime(moment); got != "lun 22 jun 2026, 9:05 a. m." {
+		t.Errorf("Spanish FormatDateTime = %q, want the 12h clock with a. m.", got)
+	}
+	if got := Get("es").FormatTimeOfDay(afternoon); got != "3:30 p. m." {
+		t.Errorf("Spanish FormatTimeOfDay = %q, want 12h clock with p. m.", got)
 	}
 
-	// Hour cycle follows the locale's clock_format, not a hardcoded 12-hour default —
-	// this is the actual review-flagged bug: emails must agree with the page, which
-	// already renders Spanish times in 24h via Intl.DateTimeFormat.
-	afternoon := time.Date(2026, time.June, 22, 15, 30, 0, 0, time.UTC)
+	// Override off: the hour cycle follows the locale's clock_format, not a hardcoded
+	// 12-hour default — this is upstream's review-flagged bug: emails must agree with the
+	// page, which then renders Spanish times in 24h via Intl.DateTimeFormat.
+	SetClock12h(false)
+	defer SetClock12h(true)
 	if got := Default().FormatTimeOfDay(afternoon); got != "3:30 PM" {
 		t.Errorf("English FormatTimeOfDay = %q, want 12h clock", got)
 	}
 	if got := Get("es").FormatTimeOfDay(afternoon); got != "15:30" {
 		t.Errorf("Spanish FormatTimeOfDay = %q, want 24h clock", got)
+	}
+	if got := Get("es").FormatDateTime(moment); got != "lun 22 jun 2026, 09:05" {
+		t.Errorf("Spanish FormatDateTime = %q", got)
+	}
+}
+
+// The 12-hour edges in Spanish: no leading zero, minutes always two digits, and 12 (not
+// 0) for noon and midnight — "12:30 a. m." is half past midnight.
+func TestFormatTimeOfDay_spanish12hEdges(t *testing.T) {
+	es := Get("es")
+	for _, c := range []struct {
+		h, m int
+		want string
+	}{
+		{0, 0, "12:00 a. m."},
+		{0, 30, "12:30 a. m."},
+		{9, 0, "9:00 a. m."},
+		{11, 59, "11:59 a. m."},
+		{12, 0, "12:00 p. m."},
+		{12, 30, "12:30 p. m."},
+		{17, 0, "5:00 p. m."},
+		{23, 5, "11:05 p. m."},
+	} {
+		at := time.Date(2026, time.September, 25, c.h, c.m, 0, 0, time.UTC)
+		if got := es.FormatTimeOfDay(at); got != c.want {
+			t.Errorf("es %02d:%02d = %q, want %q", c.h, c.m, got, c.want)
+		}
 	}
 }
 

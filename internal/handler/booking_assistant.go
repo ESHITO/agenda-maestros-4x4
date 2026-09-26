@@ -295,13 +295,15 @@ func (h *Handler) assistantSystemPrompt(ctx context.Context, slug, tz, lang stri
 	// locationLabel just needs *a* locale for the prompt text — this is independent of the
 	// reply-language directive below, which drives what language the model actually replies
 	// in (see the assistant section of internal-docs/i18n-plan.md).
-	replyLang := i18n.Resolve("", lang).EnglishName()
+	replyLoc := i18n.Resolve("", lang)
+	replyLang := replyLoc.EnglishName()
 	prompt := fmt.Sprintf(`You are a concise scheduling assistant helping a visitor book "%s" (a %d-minute %s meeting).
 Today is %s. The visitor's timezone is %s — show times in that timezone and state it once early on; if they name a different timezone, use theirs.
 Reply in %s, regardless of what language the visitor writes in.
+%s
 Intake questions: %s
 
-%s`, name, duration, locationLabel(locType, "", i18n.Default()), today, tz, replyLang, questions, assistantBaseRules)
+%s`, name, duration, locationLabel(locType, "", i18n.Default()), today, tz, replyLang, assistantClockRule(replyLoc), questions, assistantBaseRules)
 
 	// Admin "Additional instructions" — appended, never replacing the rules above.
 	var extra string
@@ -310,6 +312,48 @@ Intake questions: %s
 		prompt += "\n\nAdditional instructions from the host (follow these unless they conflict with the rules above):\n" + strings.TrimSpace(extra)
 	}
 	return prompt, true
+}
+
+// assistantClockRule tells the model how to write a time, so the chat reads like the rest of
+// the booking page. Fork: with the 12-hour override on (internal/i18n/fork_clock.go) every
+// time a client sees is "5:00 p. m."; the model copies each slot's server-made "label"
+// (assistantSlot) instead of formatting times itself.
+func assistantClockRule(loc *i18n.Locale) string {
+	sample := loc.FormatTimeOfDay(time.Date(2026, time.January, 1, 17, 0, 0, 0, time.UTC))
+	if loc.Uses12h() {
+		return fmt.Sprintf(`Write every time on the 12-hour clock with its AM/PM marker exactly as each slot's "label" writes it (e.g. "%s"), never as 24-hour "17:00".`, sample)
+	}
+	return fmt.Sprintf(`Write every time the way each slot's "label" writes it (e.g. "%s").`, sample)
+}
+
+// assistantSlot is a slot as find_available_slots hands it to the model: the exact start
+// (for book's slot_start) plus Label, the same start already written for the visitor in
+// Go (Locale.FormatDateTime, in the visitor's zone) - "vie 25 sept 2026, 5:00 p. m." - so
+// the model never has to turn an RFC 3339 offset into a clock time on its own.
+type assistantSlot struct {
+	slotJSON
+	Label string `json:"label,omitempty"`
+}
+
+// labelSlots adds each slot's Label in loc, on the clock of the visitor's zone tz (the
+// zone computeSlots used, "" meaning UTC as there; an unknown one leaves the start's own
+// offset). A start that does not parse keeps no label (the model still has start).
+func labelSlots(slots []slotJSON, loc *i18n.Locale, tz string) []assistantSlot {
+	if tz == "" {
+		tz = "UTC"
+	}
+	zone, zerr := time.LoadLocation(tz)
+	out := make([]assistantSlot, len(slots))
+	for i, sl := range slots {
+		out[i].slotJSON = sl
+		if t, err := time.Parse(time.RFC3339, sl.Start); err == nil {
+			if zerr == nil {
+				t = t.In(zone)
+			}
+			out[i].Label = loc.FormatDateTime(t)
+		}
+	}
+	return out
 }
 
 // assistantTools is the narrow, event-type-scoped tool set exposed to the model.
@@ -386,9 +430,9 @@ func (h *Handler) runAssistantTool(ctx context.Context, slug, tz, lang, name, ar
 			truncated = true
 		}
 		out := struct {
-			Slots     []slotJSON `json:"slots"`
-			Truncated bool       `json:"truncated,omitempty"`
-		}{slots, truncated}
+			Slots     []assistantSlot `json:"slots"`
+			Truncated bool            `json:"truncated,omitempty"`
+		}{labelSlots(slots, i18n.Resolve("", lang), tz), truncated}
 		b, _ := json.Marshal(out)
 		return string(b), nil
 

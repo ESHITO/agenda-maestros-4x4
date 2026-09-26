@@ -28,20 +28,39 @@ func TestRenderWhatsApp_markersFormattingAndDroppedLines(t *testing.T) {
 		Mentor:   "Luis",
 		Tipo:     "Soporte 1 a 1",
 		Tema:     "",
-		Fecha:    "martes 29 de septiembre de 2026, 10:00",
+		Fecha:    "martes 29 de septiembre de 2026, 10:00 a. m.",
 		Dia:      "martes 29 de septiembre",
-		Hora:     "10:00",
+		Hora:     "10:00 a. m.",
 		Enlace:   "https://meet.example.com/sala",
 		Cancelar: "https://citas.example.com/manage/abc123",
 	})
 	want := "Hola *María Pérez* 👋\n" +
-		"Tu sesión de _Soporte 1 a 1_ con Luis es el martes 29 de septiembre a las 10:00 (martes 29 de septiembre de 2026, 10:00).\n" +
+		"Tu sesión de _Soporte 1 a 1_ con Luis es el martes 29 de septiembre a las 10:00 a. m. (martes 29 de septiembre de 2026, 10:00 a. m.).\n" +
 		"\n" +
 		"Entra aquí: https://meet.example.com/sala\n" +
 		"Precio: {precio}\n" +
 		"Cancelar: https://citas.example.com/manage/abc123"
 	if got != want {
 		t.Errorf("RenderWhatsApp =\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// The 12-hour {hora} ends in "a. m."/"p. m.": a period written right after the marker is
+// eaten once, so "a las {hora}." reads "a las 5:00 p. m." and never "p. m..". Values that
+// do not end in a period, and periods not right after a marker, are untouched.
+func TestRenderWhatsApp_markerEndingInPeriodEatsOneFollowingPeriod(t *testing.T) {
+	v := webhook.WhatsAppValues{Nombre: "Ana", Dia: "martes 29 de septiembre", Hora: "5:00 p. m.",
+		Fecha: "martes 29 de septiembre de 2026, 5:00 p. m."}
+	for _, c := range []struct{ tmpl, want string }{
+		{"Te esperamos: {dia}, a las {hora}.", "Te esperamos: martes 29 de septiembre, a las 5:00 p. m."},
+		{"Nueva fecha: {fecha}.\nChao.", "Nueva fecha: martes 29 de septiembre de 2026, 5:00 p. m.\nChao."},
+		{"(a las {hora}).", "(a las 5:00 p. m.)."},
+		{"a las {hora}, {nombre}.", "a las 5:00 p. m., Ana."},
+		{"{nombre}. Hoy {dia}.", "Ana. Hoy martes 29 de septiembre."},
+	} {
+		if got := webhook.RenderWhatsApp(c.tmpl, v); got != c.want {
+			t.Errorf("RenderWhatsApp(%q) = %q; want %q", c.tmpl, got, c.want)
+		}
 	}
 }
 
@@ -225,7 +244,7 @@ func TestEnqueue_whatsAppMessage_defaultTextInTheClientsZone(t *testing.T) {
 	data := lastData(t, e, waID)
 	want := "Hola María Pérez 👋\n" +
 		"Tu sesión de *Soporte 1 a 1* con Test User quedó agendada.\n" +
-		"📅 martes 29 de septiembre, a las 10:00\n" + // Lima, not Madrid's 17:00
+		"📅 martes 29 de septiembre, a las 10:00 a. m.\n" + // Lima, not Madrid's 5:00 p. m.
 		"Tema: _Mis finanzas personales_\n" +
 		"Para entrar a la sesión: https://meet.example.com/sala-cliente\n" +
 		"Si necesitas cancelar o cambiar la fecha: https://citas.example.com/manage/0a1b2c"
@@ -259,7 +278,7 @@ func TestEnqueue_whatsAppMessage_savedTextAndFirstTextQuestion(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := "⏰ *María Pérez*, en 1 hora (10:00) empieza tu Soporte 1 a 1.\nhttps://meet.example.com/sala-cliente"
+	want := "⏰ *María Pérez*, en 1 hora (10:00 a. m.) empieza tu Soporte 1 a 1.\nhttps://meet.example.com/sala-cliente"
 	if got := lastData(t, e, id)["whatsapp_message"]; got != want {
 		t.Errorf("whatsapp_message = %q; want %q", got, want)
 	}
@@ -297,7 +316,7 @@ func TestEnqueue_whatsAppMessage_cancelledHasTheReason(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := lastData(t, e, id)["whatsapp_message"]; got != "Nueva fecha: martes 29 de septiembre de 2026, 10:00" {
+	if got := lastData(t, e, id)["whatsapp_message"]; got != "Nueva fecha: martes 29 de septiembre de 2026, 10:00 a. m." {
 		t.Errorf("rescheduled whatsapp_message = %q", got)
 	}
 }
@@ -513,7 +532,7 @@ func TestWhatsAppDateTexts(t *testing.T) {
 		t.Fatal(err)
 	}
 	fecha, dia, hora := e.svc.WhatsAppDateTexts(time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC), lima)
-	if fecha != "martes 29 de septiembre de 2026, 10:00" || dia != "martes 29 de septiembre" || hora != "10:00" {
+	if fecha != "martes 29 de septiembre de 2026, 10:00 a. m." || dia != "martes 29 de septiembre" || hora != "10:00 a. m." {
 		t.Errorf("WhatsAppDateTexts = %q, %q, %q", fecha, dia, hora)
 	}
 }
