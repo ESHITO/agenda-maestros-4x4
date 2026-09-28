@@ -418,6 +418,11 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	avatarRL := RateLimit(20, time.Minute)
 	mux.HandleFunc("POST /v1/users/me/avatar", avatarRL(h.RequireAuth(h.UploadAvatar)))
 	mux.HandleFunc("DELETE /v1/users/me/avatar", avatarRL(h.RequireAuth(h.DeleteAvatar)))
+	// Fork: the owner and the admins set another person's accent and photo from Members
+	// (fork_member_appearance.go; same limits and processing as the /me pair above).
+	mux.HandleFunc("PATCH /v1/users/{id}/appearance", h.RequireAuth(h.PatchMemberAppearance))
+	mux.HandleFunc("POST /v1/users/{id}/avatar", avatarRL(h.RequireAuth(h.UploadMemberAvatar)))
+	mux.HandleFunc("DELETE /v1/users/{id}/avatar", avatarRL(h.RequireAuth(h.DeleteMemberAvatar)))
 	mux.HandleFunc("GET /avatars/{userID}", h.ServeAvatar)
 	mux.HandleFunc("GET /branding/logo", h.ServeBrandingLogo)
 	mux.HandleFunc("GET /branding/banner", h.ServeBrandingBanner)

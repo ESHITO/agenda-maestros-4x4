@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -169,11 +168,12 @@ func (h *Handler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.BookingAccent != nil {
-		if !regexp.MustCompile(`^#[0-9a-fA-F]{6}$`).MatchString(*req.BookingAccent) {
+		v, ok := parseAccent(*req.BookingAccent) // fork: shared with PATCH /v1/users/{id}/appearance
+		if !ok {
 			h.writeError(w, http.StatusBadRequest, "booking_accent must be a six-digit hex color")
 			return
 		}
-		accent = strings.ToLower(*req.BookingAccent)
+		accent = v
 	}
 	current := struct {
 		Name                 string

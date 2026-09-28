@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/disintegration/imaging"
 )
@@ -23,6 +24,13 @@ var validUserID = regexp.MustCompile(`^[0-9a-f-]+$`)
 // The image is decoded, resized to at most 400×400, and re-encoded as JPEG 88%.
 func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())
+	h.storeAvatar(w, r, user.ID)
+}
+
+// storeAvatar is UploadAvatar's body for any user id. Fork: POST /v1/users/{id}/avatar
+// (fork_member_appearance.go) runs these very limits, decode, resize and storage after
+// its own permission check, so the two paths cannot drift.
+func (h *Handler) storeAvatar(w http.ResponseWriter, r *http.Request, userID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 5<<20+1024)
 
 	if err := r.ParseMultipartForm(5 << 20); err != nil { // #nosec G120 -- bounded by the MaxBytesReader above; the body can't exceed ~5MB
@@ -69,7 +77,7 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dest := filepath.Join(avatarDir, user.ID+".jpg")
+	dest := filepath.Join(avatarDir, userID+".jpg")
 	tmp, err := os.CreateTemp(avatarDir, "upload-*.jpg")
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "avatar: create temp", "error", err)
@@ -106,12 +114,12 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 
 	// Remove any legacy files saved under other extensions.
 	for _, ext := range []string{".png", ".gif", ".webp"} {
-		_ = os.Remove(filepath.Join(avatarDir, user.ID+ext))
+		_ = os.Remove(filepath.Join(avatarDir, userID+ext))
 	}
 
-	avatarURL := "/avatars/" + user.ID
+	avatarURL := versionedAvatarURL(userID, time.Now()) // fork: fork_avatar_version.go
 	if _, err := h.db.ExecContext(r.Context(),
-		`UPDATE users SET avatar_url = ? WHERE id = ?`, avatarURL, user.ID); err != nil {
+		`UPDATE users SET avatar_url = ? WHERE id = ?`, avatarURL, userID); err != nil {
 		h.logger.ErrorContext(r.Context(), "avatar: update db", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -123,12 +131,17 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 // DeleteAvatar handles DELETE /v1/users/me/avatar.
 func (h *Handler) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFromContext(r.Context())
+	h.removeAvatar(w, r, user.ID)
+}
+
+// removeAvatar is DeleteAvatar's body for any user id (see storeAvatar).
+func (h *Handler) removeAvatar(w http.ResponseWriter, r *http.Request, userID string) {
 	avatarDir := filepath.Join(h.dataDir, "avatars")
 	for _, ext := range avatarExts {
-		_ = os.Remove(filepath.Join(avatarDir, user.ID+ext))
+		_ = os.Remove(filepath.Join(avatarDir, userID+ext))
 	}
 	if _, err := h.db.ExecContext(r.Context(),
-		`UPDATE users SET avatar_url = NULL WHERE id = ?`, user.ID); err != nil {
+		`UPDATE users SET avatar_url = NULL WHERE id = ?`, userID); err != nil {
 		h.logger.ErrorContext(r.Context(), "avatar: delete db", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return

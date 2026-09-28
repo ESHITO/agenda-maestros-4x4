@@ -64,6 +64,11 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		// Fork: whether their weekly rules can open a slot on their personal link
 		// (Mentoría / Soporte: global or for their copy; nothing: any) - fork_team_hours.go.
 		HasAvailability bool `json:"has_availability"`
+		// Fork: the booking accent (accent_custom = someone chose it, not the default) and
+		// whether THIS viewer may change it and the photo - fork_member_appearance.go.
+		BookingAccent     string `json:"booking_accent"`
+		AccentCustom      bool   `json:"accent_custom"`
+		CanEditAppearance bool   `json:"can_edit_appearance"`
 	}
 	out := []userRow{}
 	byID := map[string]*userRow{}
@@ -106,9 +111,12 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	areas, links := h.teamPeople(r.Context()) // fork: áreas and personal links (cursor closed above)
 	hasHours := h.teamHoursChecker(r.Context())
+	accents := h.memberAccents(r.Context()) // fork: fork_member_appearance.go
 	for i := range out {
 		out[i].Area, out[i].PersonalLink = areas[out[i].ID], links[out[i].ID]
 		out[i].HasAvailability = hasHours(out[i].ID, out[i].Area)
+		out[i].BookingAccent, out[i].AccentCustom = accents[out[i].ID], accentIsCustom(accents[out[i].ID])
+		out[i].CanEditAppearance = !out[i].Archived && canEditAppearance(admin, out[i].ID, out[i].IsAdmin, out[i].IsOwner)
 	}
 
 	// Attach each member's teams (the Members↔Teams cross-reference).

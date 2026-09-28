@@ -381,6 +381,12 @@ export type TeamMember = {
 	/** Fork: their weekly hours can open slots on what they attend (a global rule or one for
 	 *  their copy, in either área; nothing: any rule). */
 	has_availability?: boolean;
+	/** Fork: their booking accent ("#rrggbb"); accent_custom = someone chose it (not the
+	 *  default, "#111827"). */
+	booking_accent?: string;
+	accent_custom?: boolean;
+	/** Fork: this viewer may change their accent and photo (the server's matrix). */
+	can_edit_appearance?: boolean;
 	email_login: boolean;
 	provider?: string;
 	avatar_url?: string;
@@ -575,6 +581,21 @@ export const teamApi = {
 	/** POST /v1/bookings/{id}/reassign (admins). */
 	reassign: (bookingId: string, hostId: string) =>
 		api.post<Booking>(`/v1/bookings/${bookingId}/reassign`, { host_id: hostId }),
+
+	/** PATCH /v1/users/{id}/appearance (owner: anyone; admin: members and themselves).
+	 *  "" = back to the default colour. */
+	setAccent: (userId: string, bookingAccent: string) =>
+		api.patch<{ id: string; booking_accent: string; accent_custom: boolean }>(
+			`/v1/users/${userId}/appearance`,
+			{ booking_accent: bookingAccent }
+		),
+
+	/** POST /v1/users/{id}/avatar: the cropped photo (field "avatar"), same limits as /me. */
+	uploadAvatar: (userId: string, data: FormData) =>
+		api.postForm<{ avatar_url: string }>(`/v1/users/${userId}/avatar`, data),
+
+	/** DELETE /v1/users/{id}/avatar. */
+	deleteAvatar: (userId: string) => api.del(`/v1/users/${userId}/avatar`),
 
 	/** POST /v1/invites with the role the invitee will get. */
 	createInvite: (email: string, role: InviteRole) =>

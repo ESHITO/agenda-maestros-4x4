@@ -17,7 +17,8 @@
 		type ReassignCandidate,
 		type TeamMember,
 		type TeamSettings,
-		type UpcomingBooking
+		type UpcomingBooking,
+		type User
 	} from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { Button } from '$lib/components/ui/button';
@@ -28,6 +29,8 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Select from '$lib/components/ui/select';
+	import * as Avatar from '$lib/components/ui/avatar';
+	import AvatarCropDialog from '$lib/components/AvatarCropDialog.svelte';
 	import { toast } from 'svelte-sonner';
 
 	let members: TeamMember[] = $state([]);
@@ -555,6 +558,147 @@
 		}
 	}
 
+	// --- Apariencia: color principal y foto de perfil (fork_member_appearance.go) ---
+	// PATCH /v1/users/{id}/appearance, POST/DELETE /v1/users/{id}/avatar. Who may edit whom
+	// comes from the server (can_edit_appearance): the owner → anyone, themselves included;
+	// an admin → non-admin members and themselves; nobody else sees the controls.
+	const DEFAULT_ACCENT = '#111827'; // the column default = "no colour of their own"
+	const ACCENT_PRESETS: { value: string; label: string }[] = [
+		{ value: '#4fd7ff', label: 'Turquesa Maestros 4x4' },
+		{ value: '#6366f1', label: 'Índigo' },
+		{ value: '#a855f7', label: 'Violeta' },
+		{ value: '#ec4899', label: 'Rosa' },
+		{ value: '#ef4444', label: 'Rojo' },
+		{ value: '#f97316', label: 'Naranja' },
+		{ value: '#eab308', label: 'Ámbar' },
+		{ value: '#22c55e', label: 'Verde' }
+	];
+	// While the native picker is open (live preview) and while a save is in flight.
+	let accentDraft = $state<Record<string, string>>({});
+	// Only the latest save per person may update the card (quick swatch clicks).
+	const accentSeq: Record<string, number> = {};
+	let cropper = $state<ReturnType<typeof AvatarCropDialog> | undefined>(undefined);
+	let cropTarget = $state<TeamMember | null>(null);
+	let photoBusy = $state(false);
+
+	const firstName = (m: TeamMember) => m.name.trim().split(/\s+/)[0] || m.name;
+	function initials(name: string) {
+		return (
+			name
+				.trim()
+				.split(/\s+/)
+				.map((p) => p[0] ?? '')
+				.join('')
+				.toUpperCase()
+				.slice(0, 2) || '?'
+		);
+	}
+	function patchMember(id: string, patch: Partial<TeamMember>) {
+		members = members.map((x) => (x.id === id ? { ...x, ...patch } : x));
+	}
+
+	// What the booking pages show while the person has no colour of their own: a mentor's or
+	// support person's link is a copy owned by the owner, so it falls back to the owner's
+	// colour; anything else (the owner, people with no área) to the default.
+	function usesOwnerFallback(m: TeamMember): boolean {
+		return !m.is_owner && (m.area === 'mentoria' || m.area === 'soporte');
+	}
+	function fallbackAccent(m: TeamMember): string {
+		if (usesOwnerFallback(m)) {
+			const owner = members.find((x) => x.is_owner);
+			if (owner?.accent_custom && owner.booking_accent) return owner.booking_accent;
+		}
+		return DEFAULT_ACCENT;
+	}
+	function shownAccent(m: TeamMember): string {
+		return accentDraft[m.id] ?? (m.accent_custom && m.booking_accent ? m.booking_accent : fallbackAccent(m));
+	}
+	// Black or white text on the colour: the booking pages' own rule (booking_accent.go
+	// accentForeground), so the preview chip reads like the real button.
+	function accentText(color: string): string {
+		const n = parseInt(color.slice(1), 16);
+		if (color.length !== 7 || Number.isNaN(n)) return '#ffffff';
+		const lin = (v: number) => {
+			const c = v / 255;
+			return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+		};
+		const l = 0.2126 * lin(n >> 16) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+		return l > 0.179 ? '#000000' : '#ffffff';
+	}
+	function previewAccent(m: TeamMember, value: string) {
+		accentDraft = { ...accentDraft, [m.id]: value.toLowerCase() };
+	}
+	function dropDraft(id: string) {
+		const rest = { ...accentDraft };
+		delete rest[id];
+		accentDraft = rest;
+	}
+
+	/** Saves a colour ("" = back to the default) and says so. */
+	async function saveAccent(m: TeamMember, value: string) {
+		const v = value.toLowerCase();
+		if (v !== '' && m.accent_custom && v === m.booking_accent) {
+			dropDraft(m.id);
+			return;
+		}
+		const seq = (accentSeq[m.id] ?? 0) + 1;
+		accentSeq[m.id] = seq;
+		previewAccent(m, v === '' ? fallbackAccent(m) : v);
+		try {
+			const res = await teamApi.setAccent(m.id, v);
+			if (accentSeq[m.id] !== seq) return;
+			patchMember(m.id, { booking_accent: res.booking_accent, accent_custom: res.accent_custom });
+			dropDraft(m.id);
+			toast.success(v === '' ? `Color de ${firstName(m)} restablecido` : `Color de ${firstName(m)} guardado`);
+		} catch (e: any) {
+			if (accentSeq[m.id] !== seq) return;
+			dropDraft(m.id);
+			toast.error(e.message || 'No se pudo guardar el color');
+		}
+	}
+
+	// Our own photo also sits in the sidebar: refresh the signed-in user.
+	async function refreshMe(m: TeamMember) {
+		if (m.id !== me?.id) return;
+		try {
+			currentUser.set(await api.get<User>('/v1/users/me'));
+		} catch {
+			/* the sidebar catches up on the next load */
+		}
+	}
+
+	function changePhoto(m: TeamMember) {
+		cropTarget = m;
+		cropper?.pick();
+	}
+	async function uploadPhoto(data: FormData) {
+		const m = cropTarget;
+		if (!m) return;
+		const res = await teamApi.uploadAvatar(m.id, data);
+		// The server versions the URL (/avatars/{id}?v=…), so a replacement is a new URL
+		// everywhere, after reloads too.
+		patchMember(m.id, { avatar_url: res.avatar_url });
+		toast.success(`Foto de ${firstName(m)} guardada`);
+		await refreshMe(m);
+	}
+	function removePhoto(m: TeamMember) {
+		openConfirm({
+			title: `¿Quitar la foto de ${m.name}?`,
+			description: 'Sus páginas de reserva mostrarán sus iniciales en lugar de la foto.',
+			confirmText: 'Quitar foto',
+			action: async () => {
+				try {
+					await teamApi.deleteAvatar(m.id);
+					patchMember(m.id, { avatar_url: undefined });
+					toast.success(`Foto de ${firstName(m)} quitada`);
+					await refreshMe(m);
+				} catch (e: any) {
+					toast.error(e.message || 'No se pudo quitar la foto');
+				}
+			}
+		});
+	}
+
 	function bookUrl(slug: string) {
 		return `${window.location.origin}/book/${slug}`;
 	}
@@ -802,13 +946,10 @@
 						{@const rb = roleBadge(m)}
 						<li class="space-y-3 p-4 transition-colors hover:bg-muted/20 {m.archived ? 'opacity-60' : ''}">
 							<div class="flex items-start gap-3">
-								{#if m.avatar_url}
-									<img src={m.avatar_url} alt={m.name} class="h-8 w-8 shrink-0 rounded-full object-cover" />
-								{:else}
-									<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
-										{m.name.slice(0, 2).toUpperCase()}
-									</div>
-								{/if}
+								<Avatar.Root class="size-8 text-xs font-semibold">
+									<Avatar.Image src={m.avatar_url} alt={m.name} class="object-cover" />
+									<Avatar.Fallback>{initials(m.name)}</Avatar.Fallback>
+								</Avatar.Root>
 								<div class="min-w-0 flex-1">
 									<p class="break-words font-medium">
 										{m.name}
@@ -847,6 +988,75 @@
 										<a href={m.personal_link.url} target="_blank" rel="noopener noreferrer" class="break-all text-sm text-primary hover:underline">{m.personal_link.url}</a>
 									</div>
 									<Button variant="outline" size="sm" class="self-start sm:self-auto" onclick={() => copyLink(m.personal_link!.url)}>Copiar enlace</Button>
+								</div>
+							{/if}
+
+							{#if m.can_edit_appearance}
+								{@const accent = shownAccent(m)}
+								<div class="space-y-3 rounded-md border bg-background px-3 py-3">
+									<p class="text-xs font-medium text-muted-foreground">Apariencia</p>
+									<div class="flex items-center gap-3">
+										<Avatar.Root class="size-12 text-base font-semibold">
+											<Avatar.Image src={m.avatar_url} alt={m.name} class="object-cover" />
+											<Avatar.Fallback>{initials(m.name)}</Avatar.Fallback>
+										</Avatar.Root>
+										<div class="flex flex-wrap gap-1.5">
+											<Button size="sm" variant="outline" disabled={photoBusy} onclick={() => changePhoto(m)}>
+												{photoBusy && cropTarget?.id === m.id ? 'Subiendo…' : 'Cambiar foto'}
+											</Button>
+											{#if m.avatar_url}
+												<Button size="sm" variant="ghost" class="text-destructive hover:text-destructive" disabled={photoBusy} onclick={() => removePhoto(m)}>Quitar foto</Button>
+											{/if}
+										</div>
+									</div>
+									<div class="space-y-2">
+										<div class="flex flex-wrap items-center justify-between gap-2">
+											<Label for="accent-{m.id}" class="text-xs">Color principal</Label>
+											<span
+												class="inline-flex max-w-full items-center truncate rounded-full px-3 py-1 text-xs font-semibold shadow-xs transition-colors"
+												style="background-color: {accent}; color: {accentText(accent)};"
+												aria-hidden="true"
+											>Reservar con {firstName(m)}</span>
+										</div>
+										<div class="flex flex-wrap items-center gap-2">
+											<input
+												id="accent-{m.id}"
+												type="color"
+												value={accent}
+												oninput={(e) => previewAccent(m, e.currentTarget.value)}
+												onchange={(e) => saveAccent(m, e.currentTarget.value)}
+												class="h-8 w-11 shrink-0 cursor-pointer rounded-md border bg-background p-0.5"
+												title="Elegir otro color"
+											/>
+											<!-- Preset swatches: shadcn has no colour picker, so these are plain
+											     buttons with a visible focus ring and aria-pressed. -->
+											{#each ACCENT_PRESETS as p (p.value)}
+												<button
+													type="button"
+													class="size-7 shrink-0 cursor-pointer rounded-full border border-black/10 ring-offset-2 ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:ring-2 aria-pressed:ring-foreground dark:border-white/20"
+													style="background-color: {p.value};"
+													aria-pressed={accent === p.value}
+													aria-label="{p.label} para {m.name}"
+													title={p.label}
+													onclick={() => saveAccent(m, p.value)}
+												></button>
+											{/each}
+										</div>
+										<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+											<p class="text-xs text-muted-foreground">
+												{#if m.accent_custom}
+													<span class="font-mono">{m.booking_accent}</span> · se usa en sus páginas de reserva.
+												{:else if usesOwnerFallback(m)}
+													Sin color propio: su enlace usa el color del propietario.
+												{:else}
+													Sin color propio: se usa el color predeterminado.
+												{/if}
+											</p>
+											{#if m.accent_custom}
+												<Button size="xs" variant="ghost" onclick={() => saveAccent(m, '')}>Restablecer</Button>
+											{/if}
+										</div>
+									</div>
 								</div>
 							{/if}
 
@@ -1051,3 +1261,6 @@
 		</div>
 	{/if}
 {/if}
+
+<!-- Fork: the shared photo picker + crop dialog (the profile page uses the same one). -->
+<AvatarCropDialog bind:this={cropper} bind:busy={photoBusy} upload={uploadPhoto} replacing={!!cropTarget?.avatar_url} />

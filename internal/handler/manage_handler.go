@@ -122,7 +122,7 @@ func (h *Handler) ManagePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	accentColor = accentOrDefault(accentColor)
+	accentColor = h.teamHostAccent(r.Context(), b.EventTypeID, accentOrDefault(accentColor)) // fork: a team copy shows its host's colour
 
 	if b.LocationType != "" {
 		locType = b.LocationType
