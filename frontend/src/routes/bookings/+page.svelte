@@ -13,7 +13,7 @@
 		type WhatsAppNotice
 	} from '$lib/api';
 	import { currentUser } from '$lib/stores';
-	import { prefs, fmtDateTime, fmtTime } from '$lib/prefs';
+	import { prefs, fmtDateTime, fmtTime, fmtShortWhen, displayZone, dayKeyInZone } from '$lib/prefs';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -328,23 +328,10 @@
 		not_applicable: { label: 'No aplica', cls: 'border-dashed border-border bg-background text-muted-foreground' }
 	};
 
-	// Short "when" for a notice, in the viewer's own zone: "hoy 07:00", "mañana 07:00",
-	// or "30/09 07:00" (day/month order follows the user's date preference).
+	// Short "when" for a notice, in the profile's zone like every other time on this page:
+	// "hoy 07:00", "mañana 07:00", or "30/09 07:00" (fmtShortWhen in $lib/prefs).
 	function shortWhen(iso?: string): string {
-		if (!iso) return '';
-		const d = new Date(iso);
-		if (isNaN(d.getTime())) return '';
-		const time = fmtTime(iso, $prefs);
-		const dayKey = (x: Date) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
-		const today = new Date();
-		const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
-		const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
-		if (dayKey(d) === dayKey(today)) return `hoy ${time}`;
-		if (dayKey(d) === dayKey(tomorrow)) return `mañana ${time}`;
-		if (dayKey(d) === dayKey(yesterday)) return `ayer ${time}`;
-		const dd = String(d.getDate()).padStart(2, '0');
-		const mm = String(d.getMonth() + 1).padStart(2, '0');
-		return `${$prefs.date_format === 'mdy' || $prefs.date_format === 'ymd' ? `${mm}/${dd}` : `${dd}/${mm}`} ${time}`;
+		return fmtShortWhen(iso, $prefs);
 	}
 
 	function noticeDetail(n: WhatsAppNotice): string {
@@ -491,11 +478,14 @@
 		slots = [];
 		selectedSlot = '';
 		try {
-			const tz = $prefs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+			// Asked, grouped and drawn in ONE zone, the profile's (displayZone): only the
+			// times that start on the picked day there, drawn by fmtSlotTime in that zone.
+			const tz = displayZone($prefs);
+			const day = rescheduleDate;
 			const res = await api.get<{ slots: { start: string; end: string }[] }>(
-				`/v1/event-types/${reschedulingSlug}/slots?from=${rescheduleDate}&to=${rescheduleDate}&tz=${encodeURIComponent(tz)}`
+				`/v1/event-types/${reschedulingSlug}/slots?from=${day}&to=${day}&tz=${encodeURIComponent(tz)}`
 			);
-			slots = res.slots ?? [];
+			slots = (res.slots ?? []).filter((s) => dayKeyInZone(s.start, $prefs) === day);
 		} catch (e: any) {
 			slotsError = e.message;
 		} finally {

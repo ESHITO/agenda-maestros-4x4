@@ -94,6 +94,123 @@ test('mergeDaySlots does not mutate the arrays it was given', () => {
   assert.equal('taken' in taken[0], false);
 });
 
+// ---- Audit 29 Sep 2026: time-zone and race findings on the booking surfaces ----
+
+// manage.html's CURRENT_ISO is UTC ("…Z"); /slots answers in the booker's zone ("…-05:00").
+// The string comparison never matched, so the booking's own time stayed on the list.
+test('groupSlotsByDay excludes the current booking by instant, whatever offset it is written in', () => {
+  assert.equal(B.sameInstant('2026-09-28T17:00:00Z', '2026-09-28T12:00:00-05:00'), true);
+  assert.equal(B.sameInstant('2026-09-28T17:00:00Z', '2026-09-28T12:30:00-05:00'), false);
+  assert.equal(B.sameInstant('', '2026-09-28T12:00:00-05:00'), false);
+  const taken = [{ start: '2026-09-28T12:00:00-05:00' }, { start: '2026-09-28T12:30:00-05:00' }];
+  const by = B.groupSlotsByDay(taken, 'America/Lima', '2026-09-28T17:00:00Z');
+  assert.deepEqual(by['2026-09-28'].map((s) => s.start), ['2026-09-28T12:30:00-05:00']);
+});
+
+// The one-day fallback (from=ds&to=ds) can answer with the next visitor day's times: a Lima
+// 8:30 p. m. on Sat 31 Oct is 2:30 a. m. on Sun 1 Nov in Madrid. Taken whole, it was listed
+// under Saturday and the form said "sáb, 31 oct · 2:30 a. m." for a Sunday booking.
+test('daySlotsFromResponse keeps only the times that start on the picked day in the selected tz', () => {
+  const data = {
+    slots: [
+      { start: '2026-10-31T21:00:00+01:00' }, // Sat 31 Oct, Madrid
+      { start: '2026-11-01T02:30:00+01:00' }, // Sun 1 Nov, Madrid (Lima Sat 20:30)
+    ],
+    taken: [
+      { start: '2026-10-31T22:00:00+01:00' },
+      { start: '2026-11-01T03:00:00+01:00' },
+    ],
+  };
+  const day = B.daySlotsFromResponse(data, 'Europe/Madrid', '2026-10-31');
+  assert.deepEqual(day.map((s) => [s.start, s.taken]), [
+    ['2026-10-31T21:00:00+01:00', false],
+    ['2026-10-31T22:00:00+01:00', true],
+  ]);
+  // Same answer seen from Lima: everything is on Saturday.
+  assert.equal(B.daySlotsFromResponse(data, 'America/Lima', '2026-10-31').length, 4);
+  // A day the answer does not reach is empty, never undefined.
+  assert.deepEqual(B.daySlotsFromResponse(data, 'Europe/Madrid', '2026-10-30'), []);
+  // The current booking is dropped here too (manage.html's fallback), by instant.
+  const noCurrent = B.daySlotsFromResponse(data, 'Europe/Madrid', '2026-10-31', '2026-10-31T20:00:00Z');
+  assert.deepEqual(noCurrent.map((s) => s.start), ['2026-10-31T22:00:00+01:00']);
+});
+
+test('slotsByDayFromResponse groups a month answer in the selected tz and merges taken times', () => {
+  const by = B.slotsByDayFromResponse({
+    slots: [{ start: '2026-10-01T09:00:00-05:00' }, { start: '2026-10-01T20:30:00-05:00' }],
+    taken: [{ start: '2026-10-01T10:00:00-05:00' }],
+  }, 'Europe/Madrid');
+  assert.deepEqual(Object.keys(by).sort(), ['2026-10-01', '2026-10-02']);
+  assert.deepEqual(by['2026-10-01'].map((s) => s.taken), [false, true]);
+  assert.deepEqual(B.slotsByDayFromResponse(null, 'UTC'), {});
+});
+
+// manage.html: after a zone change on the confirm view the picked day must follow the instant.
+test('slotDay gives the day a slot starts on in the selected tz', () => {
+  assert.deepEqual(B.slotDay('2026-10-31T20:30:00-05:00', 'America/Lima'), { ds: '2026-10-31', y: 2026, m: 9, d: 31 });
+  assert.deepEqual(B.slotDay('2026-10-31T20:30:00-05:00', 'Europe/Madrid'), { ds: '2026-11-01', y: 2026, m: 10, d: 1 });
+});
+
+// today + 60*86400000 ms lands at 23:00 of the day before when the visitor's zone leaves
+// summer time inside the window (Madrid 25 Oct), so the 60th day was greyed out.
+test('maxBookableDate counts calendar days, across a summer-time change', () => {
+  const saved = process.env.TZ;
+  process.env.TZ = 'Europe/Madrid';
+  try {
+    const today = new Date(2026, 8, 29); // Tue 29 Sep 2026, local midnight (CEST)
+    const max = B.maxBookableDate(today, 60);
+    assert.equal(max.getFullYear(), 2026);
+    assert.equal(max.getMonth(), 10); // November
+    assert.equal(max.getDate(), 28);
+    assert.equal(max.getHours(), 0, 'local midnight, not 23:00 of the day before');
+    const lastDay = new Date(2026, 10, 28);
+    assert.equal(lastDay > max, false, 'the 60th day is not "too far"');
+    assert.equal(new Date(2026, 10, 29) > max, true, 'the 61st is');
+    // The old arithmetic, kept here as the reproduction of the bug.
+    assert.equal(lastDay > new Date(today.getTime() + 60 * 86400000), true);
+  } finally {
+    if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved;
+  }
+  assert.equal(B.maxBookableDate(new Date(2026, 8, 29), 0), null);
+});
+
+// Month answers landing out of order: the visitor taps "next" before September answers;
+// October answers first, then the late September answer must not replace it.
+test('latestOnly drops an answer that a newer request superseded', async () => {
+  const req = B.latestOnly();
+  let shown = null;
+  const load = async (month, delay) => {
+    const token = req.start();
+    await new Promise((r) => setTimeout(r, delay));
+    if (!req.isCurrent(token)) return false;
+    shown = month;
+    return true;
+  };
+  const sep = load('2026-09', 30);
+  const oct = load('2026-10', 1);
+  assert.equal(await oct, true);
+  assert.equal(await sep, false);
+  assert.equal(shown, '2026-10');
+  // Two counters are independent.
+  const other = B.latestOnly();
+  const tok = other.start();
+  req.start();
+  assert.equal(other.isCurrent(tok), true);
+});
+
+// The browser can report an alias Intl.supportedValuesOf does not list; the selector then had
+// no matching option and showed Africa/Abidjan while the times used the real zone.
+test('zoneOptions adds the detected zone when the list lacks it, once, sorted', () => {
+  const list = ['Africa/Abidjan', 'America/Buenos_Aires', 'America/Lima', 'Europe/Madrid'];
+  const out = B.zoneOptions(list, 'America/Argentina/Buenos_Aires');
+  assert.ok(out.includes('America/Argentina/Buenos_Aires'));
+  assert.deepEqual(out, out.slice().sort());
+  assert.equal(out.length, list.length + 1);
+  assert.deepEqual(B.zoneOptions(list, 'America/Lima'), list, 'no duplicate for a listed zone');
+  assert.equal(list.length, 4, 'the input list is not modified');
+  assert.deepEqual(B.zoneOptions(undefined, 'UTC'), ['UTC']);
+});
+
 test('mergeDaySlots handles a missing taken array (the opt-in is off)', () => {
   const free = [{ start: '2026-06-15T09:00:00Z' }];
   assert.deepEqual(B.mergeDaySlots(free, undefined).map((s) => s.taken), [false]);

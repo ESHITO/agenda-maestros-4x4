@@ -231,6 +231,7 @@ func generate(req Request, want Extras) (Result, error) {
 // minimum-notice rule removed, in the same shape.
 func hostsByStart(req Request, p params, applyBusy bool, belowNotice map[time.Time]map[string]bool) (map[time.Time]map[string]bool, error) {
 	perStart := make(map[time.Time]map[string]bool)
+	gridZone := sharedGridZone(req)
 
 	for d := p.dateFrom; !d.After(p.dateTo); d = d.AddDate(0, 0, 1) {
 		for _, host := range req.Hosts {
@@ -242,41 +243,101 @@ func hostsByStart(req Request, p params, applyBusy bool, belowNotice map[time.Ti
 				continue
 			}
 
-			avail := windows
+			// Starts sit on a grid anchored at the start of each availability window
+			// (in host time: a rule's or override's start), stepping by the interval. The
+			// grid is fixed BEFORE busy time is cut out, so a booking ending at 12:40
+			// resumes the 09:00-anchored grid at 13:00, not at 12:40. Overlapping or
+			// touching rules are merged first, as subtract always did, so one window has
+			// one grid. (It used to be anchored at the Unix epoch, which only gave the
+			// window's own start when the interval divided both the hour and the zone
+			// offset: a 45- or 90-minute interval lost 09:00 in Lima.)
+			//
+			// When several hosts' starts are compared (see sharedGridZone) every host uses
+			// ONE grid instead: anchored at midnight, in the reference host's zone, of the
+			// day the window starts on. Per-window grids would not line up (09:00 and 09:30
+			// windows on 60 minutes never share a start), and collective or round robin
+			// with a required host needs the same instant free for everyone.
+			var busy []Interval
 			if applyBusy {
-				avail = subtract(windows, expandBusy(host.Busy, p.bufBefore, p.bufAfter))
+				busy = expandBusy(host.Busy, p.bufBefore, p.bufAfter)
 			}
-
-			for _, f := range avail {
-				// Align the first slot start up to the nearest interval boundary
-				// (epoch-aligned so slots land on :00/:15/:30/:45 etc.).
-				t := alignUp(f.Start, p.interval)
-				for ; !t.Add(p.dur).After(f.End); t = t.Add(p.interval) {
-					if t.Before(p.minNotice) {
-						// !t.Before(req.Now) is what keeps the attribution honest: a start
-						// in the past would have gone with no notice policy at all, so
-						// blaming the policy for it would put the explanation on every
-						// event type by the end of the working day.
-						if belowNotice != nil && !t.Before(req.Now) {
-							if belowNotice[t] == nil {
-								belowNotice[t] = make(map[string]bool)
-							}
-							belowNotice[t][host.HostID] = true
-						}
-						continue
-					}
-					if t.After(p.maxFuture) {
-						break
-					}
-					if perStart[t] == nil {
-						perStart[t] = make(map[string]bool)
-					}
-					perStart[t][host.HostID] = true
+			for _, w := range mergeIntervals(windows) {
+				avail := []Interval{w}
+				if applyBusy {
+					avail = subtract(avail, busy)
+				}
+				anchor := w.Start
+				if gridZone != nil {
+					anchor = localMidnight(w.Start, gridZone)
+				}
+				for _, f := range avail {
+					walkStarts(req, p, host.HostID, anchor, f, perStart, belowNotice)
 				}
 			}
 		}
 	}
 	return perStart, nil
+}
+
+// sharedGridZone returns the zone whose midnights anchor one grid of starts shared by
+// every host, or nil when each window may keep its own grid. A shared grid is needed
+// whenever the routing mode weighs several hosts at one start: collective and round robin
+// with a required host need everyone free at the same instant, and round robin / priority
+// lists merge the hosts' starts into one list, which must still step by the interval.
+// "fixed" offers only the first host, so its windows keep their own anchors. The
+// reference zone is the first required host's (the one who always attends), else the
+// first host's - the order the caller gives, the same one pickHosts uses.
+func sharedGridZone(req Request) *time.Location {
+	if len(req.Hosts) < 2 {
+		return nil
+	}
+	switch req.Event.RoutingMode {
+	case "collective", "round_robin", "priority":
+	default:
+		return nil
+	}
+	for _, h := range req.Hosts {
+		if h.Role == "required" {
+			return h.Location
+		}
+	}
+	return req.Hosts[0].Location
+}
+
+// localMidnight is 00:00 in loc of the day t falls on in loc (time.Date normalizes a
+// midnight a DST change skips).
+func localMidnight(t time.Time, loc *time.Location) time.Time {
+	y, m, d := t.In(loc).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, loc)
+}
+
+// walkStarts records every start of free window f, on the grid anchored at anchor (the
+// start of the availability window f was cut from, or the shared multi-host midnight -
+// see sharedGridZone), that fits the duration and passes the
+// notice and max-future rules.
+func walkStarts(req Request, p params, hostID string, anchor time.Time, f Interval, perStart, belowNotice map[time.Time]map[string]bool) {
+	for t := alignFrom(anchor, f.Start, p.interval); !t.Add(p.dur).After(f.End); t = t.Add(p.interval) {
+		if t.Before(p.minNotice) {
+			// !t.Before(req.Now) is what keeps the attribution honest: a start
+			// in the past would have gone with no notice policy at all, so
+			// blaming the policy for it would put the explanation on every
+			// event type by the end of the working day.
+			if belowNotice != nil && !t.Before(req.Now) {
+				if belowNotice[t] == nil {
+					belowNotice[t] = make(map[string]bool)
+				}
+				belowNotice[t][hostID] = true
+			}
+			continue
+		}
+		if t.After(p.maxFuture) {
+			break
+		}
+		if perStart[t] == nil {
+			perStart[t] = make(map[string]bool)
+		}
+		perStart[t][hostID] = true
+	}
 }
 
 // offer applies the routing mode to decide which starts to surface, in order.
@@ -381,21 +442,16 @@ func pickHosts(hosts []HostAvailability, available map[string]bool, mode string)
 	}
 }
 
-// alignUp rounds t up to the next epoch-aligned multiple of interval.
-// Epoch alignment means slots land on :00/:15/:30/:45 for minute-granularity
-// intervals, regardless of when the free window starts.
-func alignUp(t time.Time, interval time.Duration) time.Time {
-	secs := int64(interval.Seconds())
-	if secs <= 0 {
+// alignFrom returns the first start at or after t on the grid anchor + k*interval, where
+// anchor is the start of the availability window t lies in, or the shared multi-host
+// midnight (see hostsByStart); either way anchor <= t. A window
+// starting at 09:00 host time therefore offers 09:00, 09:45, 10:30... on a 45-minute
+// interval, whatever the zone's offset from UTC, and a free stretch reopening at 12:40
+// after a booking resumes at the grid's next step rather than at 12:40.
+func alignFrom(anchor, t time.Time, interval time.Duration) time.Time {
+	if interval <= 0 || !t.After(anchor) {
 		return t
 	}
-	unix := t.Unix()
-	rem := unix % secs
-	if rem < 0 {
-		rem += secs // Go's % returns negative remainder for negative dividend
-	}
-	if rem == 0 {
-		return t
-	}
-	return t.Add(time.Duration(secs-rem) * time.Second)
+	steps := (t.Sub(anchor) + interval - 1) / interval
+	return anchor.Add(steps * interval)
 }

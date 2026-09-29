@@ -48,7 +48,11 @@ type managePageData struct {
 	PriceLabel      string // empty on manage → the eventMeta partial omits the price row
 	MaxFutureDays   int
 	DurationMinutes int
-	CurrentStartISO string // RFC3339 for JS
+	// CurrentStartISO is the booking's start in the same wire form /slots uses for slot
+	// starts (slotWireTime: RFC3339, whole seconds, rendered in the attendee's zone), so the
+	// page can recognise the booking's own slot. The page compares instants
+	// (Date.parse), never strings: its zone selector can differ from the stored zone.
+	CurrentStartISO string
 	OrganizerTZ     string
 	Status          string // "confirmed" or "cancelled"
 	TokenInvalid    bool   // token not found or expired
@@ -155,6 +159,10 @@ func (h *Handler) ManagePage(w http.ResponseWriter, r *http.Request) {
 	if orgTZ == "" {
 		orgTZ = "UTC"
 	}
+	orgLoc, err := time.LoadLocation(orgTZ)
+	if err != nil {
+		orgLoc = time.UTC
+	}
 
 	data := managePageData{
 		AccentColor:      accentColor,
@@ -173,7 +181,7 @@ func (h *Handler) ManagePage(w http.ResponseWriter, r *http.Request) {
 		LocationLabel:    locationLabel(locType, locValue, loc),
 		MaxFutureDays:    maxDays,
 		DurationMinutes:  durMins,
-		CurrentStartISO:  b.StartAt.UTC().Format(time.RFC3339),
+		CurrentStartISO:  slotWireTime(b.StartAt, orgLoc),
 		OrganizerTZ:      orgTZ,
 		Status:           b.Status,
 	}

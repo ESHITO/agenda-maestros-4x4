@@ -83,10 +83,10 @@ func (th teamHours) usable(userID, etID string) *teamUserHours {
 
 // opensFor reports whether userID has a usable weekly rule for event type etID ("" = only
 // a global rule counts) that holds at least one slot of shape (a zero shape skips that
-// check). The slot engine does not merge rules: each one is its own window, the first
-// start is aligned up to the slot interval (epoch-aligned, in UTC), and a slot is offered
-// only if it ends inside the window. A Monday 09:00-09:05 rule on a 30-minute type opens
-// nothing, so it must not count as hours.
+// check). Each rule is looked at as its own window, the engine's first start in a window is
+// the window's own start (starts are anchored there, see slots.hostsByStart), and a slot is
+// offered only if it ends inside the window. A Monday 09:00-09:05 rule on a 30-minute type
+// opens nothing, so it must not count as hours.
 func (th teamHours) opensFor(userID, etID string, shape teamSlotShape) bool {
 	u := th.usable(userID, etID)
 	if u == nil {
@@ -126,6 +126,11 @@ func loadTeamSlotShape(ctx context.Context, q teamQuerier, etID string) (teamSlo
 
 // teamRuleFits reports whether rule r, on its next occurrence from now in loc, holds at
 // least one slot of shape - the same window and alignment slots.hostsByStart computes.
+// The engine anchors its grid of starts at the window's start (not at the Unix epoch any
+// more), so the first start IS the window's start and the interval cannot push it out:
+// the window holds a slot exactly when it is at least one duration long. (Multi-host
+// collective/round-robin/priority events share a midnight-anchored grid instead -
+// slots.sharedGridZone - but a person's link here is always theirs alone, fixed routing.)
 func teamRuleFits(loc *time.Location, r teamRule, shape teamSlotShape, now time.Time) bool {
 	day := now.UTC().Truncate(24 * time.Hour)
 	for int(day.Weekday()) != r.dow {
@@ -137,16 +142,7 @@ func teamRuleFits(loc *time.Location, r teamRule, shape teamSlotShape, now time.
 		return false
 	}
 	w := windows[0]
-	t := w.Start
-	if secs := int64(shape.interval / time.Second); secs > 0 {
-		if rem := t.Unix() % secs; rem != 0 {
-			if rem < 0 {
-				rem += secs
-			}
-			t = t.Add(time.Duration(secs-rem) * time.Second)
-		}
-	}
-	return !t.Add(shape.dur).After(w.End)
+	return !w.Start.Add(shape.dur).After(w.End)
 }
 
 // loadTeamHours reads every availability rule once (a handful per person) with its

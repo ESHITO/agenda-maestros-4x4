@@ -1035,6 +1035,7 @@ func (h *Handler) hostPrefsOrDefault(ctx context.Context, bookingID, userID stri
 func (h *Handler) hostBookingData(ctx context.Context, base mailer.BookingData, host assignedHost, updatedAt time.Time) mailer.BookingData {
 	hd := base
 	hd.HostName, hd.HostEmail = host.Name, host.Email
+	hd.HostTimezone = h.hostTimezone(ctx, host.UserID) // each host reads their own zone
 	hd.AttachICS = h.noConnectedDestination(ctx, host.UserID)
 	hd.ICSSequence = int(updatedAt.Unix())
 	return hd
@@ -1270,6 +1271,9 @@ func (h *Handler) dispatchBookingConfirmation(b *booking.Booking, in bookingConf
 		LocationValue:     b.LocationValue,
 		BaseURL:           h.publicURL(),
 		Locale:            i18n.Get(in.OrganizerLocale),
+		// The primary host's zone: the attendee email's fallback when the booker sent no
+		// zone (stored as "UTC"); hostBookingData overrides it per host.
+		HostTimezone: h.hostTimezone(ctx, b.HostID),
 	}
 	h.applyBranding(ctx, &bData)
 	// Every assigned host attends (Group books several; round-robin/Normal one).
@@ -1954,11 +1958,21 @@ func primaryHost(hosts []assignedHost) assignedHost {
 	return hosts[0]
 }
 
-// loadHostIntoData fills HostName and HostEmail in d from the users table.
+// loadHostIntoData fills HostName, HostEmail and HostTimezone in d from the users table.
+// HostTimezone is what host emails render their times in, and the attendee emails'
+// fallback when the stored attendee zone is unknown (mailer.BookingData.zone).
 func (h *Handler) loadHostIntoData(ctx context.Context, hostID string, d *mailer.BookingData) error {
 	return h.db.QueryRowContext(ctx,
-		`SELECT name, email FROM users WHERE id = ?`, hostID).
-		Scan(&d.HostName, &d.HostEmail)
+		`SELECT name, email, COALESCE(iana_timezone, '') FROM users WHERE id = ?`, hostID).
+		Scan(&d.HostName, &d.HostEmail, &d.HostTimezone)
+}
+
+// hostTimezone is a user's stored IANA zone, or "" if it cannot be read (the mailer then
+// falls back to the attendee's zone).
+func (h *Handler) hostTimezone(ctx context.Context, userID string) string {
+	var tz string
+	_ = h.db.QueryRowContext(ctx, `SELECT COALESCE(iana_timezone, '') FROM users WHERE id = ?`, userID).Scan(&tz)
+	return tz
 }
 
 // loadCancellationData assembles all fields needed for cancellation emails.

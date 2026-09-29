@@ -88,6 +88,7 @@ var htmlConfirmHost = content(`{{define "content"}}
 <tr>` + labelTD + `Event</td><td style="padding:5px 0;font-weight:500;vertical-align:top;">{{.EventTypeName}}</td></tr>
 <tr>` + labelTD + `With</td>` + valueTD + `{{.OrganizerName}} &lt;{{.OrganizerEmail}}&gt;</td></tr>
 <tr>` + labelTD + `When</td>` + valueTD + `{{.WhenFmt}}</td></tr>
+<tr>` + labelTD + `Timezone</td>` + valueTD + `{{.ZoneName}}</td></tr>
 {{if .LocationValue}}<tr>` + labelTD + `Location</td><td style="padding:5px 0;vertical-align:top;word-break:break-word;">{{.LocationValue}}</td></tr>{{end}}
 {{template "cardClose" .}}
 {{template "ref" .}}
@@ -113,6 +114,7 @@ var htmlCancelHost = content(`{{define "content"}}
 <tr>` + labelTD + `Event</td><td style="padding:5px 0;font-weight:500;vertical-align:top;">{{.EventTypeName}}</td></tr>
 <tr>` + labelTD + `With</td>` + valueTD + `{{.OrganizerName}} &lt;{{.OrganizerEmail}}&gt;</td></tr>
 <tr>` + labelTD + `When</td>` + valueTD + `{{.WhenFmt}}</td></tr>
+<tr>` + labelTD + `Timezone</td>` + valueTD + `{{.ZoneName}}</td></tr>
 {{if .CancellationReason}}<tr>` + labelTD + `Reason</td>` + valueTD + `{{.CancellationReason}}</td></tr>{{end}}
 {{template "cardClose" .}}
 {{template "ref" .}}
@@ -142,6 +144,7 @@ var htmlRescheduleHost = content(`{{define "content"}}
 <tr>` + labelTD + `With</td>` + valueTD + `{{.OrganizerName}} &lt;{{.OrganizerEmail}}&gt;</td></tr>
 <tr><td style="color:#a1a1aa;padding:5px 0;width:84px;vertical-align:top;text-decoration:line-through;">Was</td><td style="padding:5px 0;vertical-align:top;color:#a1a1aa;text-decoration:line-through;">{{.PreviousStartFmt}}</td></tr>
 <tr>` + labelTD + `Now</td><td style="padding:5px 0;font-weight:500;vertical-align:top;">{{.WhenFmt}}</td></tr>
+<tr>` + labelTD + `Timezone</td>` + valueTD + `{{.ZoneName}}</td></tr>
 {{if .LocationValue}}<tr>` + labelTD + `Location</td><td style="padding:5px 0;vertical-align:top;word-break:break-word;">{{.LocationValue}}</td></tr>{{end}}
 {{template "cardClose" .}}
 {{template "ref" .}}

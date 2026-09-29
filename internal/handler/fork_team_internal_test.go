@@ -10,6 +10,7 @@ import (
 
 	"github.com/calnode/calnode/internal/booking"
 	"github.com/calnode/calnode/internal/db"
+	"github.com/calnode/calnode/internal/slots"
 	"github.com/calnode/calnode/internal/webhook"
 )
 
@@ -201,8 +202,10 @@ func TestTeamRuleOpens(t *testing.T) {
 	}
 }
 
-// teamRuleFits aligns the first start in UTC the way slots.hostsByStart does, so a
-// half-hour zone with an hourly interval loses a one-hour window that looks full.
+// teamRuleFits answers exactly what slots.Generate does for the rule's next occurrence.
+// The engine anchors starts at the window's start (it used to use the Unix epoch, under
+// which a half-hour zone with an hourly interval lost a one-hour window that looked
+// full, and 09:05-09:35 lost its only 30-minute slot), so both now count those windows.
 func TestTeamRuleFits_alignsLikeTheSlotEngine(t *testing.T) {
 	kolkata, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {
@@ -218,14 +221,38 @@ func TestTeamRuleFits_alignsLikeTheSlotEngine(t *testing.T) {
 	}{
 		{time.UTC, "09:00", "10:00", hour, true},
 		{time.UTC, "09:00", "09:59", hour, false},
-		{kolkata, "09:00", "10:00", hour, false}, // 03:30-04:30 UTC: first aligned start 04:00
+		{kolkata, "09:00", "10:00", hour, true}, // 09:00 IST itself (epoch grid: 09:30, lost)
 		{kolkata, "09:00", "10:30", hour, true},
-		{time.UTC, "09:05", "09:35", teamSlotShape{dur: 30 * time.Minute, interval: 30 * time.Minute}, false},
+		{time.UTC, "09:05", "09:35", teamSlotShape{dur: 30 * time.Minute, interval: 30 * time.Minute}, true},
+		{time.UTC, "09:05", "09:34", teamSlotShape{dur: 30 * time.Minute, interval: 30 * time.Minute}, false},
 		{time.UTC, "09:05", "09:35", teamSlotShape{dur: 30 * time.Minute, interval: 5 * time.Minute}, true},
+		{kolkata, "09:00", "10:09", teamSlotShape{dur: 70 * time.Minute, interval: 45 * time.Minute}, false},
 	} {
 		r := teamRule{dow: 1, start: c.start, end: c.end}
-		if got := teamRuleFits(c.loc, r, c.shape, now); got != c.want {
+		got := teamRuleFits(c.loc, r, c.shape, now)
+		if got != c.want {
 			t.Errorf("%s %s-%s %v: fits = %v; want %v", c.loc, c.start, c.end, c.shape, got, c.want)
+		}
+		// In step with the engine: the next Monday, one host, this rule only.
+		day := now.UTC().Truncate(24 * time.Hour)
+		for day.Weekday() != time.Monday {
+			day = day.AddDate(0, 0, 1)
+		}
+		out, err := slots.Generate(slots.Request{
+			Event: slots.EventConfig{
+				DurationMinutes:     int(c.shape.dur / time.Minute),
+				SlotIntervalMinutes: int(c.shape.interval / time.Minute),
+				RoutingMode:         "fixed",
+			},
+			Hosts: []slots.HostAvailability{{HostID: "h", Location: c.loc,
+				Rules: []slots.AvailabilityRule{{DayOfWeek: time.Monday, StartTime: c.start, EndTime: c.end}}}},
+			DateFrom: day, DateTo: day, BookerTZ: time.UTC, Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if engine := len(out) > 0; engine != got {
+			t.Errorf("%s %s-%s %v: teamRuleFits = %v but the engine offers %d slot(s)", c.loc, c.start, c.end, c.shape, got, len(out))
 		}
 	}
 }

@@ -58,9 +58,12 @@ var (
 // GetSlots handles GET /v1/event-types/{slug}/slots
 // Query params:
 //
-//	from=YYYY-MM-DD  (default: today)
-//	to=YYYY-MM-DD    (default: today + max_future_days)
+//	from=YYYY-MM-DD  (default: today in tz)
+//	to=YYYY-MM-DD    (default: today in tz + max_future_days)
 //	tz=IANA/Zone     (default: UTC)
+//
+// from and to are calendar days in tz - the visitor's days, which is what every booking
+// surface groups the answer by - not the host's (see computeSlots).
 func (h *Handler) GetSlots(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	tzName := r.URL.Query().Get("tz")
@@ -175,10 +178,19 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 	}
 
 	now := time.Now().UTC()
-	dateFrom, dateTo, ok := parseDateRangeStr(fromStr, toStr, now, et.MaxFutureDays)
+	dateFrom, dateTo, ok := parseDateRangeStrIn(fromStr, toStr, now, et.MaxFutureDays, bookerTZ)
 	if !ok {
 		return slotsResult{}, errBadDateRange
 	}
+	// from/to are the BOOKER's days (in tzName), but the engine walks HOST days. The host
+	// day before from and the one after to can hold starts that land inside the booker's
+	// range (a Lima 20:30 on Sep 30 is 03:30 on Oct 1 in Madrid; a Lima 09:00 on Oct 1 is
+	// Sep 30 in Honolulu), so generate over one extra host day on each side and keep only
+	// the starts whose booker-local day is in [from, to] (keepBookerDays). Without this
+	// a month view lost its first/last visitor day and a single-day fetch leaked the next
+	// visitor day's starts into the picked day. One day each side is enough while the two
+	// zones are less than 24 h apart, which is every pair but the +14/-12 extremes.
+	hostFrom, hostTo := dateFrom.AddDate(0, 0, -1), dateTo.AddDate(0, 0, 1)
 
 	// Resolve the host pool for this event type by routing mode. Round-robin
 	// offers a slot if any rotation host is free; fixed/collective gate on the
@@ -224,7 +236,7 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 		wg.Add(1)
 		go func(i int, ph poolHost) {
 			defer wg.Done()
-			ha, degraded, err := h.hostAvailability(ctx, ph.id, et.ID, dateFrom, dateTo)
+			ha, degraded, err := h.hostAvailability(ctx, ph.id, et.ID, hostFrom, hostTo)
 			if err != nil {
 				errsByHost[i] = err
 				return
@@ -256,8 +268,8 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 			RoutingMode:         et.RoutingMode,
 		},
 		Hosts:    hostAvails,
-		DateFrom: dateFrom,
-		DateTo:   dateTo,
+		DateFrom: hostFrom,
+		DateTo:   hostTo,
 		BookerTZ: bookerTZ,
 		Now:      now,
 	}
@@ -270,6 +282,9 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 	if err != nil {
 		return slotsResult{}, fmt.Errorf("slots generate: %w", err)
 	}
+	result.Free = keepBookerDays(result.Free, bookerTZ, dateFrom, dateTo)
+	result.Taken = keepBookerDays(result.Taken, bookerTZ, dateFrom, dateTo)
+	result.NoticeGap = keepBookerDays(result.NoticeGap, bookerTZ, dateFrom, dateTo)
 
 	// Host metadata (name + avatar) for the candidate pool, so the booking page can
 	// show whose face goes with each slot's host_ids (round-robin: the priority pick;
@@ -290,6 +305,21 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 		res.MinNoticeDates = noticeDates(result.NoticeGap)
 	}
 	return res, nil
+}
+
+// keepBookerDays keeps the slots whose start falls on a calendar day in [from, to] as seen
+// in loc (the booker's zone). from and to are UTC midnights naming those days. It filters
+// in place: the slices are the engine's own, fresh per call.
+func keepBookerDays(in []slots.Slot, loc *time.Location, from, to time.Time) []slots.Slot {
+	out := in[:0]
+	for _, s := range in {
+		y, m, d := s.Start.In(loc).Date()
+		day := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		if !day.Before(from) && !day.After(to) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // noticeDates reduces the starts the minimum-notice rule withheld to the distinct days
@@ -323,12 +353,19 @@ func toSlotJSON(in []slots.Slot) []slotJSON {
 	out := make([]slotJSON, len(in))
 	for i, s := range in {
 		out[i] = slotJSON{
-			Start:   s.Start.Format(time.RFC3339),
-			End:     s.End.Format(time.RFC3339),
+			Start:   slotWireTime(s.Start, s.Start.Location()),
+			End:     slotWireTime(s.End, s.End.Location()),
 			HostIDs: s.HostIDs,
 		}
 	}
 	return out
+}
+
+// slotWireTime is the one wire form of a slot instant: RFC3339 with whole seconds, in loc
+// (the booker's zone). manage.html's CurrentStartISO uses it too, so the booking being
+// rescheduled and the slot it occupies are written the same way.
+func slotWireTime(t time.Time, loc *time.Location) string {
+	return t.In(loc).Format(time.RFC3339)
 }
 
 // hostDisplayMap returns id → {name, avatar_url} for the given users, for rendering
@@ -438,14 +475,19 @@ func (h *Handler) hostAvailability(ctx context.Context, userID, eventTypeID stri
 		return slots.HostAvailability{}, false, err
 	}
 
-	// Widen the busy window by a day on each side. Slots are generated for
-	// host-local days, but bookings are stored in UTC — a morning slot for a
-	// positive-UTC-offset host (e.g. NZ) maps to the *previous* UTC day, so a
-	// tight [dateFrom, dateTo] UTC window would miss the booking that blocks it
-	// and the slot would be wrongly offered (then 409 at booking time).
-	// Over-fetching is harmless: the engine only subtracts busy that overlaps.
-	busyFrom := dateFrom.Add(-24 * time.Hour).Format(time.RFC3339)
-	busyTo := dateTo.Add(48 * time.Hour).Format(time.RFC3339)
+	// One busy window for every source (DB bookings, our own calendar events and the
+	// external free/busy), covering the host-local days the engine walks plus a day of
+	// margin each side (buffers reach past a day's edge). dateFrom/dateTo name host days
+	// as UTC midnights, but the engine resolves each one in hostLoc, so the window must
+	// be built in hostLoc too: the external check used to ask for [dateFrom, dateTo+1)
+	// in UTC, which for a Lima host stopped at 19:00 on the last day and offered evening
+	// slots over real Google busy time (then 409 at booking). Over-fetching is harmless:
+	// the engine only subtracts busy that overlaps.
+	windowFrom, windowTo := hostBusyWindow(hostLoc, dateFrom, dateTo)
+	// Bookings are stored as UTC RFC3339 strings and compared as strings, so the bounds
+	// must be formatted in UTC as well.
+	busyFrom := windowFrom.UTC().Format(time.RFC3339)
+	busyTo := windowTo.UTC().Format(time.RFC3339)
 	// Count every booking this host attends (primary OR a Group/fixed-host seat) as
 	// busy — join booking_hosts rather than matching bookings.host_id, so a host on
 	// a multi-host call isn't offered an overlapping slot on another event.
@@ -495,7 +537,7 @@ func (h *Handler) hostAvailability(ctx context.Context, userID, eventTypeID stri
 	// and rejects these slots at commit time).
 	degraded := false
 	if gc := h.getCal(); gc != nil {
-		if gcalBusy, err := gc.FreeBusy(ctx, userID, dateFrom, dateTo.Add(24*time.Hour)); err != nil {
+		if gcalBusy, err := gc.FreeBusy(ctx, userID, windowFrom, windowTo); err != nil {
 			h.logger.ErrorContext(ctx, "slots: gcal freebusy", "error", err, "host", userID)
 			degraded = true
 		} else {
@@ -504,6 +546,15 @@ func (h *Handler) hostAvailability(ctx context.Context, userID, eventTypeID stri
 	}
 
 	return slots.HostAvailability{HostID: userID, Location: hostLoc, Rules: rules, Overrides: overrides, Busy: busy}, degraded, nil
+}
+
+// hostBusyWindow is the instant range hostAvailability loads busy time over: from the
+// start of host day dateFrom to the end of host day dateTo, both in hostLoc, widened by a
+// day on each side. dateFrom/dateTo are UTC midnights naming the days (only Y/M/D count).
+func hostBusyWindow(hostLoc *time.Location, dateFrom, dateTo time.Time) (time.Time, time.Time) {
+	start := time.Date(dateFrom.Year(), dateFrom.Month(), dateFrom.Day(), 0, 0, 0, 0, hostLoc)
+	end := time.Date(dateTo.Year(), dateTo.Month(), dateTo.Day()+1, 0, 0, 0, 0, hostLoc)
+	return start.Add(-24 * time.Hour).UTC(), end.Add(24 * time.Hour).UTC()
 }
 
 func (h *Handler) ownCalendarEvents(ctx context.Context, userID, from, to string) ([]slots.Interval, error) {
@@ -537,7 +588,15 @@ func (h *Handler) ownCalendarEvents(ctx context.Context, userID, from, to string
 // maxFutureDays=0 is treated as 365 (no configured limit). The resolved
 // cap is always enforced on the to= param to prevent CPU-DoS via far-future dates.
 func parseDateRangeStr(fromStr, toStr string, now time.Time, maxFutureDays int) (time.Time, time.Time, bool) {
-	today := now.UTC().Truncate(24 * time.Hour)
+	return parseDateRangeStrIn(fromStr, toStr, now, maxFutureDays, time.UTC)
+}
+
+// parseDateRangeStrIn is parseDateRangeStr with "today" (the default from, and the base
+// of the cap) taken as the calendar day of now in loc - the zone the days are named in.
+// The results still name days as UTC midnights.
+func parseDateRangeStrIn(fromStr, toStr string, now time.Time, maxFutureDays int, loc *time.Location) (time.Time, time.Time, bool) {
+	y, m, d := now.In(loc).Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 
 	// Mirror generate.go: 0 means "no configured limit"; use 365 as the cap.
 	effectiveMax := maxFutureDays

@@ -240,38 +240,42 @@ func TestResolveDay_overrideDoesNotMatchOtherDate(t *testing.T) {
 	}
 }
 
-// ─── alignUp ────────────────────────────────────────────────────────────────
+// ─── alignFrom ──────────────────────────────────────────────────────────────
+// These anchor at a midnight, which is where the old epoch grid sat for any interval
+// dividing a day; the anchor-specific behaviour is in align_anchor_test.go.
 
-func TestAlignUp_alreadyAligned(t *testing.T) {
-	// 09:00:00 UTC is exactly on a 30-min boundary (since epoch).
+var midnight = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func TestAlignFrom_alreadyAligned(t *testing.T) {
+	// 09:00:00 is exactly on a 30-min boundary from midnight.
 	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	got := alignUp(base, 30*time.Minute)
+	got := alignFrom(midnight, base, 30*time.Minute)
 	if !got.Equal(base) {
 		t.Errorf("got %v; want %v", got, base)
 	}
 }
 
-func TestAlignUp_roundsUp(t *testing.T) {
+func TestAlignFrom_roundsUp(t *testing.T) {
 	base := time.Date(2026, 1, 1, 9, 5, 0, 0, time.UTC) // 09:05
-	got := alignUp(base, 30*time.Minute)
+	got := alignFrom(midnight, base, 30*time.Minute)
 	want := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 	if !got.Equal(want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 }
 
-func TestAlignUp_15minInterval(t *testing.T) {
+func TestAlignFrom_15minInterval(t *testing.T) {
 	base := time.Date(2026, 1, 1, 9, 7, 0, 0, time.UTC)
-	got := alignUp(base, 15*time.Minute)
+	got := alignFrom(midnight, base, 15*time.Minute)
 	want := time.Date(2026, 1, 1, 9, 15, 0, 0, time.UTC)
 	if !got.Equal(want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 }
 
-func TestAlignUp_hourInterval(t *testing.T) {
+func TestAlignFrom_hourInterval(t *testing.T) {
 	base := time.Date(2026, 1, 1, 9, 1, 0, 0, time.UTC)
-	got := alignUp(base, 60*time.Minute)
+	got := alignFrom(midnight, base, 60*time.Minute)
 	want := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	if !got.Equal(want) {
 		t.Errorf("got %v; want %v", got, want)

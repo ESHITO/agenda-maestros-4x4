@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
@@ -14,14 +15,18 @@ import (
 
 // BookingData carries all the information needed to render booking emails.
 type BookingData struct {
-	BookingID          string
-	EventTypeName      string
-	EventTypeSlug      string
-	HostName           string
-	HostEmail          string
-	OrganizerName      string
-	OrganizerEmail     string
-	OrganizerTimezone  string
+	BookingID         string
+	EventTypeName     string
+	EventTypeSlug     string
+	HostName          string
+	HostEmail         string
+	OrganizerName     string
+	OrganizerEmail    string
+	OrganizerTimezone string
+	// HostTimezone is the IANA zone of the host this data is for (users.iana_timezone):
+	// the zone every host-facing email renders its times in, and the fallback for
+	// attendee-facing ones when OrganizerTimezone is unknown (see zone).
+	HostTimezone       string
 	StartAt            time.Time // UTC (new time for reschedule emails)
 	EndAt              time.Time
 	PreviousStartAt    time.Time // non-zero only for reschedule emails
@@ -59,7 +64,55 @@ type BookingData struct {
 	// attendee-facing only, same "public-facing" scope as book.html/manage.html/embed.js;
 	// host is the operator, out of scope (see internal-docs/i18n-plan.md).
 	Locale *i18n.Locale
+
+	// forHost is set by the Send*ToHost functions on their copy: the times are for the
+	// host, so they render in HostTimezone (see zone).
+	forHost bool
 }
+
+// zone is the location every time in this email is rendered in.
+//
+// Host-facing emails use the host's own zone: a Lima mentor reads "8:30 p. m." for their
+// 20:30 session whatever zone the client booked from (they used to get the client's
+// "3:30 AM CEST", the wrong day at a glance). A host zone that cannot be loaded falls back
+// to the attendee rule below rather than to UTC.
+//
+// Attendee-facing emails use the attendee's stored zone, with the same rule as the
+// WhatsApp texts (webhook.AttendeeZone, mirrored by attendeeZone): a stored "UTC", ""
+// or an unloadable name means "unknown" and falls back to the host's zone, so one client
+// never gets two different times for one booking.
+func (d BookingData) zone() *time.Location {
+	if d.forHost {
+		if name := strings.TrimSpace(d.HostTimezone); name != "" && name != "Local" {
+			if loc, err := time.LoadLocation(name); err == nil {
+				return loc
+			}
+		}
+	}
+	return attendeeZone(d.OrganizerTimezone, d.HostTimezone)
+}
+
+// attendeeZone mirrors webhook.AttendeeZone (the mailer cannot import webhook): the
+// attendee's zone, else the host's, else UTC, where "", "UTC" and "Etc/UTC" count as
+// missing because booking_attendees.iana_timezone defaults to 'UTC' when the booker sent
+// no zone. TestAttendeeZoneMatchesWebhook keeps the two in step.
+func attendeeZone(attendeeTZ, hostTZ string) *time.Location {
+	for _, name := range []string{attendeeTZ, hostTZ} {
+		name = strings.TrimSpace(name)
+		if name == "" || name == "UTC" || name == "Etc/UTC" {
+			continue
+		}
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+	}
+	return time.UTC
+}
+
+// ZoneName is the IANA name of the zone the email's times are in ("America/Lima"), for
+// the explicit zone line in host emails: the "MST"-style abbreviation alone is "-05" for
+// Lima, which says nothing to a reader.
+func (d BookingData) ZoneName() string { return d.zone().String() }
 
 // locale returns d.Locale, or English if unset.
 func (d BookingData) locale() *i18n.Locale {
@@ -122,29 +175,26 @@ func (d BookingData) BannerOpacityCSS() string {
 // "lun 22 jun 2026, 9:00 p. m. – 9:20 p. m. NZST" (Spanish: this fork's 12-hour override,
 // internal/i18n/fork_clock.go; with CLOCK_12H=false it is CLDR's 24h "21:00 – 21:20").
 func (d BookingData) WhenFmt() string {
-	tzLoc, err := time.LoadLocation(d.OrganizerTimezone)
-	if err != nil {
-		tzLoc = time.UTC
-	}
+	tzLoc := d.zone()
 	l := d.locale()
 	start, end := d.StartAt.In(tzLoc), d.EndAt.In(tzLoc)
 	return l.FormatDateTime(start) + " – " + l.FormatTimeOfDay(end) + " " + end.Format("MST")
 }
 
 // StartFmt returns StartAt formatted in the organizer's timezone and resolved locale.
-func (d BookingData) StartFmt() string { return inTZ(d.StartAt, d.OrganizerTimezone, d.locale()) }
+func (d BookingData) StartFmt() string { return inTZ(d.StartAt, d.zone(), d.locale()) }
 
 // EndFmt returns EndAt formatted in the organizer's timezone and resolved locale.
-func (d BookingData) EndFmt() string { return inTZ(d.EndAt, d.OrganizerTimezone, d.locale()) }
+func (d BookingData) EndFmt() string { return inTZ(d.EndAt, d.zone(), d.locale()) }
 
 // PreviousStartFmt returns PreviousStartAt formatted in the organizer's timezone and locale.
 func (d BookingData) PreviousStartFmt() string {
-	return inTZ(d.PreviousStartAt, d.OrganizerTimezone, d.locale())
+	return inTZ(d.PreviousStartAt, d.zone(), d.locale())
 }
 
 // PreviousEndFmt returns PreviousEndAt formatted in the organizer's timezone and locale.
 func (d BookingData) PreviousEndFmt() string {
-	return inTZ(d.PreviousEndAt, d.OrganizerTimezone, d.locale())
+	return inTZ(d.PreviousEndAt, d.zone(), d.locale())
 }
 
 // subjectOr returns the custom subject override when set, else the default.
@@ -155,11 +205,7 @@ func (d BookingData) subjectOr(def string) string {
 	return def
 }
 
-func inTZ(t time.Time, tz string, l *i18n.Locale) string {
-	tzLoc, err := time.LoadLocation(tz)
-	if err != nil {
-		tzLoc = time.UTC
-	}
+func inTZ(t time.Time, tzLoc *time.Location, l *i18n.Locale) string {
 	tt := t.In(tzLoc)
 	return l.FormatDateTime(tt) + " " + tt.Format("MST")
 }
@@ -226,7 +272,8 @@ func SendConfirmationToHost(ctx context.Context, m Mailer, d BookingData) error 
 		return nil
 	}
 	d.HideManageLink = true
-	d.Locale = nil // host emails stay English regardless of the attendee's locale — see BookingData.Locale
+	d.Locale = nil   // host emails stay English regardless of the attendee's locale — see BookingData.Locale
+	d.forHost = true // times in the host's own zone — see BookingData.zone
 	msg := Message{
 		To:      []string{d.HostEmail},
 		Subject: "New booking: " + d.EventTypeName + " with " + d.OrganizerName,
@@ -285,7 +332,8 @@ func SendCancellationToHost(ctx context.Context, m Mailer, d BookingData) error 
 		return nil
 	}
 	d.HideManageLink = true
-	d.Locale = nil // host emails stay English regardless of the attendee's locale — see BookingData.Locale
+	d.Locale = nil   // host emails stay English regardless of the attendee's locale — see BookingData.Locale
+	d.forHost = true // times in the host's own zone — see BookingData.zone
 	msg := Message{
 		To:      []string{d.HostEmail},
 		Subject: "Booking cancelled: " + d.EventTypeName + " with " + d.OrganizerName,
@@ -342,7 +390,8 @@ func SendRescheduleToHost(ctx context.Context, m Mailer, d BookingData) error {
 		return nil
 	}
 	d.HideManageLink = true
-	d.Locale = nil // host emails stay English regardless of the attendee's locale — see BookingData.Locale
+	d.Locale = nil   // host emails stay English regardless of the attendee's locale — see BookingData.Locale
+	d.forHost = true // times in the host's own zone — see BookingData.zone
 	msg := Message{
 		To:      []string{d.HostEmail},
 		Subject: "Booking rescheduled: " + d.EventTypeName + " with " + d.OrganizerName,
@@ -455,7 +504,8 @@ You have a new booking.
 Event:    {{.EventTypeName}}
 With:     {{.OrganizerName}} <{{.OrganizerEmail}}>
 Start:    {{.StartFmt}}
-End:      {{.EndFmt}}{{if .LocationValue}}
+End:      {{.EndFmt}}
+Timezone: {{.ZoneName}}{{if .LocationValue}}
 Location: {{.LocationValue}}{{end}}
 
 Booking reference: {{.BookingID}}
@@ -491,7 +541,8 @@ A booking has been cancelled.
 Event:    {{.EventTypeName}}
 With:     {{.OrganizerName}} <{{.OrganizerEmail}}>
 Start:    {{.StartFmt}}
-End:      {{.EndFmt}}{{if .CancellationReason}}
+End:      {{.EndFmt}}
+Timezone: {{.ZoneName}}{{if .CancellationReason}}
 Reason:   {{.CancellationReason}}{{end}}
 
 Booking reference: {{.BookingID}}
@@ -535,7 +586,8 @@ Event:    {{.EventTypeName}}
 With:     {{.OrganizerName}} <{{.OrganizerEmail}}>
 Was:      {{.PreviousStartFmt}}
 Now:      {{.StartFmt}}
-End:      {{.EndFmt}}{{if .LocationValue}}
+End:      {{.EndFmt}}
+Timezone: {{.ZoneName}}{{if .LocationValue}}
 Location: {{.LocationValue}}{{end}}
 
 Booking reference: {{.BookingID}}

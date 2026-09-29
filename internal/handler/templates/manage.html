@@ -334,7 +334,14 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   let TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || ORG_TZ || 'UTC';
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const maxDate = MAX_DAYS > 0 ? new Date(today.getTime() + MAX_DAYS * 86400000) : null;
+  // Calendar-day arithmetic (BookingLogic.maxBookableDate), so a summer-time change inside
+  // the window does not grey out its last day.
+  const maxDate = BookingLogic.maxBookableDate(today, MAX_DAYS);
+  // Only the newest month / day answer may touch the page: a slow answer for a month the
+  // visitor already left (or a zone they already changed) is dropped.
+  const monthReq = BookingLogic.latestOnly();
+  const dayReq = BookingLogic.latestOnly();
+  let pickerOpened = false;       // the reschedule calendar has been shown at least once
 
   let navYear = today.getFullYear(), navMonth = today.getMonth();
   let pickedDate = null, slotsCache = [], pickedSlot = null;
@@ -358,6 +365,11 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     const d = new Date(iso);
     return d.toLocaleDateString(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: TZ }) +
            ' · ' + fmtTime(iso);
+  }
+  // "sábado, 31 de octubre · 8:30 p. m." built from the slot's own instant in TZ (same day
+  // format as fmtDate), so the label can never name another day than the start_at sent.
+  function slotLabel(slot) {
+    return BookingLogic.formatDay(slot.start, TZ, 'long', LOCALE) + ' · ' + fmtTime(slot.start);
   }
   function toDateStr(y, m, d) { return `${y}-${pad(m+1)}-${pad(d)}`; }
 
@@ -386,9 +398,11 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   const DOW_LABELS = BookingLogic.dowLabels(LOCALE);
   function dowIndex(date) { return BookingLogic.dowIndex(date); } // 0 = Monday
 
+  // Returns true when this answer was applied, false when a newer request superseded it.
   async function loadMonthAvailability(y, m) {
     // Render immediately, treating every in-window day as available, so the
     // calendar paints without waiting on the slots fetch; refine once it returns.
+    const token = monthReq.start();
     availabilityLoaded = false;
     renderCal();
     const from = toDateStr(y, m, 1);
@@ -398,14 +412,11 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       const r = await fetch(`/v1/event-types/${SLUG}/slots?from=${from}&to=${to}&tz=${encodeURIComponent(TZ)}`);
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
+      if (!monthReq.isCurrent(token)) return false;
       // Cache the month's slots grouped by the SELECTED-timezone day (BookingLogic — tested,
-      // tz-correct), excluding the current booking's slot; availableDates = the keys.
-      const freeByDay  = BookingLogic.groupSlotsByDay(data.slots, TZ, CURRENT_ISO);
-      const takenByDay = BookingLogic.groupSlotsByDay(data.taken || [], TZ, CURRENT_ISO);
-      slotsByDay = {};
-      Object.keys(freeByDay).concat(Object.keys(takenByDay)).forEach(k => {
-        slotsByDay[k] = BookingLogic.mergeDaySlots(freeByDay[k], takenByDay[k]);
-      });
+      // tz-correct), excluding the current booking's slot (compared as an instant: it comes
+      // in UTC, /slots answers in TZ); availableDates = the keys.
+      slotsByDay = BookingLogic.slotsByDayFromResponse(data, TZ, CURRENT_ISO);
       // A day worth opening is not the same as a day with something bookable: when the
       // event type shows taken times, a fully booked day is still worth opening so the
       // struck-through list explains itself. Identical sets when it does not.
@@ -416,6 +427,7 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       noticeDates = new Set((data.min_notice && data.min_notice.dates) || []);
       if (data.degraded) slotsDegraded = true;
     } catch {
+      if (!monthReq.isCurrent(token)) return false;
       slotsByDay = {};
       availableDates = new Set();
       noticeDates = new Set();
@@ -423,6 +435,7 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     availabilityLoaded = true;
     renderCal(); // grey out days that came back with no slots
     renderPickDayHint();
+    return true;
   }
 
   function renderCal() {
@@ -573,7 +586,15 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     $('cal-tip').classList.add('hidden'); // a day is chosen: the prompt under the card stands down
     setRStep('slots'); // mobile: advance from the calendar to the times
     $('slots-date').textContent = fmtDate(pickedDate);
+    await loadDay(ds);
+  }
+
+  // loadDay — fills slotsCache and the list with day `ds` in TZ, from the month cache or a
+  // one-day fetch. Leaves pickedSlot alone, so a zone change can relabel the list behind
+  // the confirm view.
+  async function loadDay(ds) {
     const list = $('slots-list');
+    const token = dayReq.start(); // supersedes a one-day fetch still in flight for another day
 
     // Instant: the month fetch already cached this day's slots.
     if (slotsByDay[ds]) {
@@ -587,15 +608,27 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       const r = await fetch(`/v1/event-types/${SLUG}/slots?from=${ds}&to=${ds}&tz=${encodeURIComponent(TZ)}`);
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
+      if (!dayReq.isCurrent(token)) return;
       ((data.min_notice && data.min_notice.dates) || []).forEach(k => noticeDates.add(k));
       if (data.degraded) slotsDegraded = true;
-      slotsCache = BookingLogic.mergeDaySlots(
-        (data.slots || []).filter(s => s.start !== CURRENT_ISO),
-        (data.taken || []).filter(s => s.start !== CURRENT_ISO));
+      // Only the times that start on `ds` in TZ (the answer can reach into the next day),
+      // without the current booking's own time.
+      slotsCache = BookingLogic.daySlotsFromResponse(data, TZ, ds, CURRENT_ISO);
       fillSlots(list, ds);
     } catch {
+      if (!dayReq.isCurrent(token)) return;
       list.innerHTML = `<p class="form-error">${t('could_not_load_times')}</p>`;
     }
+  }
+
+  // An error shown at the top of the times list. Cleared by the next fillSlots.
+  function showSlotsError(msg) {
+    const p = document.createElement('p');
+    p.className = 'form-error';
+    p.setAttribute('role', 'alert');
+    p.textContent = msg;
+    const list = $('slots-list');
+    list.insertBefore(p, list.firstChild);
   }
 
   $('slots-list').addEventListener('click', e => {
@@ -606,13 +639,14 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     if (slotsCache[i].taken) return; // never bookable, whatever route got us here
     pickedSlot = slotsCache[i];
     $('prev-time').textContent = fmtDatetime(CURRENT_ISO);
-    $('new-time').textContent = fmtDate(pickedDate) + ' · ' + fmtTime(pickedSlot.start);
+    $('new-time').textContent = slotLabel(pickedSlot);
     $('reschedule-error').textContent = '';
     showView('confirm-reschedule-view');
   });
 
   // ── Navigation ──────────────────────────────────────────────────────────────
   $('reschedule-btn').addEventListener('click', () => {
+    pickerOpened = true;
     showView('reschedule-view');
     setRStep('cal'); // mobile: start on the calendar step
     if (!pickedDate) {
@@ -653,15 +687,22 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
         body: JSON.stringify({ start_at: pickedSlot.start }),
       });
       if (r.status === 409) {
-        errEl.textContent = t('slot_no_longer_available_error');
-        btn.disabled = false; btn.textContent = t('confirm_reschedule'); return;
+        // The time went meanwhile. Back to this day's times, fetched again (the cached
+        // list still offers the taken time), with the message shown there.
+        btn.disabled = false; btn.textContent = t('confirm_reschedule');
+        const ds = toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+        delete slotsByDay[ds];
+        showView('reschedule-view');
+        await pickDate(ds, pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+        showSlotsError(t('slot_no_longer_available_error'));
+        return;
       }
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         errEl.textContent = data.error || t('reschedule_failed_error');
         btn.disabled = false; btn.textContent = t('confirm_reschedule'); return;
       }
-      $('success-new-time').textContent = fmtDate(pickedDate) + ' · ' + fmtTime(pickedSlot.start);
+      $('success-new-time').textContent = slotLabel(pickedSlot);
       showView('success-reschedule-view');
       if (window.__CALNODE_DL && typeof calnodePush === 'function') {
         calnodePush('calnode_booking_rescheduled', {
@@ -746,7 +787,9 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   }
   function populateTzSelect() {
     const sel = $('tz-select'); if (!sel) return;
-    const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [TZ];
+    // The detected zone is added when the list lacks it (an alias such as
+    // America/Argentina/Buenos_Aires), so an option always matches TZ and is selected.
+    const zones = BookingLogic.zoneOptions(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [], TZ);
     const groups = {};
     zones.forEach(tz => { const region = tz.includes('/') ? tz.split('/')[0] : 'Other'; (groups[region] = groups[region] || []).push(tz); });
     Object.keys(groups).sort().forEach(region => {
@@ -768,15 +811,25 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       resizeTzSelect();
       $('current-time').textContent = fmtDatetime(CURRENT_ISO);
       if (pickedSlot) {
+        // The picked instant stays; its day may not (Lima Sat 31 Oct 8:30 p. m. is Madrid
+        // Sun 1 Nov 2:30 a. m.). Move the picked day, and the month shown, to where it
+        // falls in the new zone, and relabel from the instant.
+        const p = BookingLogic.slotDay(pickedSlot.start, TZ);
+        pickedDate = new Date(p.y, p.m, p.d);
+        navYear = p.y; navMonth = p.m;
         $('prev-time').textContent = fmtDatetime(CURRENT_ISO);
-        $('new-time').textContent = fmtDate(pickedDate) + ' · ' + fmtTime(pickedSlot.start);
+        $('new-time').textContent = slotLabel(pickedSlot);
       }
-      // If the picker is open, rebuild the day cache for the new tz, then re-render.
-      if (!$('reschedule-view').classList.contains('hidden')) {
+      // Once the picker has been opened, regroup whatever view is showing: the list behind
+      // the confirm view must not keep the old zone's labels. The cached days are keyed in
+      // the old zone, so they go first (loadDay falls back to a one-day fetch meanwhile).
+      if (pickerOpened) {
+        slotsByDay = {};
         await loadMonthAvailability(navYear, navMonth);
         if (pickedDate) {
           const ds = toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
-          pickDate(ds, pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+          $('slots-date').textContent = fmtDate(pickedDate);
+          await loadDay(ds);
         }
       }
     });

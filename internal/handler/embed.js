@@ -481,7 +481,7 @@
       this.root.appendChild(el('style', { text: STYLE }));
       this.wrap = el('div', { class: 'wrap' });
       this.root.appendChild(this.wrap);
-      this.state = { month: startOfMonth(new Date()), slotsByDay: {}, noticeDates: [], degraded: false, day: null, view: 'pick', slot: null };
+      this.state = { month: startOfMonth(new Date()), slotsByDay: {}, noticeDates: [], degraded: false, day: null, view: 'pick', slot: null, slotError: '' };
       this.narrow = false;
       this.cw = 9999;
       this.descExpanded = false;
@@ -540,12 +540,18 @@
       }
     }
 
+    // Returns true when this answer was applied, false when a newer loadMonth superseded it.
+    // The request counter mirrors BookingLogic.latestOnly (booking-logic.js, not loaded
+    // here): a slow answer for a month the visitor already left must not replace the one
+    // on screen.
     async loadMonth() {
+      var token = this._monthReq = (this._monthReq || 0) + 1;
       var first = this.state.month, last = endOfMonth(first);
       var today = new Date(); today.setHours(0, 0, 0, 0);
       var from = first < today ? today : first;
       try {
         var r = await api('/v1/event-types/' + encodeURIComponent(this.slug) + '/slots?from=' + ymd(from) + '&to=' + ymd(last) + '&tz=' + encodeURIComponent(TZ));
+        if (token !== this._monthReq) return false;
         // `taken` is present only when the event type opts into showing booked times.
         // Tag on the way in so the renderer needs no second lookup, and so a taken entry
         // can never be mistaken for a bookable one further down.
@@ -575,7 +581,11 @@
           var m = r.hosts[id] || {}, av = m.avatar_url || '';
           hm[id] = { name: m.name || '', avatar_url: av && av.charAt(0) === '/' ? BASE + av : av };
         });
-      } catch (e) { this.state.slotsByDay = {}; this.state.noticeDates = []; }
+      } catch (e) {
+        if (token !== this._monthReq) return false;
+        this.state.slotsByDay = {}; this.state.noticeDates = [];
+      }
+      return true;
     }
 
     infoPane() {
@@ -756,7 +766,7 @@
         var cls = 'cd' + (has ? ' available' : '') + (st.day === key ? ' sel' : '') + (key === todayKey ? ' today' : '');
         var btn = el('button', { class: cls, text: String(d) });
         if (!has) btn.disabled = true;
-        else btn.addEventListener('click', (function (k) { return function () { self.state.day = k; self.state.view = 'pick'; self.render(); }; })(key));
+        else btn.addEventListener('click', (function (k) { return function () { self.state.day = k; self.state.view = 'pick'; self.state.slotError = ''; self.render(); }; })(key));
         grid.appendChild(btn);
       }
       var prev = el('button', { type: 'button', 'aria-label': t(this.i18n, 'prev_month_aria'), html: SVG_PREV });
@@ -823,6 +833,8 @@
         // Every time of the day in one vertical list (Calendly-style), no
         // morning/afternoon/evening tabs. One tap on a time opens the form.
         var listEl = el('div', { class: 'slots-list' });
+        // The 409 message (slotTaken): the time went while the form was open.
+        if (st.slotError) listEl.appendChild(el('p', { class: 'form-error', role: 'alert', text: st.slotError }));
         list.forEach(function (s) {
           if (s.taken) {
             // Disabled rather than click-guarded: it keeps the same box as a bookable
@@ -838,7 +850,7 @@
             return;
           }
           var b = el('button', { type: 'button', class: 'slot-btn', text: timeLabel(s.start, self.locale, self.hour12) });
-          b.addEventListener('click', function () { self.state.slot = s; self.state.view = 'form'; self.render(); });
+          b.addEventListener('click', function () { self.state.slot = s; self.state.view = 'form'; self.state.slotError = ''; self.render(); });
           listEl.appendChild(b);
         });
         if (!list.length) {
@@ -1266,7 +1278,8 @@
           // 409 = the slot went while the form was open. Substitute our own translated
           // copy, matching book.html/manage.html — this is the most common booking
           // failure, and it used to surface the API's raw English message here.
-          if (res.status === 409) throw new Error(t(self.i18n, 'slot_taken_error'));
+          // It sends the visitor back to the day's refreshed times with the message there.
+          if (res.status === 409) { self.slotTaken(slot); return; }
           // Other failures: the API's message is translated server-side from the
           // "language" field sent above (booker-reachable errors only — malformed-request
           // messages stay English for API consumers), so showing it directly is correct.
@@ -1297,9 +1310,23 @@
 
     nav(delta) {
       this.state.month = addMonths(this.state.month, delta);
-      this.state.day = null; this.state.view = 'pick';
+      this.state.day = null; this.state.view = 'pick'; this.state.slotError = '';
       var self = this;
-      this.loadMonth().then(function () { self.render(); });
+      this.loadMonth().then(function (applied) { if (applied) self.render(); });
+    }
+
+    // slotTaken — the booking answered 409: the time went while the form was open. Back to
+    // the day's times with the message shown there (as book.html and manage.html do), the
+    // taken time dropped at once and the month fetched again for a fresh list.
+    slotTaken(slot) {
+      var self = this, st = this.state;
+      if (st.day && st.slotsByDay[st.day]) {
+        st.slotsByDay[st.day] = st.slotsByDay[st.day].filter(function (s) { return s.start !== slot.start; });
+      }
+      st.view = 'pick'; st.slot = null;
+      st.slotError = t(this.i18n, 'slot_taken_error');
+      this.render();
+      this.loadMonth().then(function (applied) { if (applied) self.render(); });
     }
 
     // applyStep toggles which panes show when narrow (step-flow). Wide = all visible.

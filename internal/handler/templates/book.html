@@ -335,7 +335,13 @@ body {
   let TZ         = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const maxDate = MAX_DAYS > 0 ? new Date(today.getTime() + MAX_DAYS * 86400000) : null;
+  // Calendar-day arithmetic (BookingLogic.maxBookableDate), so a summer-time change inside
+  // the window does not grey out its last day.
+  const maxDate = BookingLogic.maxBookableDate(today, MAX_DAYS);
+  // Only the newest month / day answer may touch the page: a slow answer for a month the
+  // visitor already left (or a zone they already changed) is dropped.
+  const monthReq = BookingLogic.latestOnly();
+  const dayReq = BookingLogic.latestOnly();
 
   let navYear = today.getFullYear(), navMonth = today.getMonth();
   let pickedDate = null, slotsCache = [], pickedSlot = null;
@@ -403,6 +409,11 @@ body {
   function fmtTime(iso) { return BookingLogic.formatTime(iso, TZ, LOCALE, HOUR12); }
   function fmtDate(d) {
     return d.toLocaleDateString(LOCALE, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  // "sáb, 31 oct · 8:30 p. m." built from the slot's own instant in TZ (same day format as
+  // fmtDate), so the label can never name another day than the start_at that is sent.
+  function slotLabel(slot) {
+    return `${BookingLogic.formatDay(slot.start, TZ, 'short', LOCALE)} · ${fmtTime(slot.start)}`;
   }
   function toDateStr(y, m, d) { return `${y}-${pad(m+1)}-${pad(d)}`; }
 
@@ -483,10 +494,12 @@ body {
 
   function dowIndex(date) { return BookingLogic.dowIndex(date); } // 0=Mon…6=Sun
 
+  // Returns true when this answer was applied, false when a newer request superseded it.
   async function loadMonthAvailability(y, m) {
     // Render immediately, treating every in-window day as available, so the
     // calendar paints without waiting on the (network-bound) slots fetch; refine
     // once it returns to grey out days that have no slots.
+    const token = monthReq.start();
     availabilityLoaded = false;
     renderCal();
     const from = toDateStr(y, m, 1);
@@ -496,17 +509,13 @@ body {
       const r = await fetch(`/v1/event-types/${SLUG}/slots?from=${from}&to=${to}&tz=${encodeURIComponent(TZ)}`);
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
+      if (!monthReq.isCurrent(token)) return false;
       Object.assign(hostMeta, data.hosts || {});
       // Cache the whole month's slots grouped by the SELECTED-timezone day (BookingLogic — tested,
       // and tz-correct: the old new Date().toLocaleDateString keyed off the browser tz) so clicking
       // a day is instant; availableDates falls out of the keys.
       // `taken` is present only when this event type opts into showing booked times.
-      const freeByDay  = BookingLogic.groupSlotsByDay(data.slots, TZ);
-      const takenByDay = BookingLogic.groupSlotsByDay(data.taken || [], TZ);
-      slotsByDay = {};
-      Object.keys(freeByDay).concat(Object.keys(takenByDay)).forEach(k => {
-        slotsByDay[k] = BookingLogic.mergeDaySlots(freeByDay[k], takenByDay[k]);
-      });
+      slotsByDay = BookingLogic.slotsByDayFromResponse(data, TZ);
       // Openable days, which is NOT the same as days with something bookable. A day
       // whose every slot is taken is worth opening when the event type shows them -
       // a list of struck-through times says "fully booked" far better than a dead
@@ -518,6 +527,7 @@ body {
       noticeDates = new Set((data.min_notice && data.min_notice.dates) || []);
       if (data.degraded) slotsDegraded = true;
     } catch {
+      if (!monthReq.isCurrent(token)) return false;
       slotsByDay = {};
       availableDates = new Set();
       noticeDates = new Set();
@@ -525,6 +535,7 @@ body {
     availabilityLoaded = true;
     renderCal();
     renderNoticeHint();
+    return true;
   }
 
   function renderCal() {
@@ -659,6 +670,7 @@ body {
     setStep('right');
     $('slots-date').textContent = fmtDate(pickedDate);
     const list = $('slots-list');
+    const token = dayReq.start(); // supersedes a one-day fetch still in flight for another day
 
     // Instant: the month fetch already cached this day's slots.
     if (slotsByDay[ds]) {
@@ -672,14 +684,23 @@ body {
       const r = await fetch(`/v1/event-types/${SLUG}/slots?from=${ds}&to=${ds}&tz=${encodeURIComponent(TZ)}`);
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
+      if (!dayReq.isCurrent(token)) return;
       Object.assign(hostMeta, data.hosts || {});
       ((data.min_notice && data.min_notice.dates) || []).forEach(k => noticeDates.add(k));
       if (data.degraded) slotsDegraded = true;
-      slotsCache = BookingLogic.mergeDaySlots(data.slots, data.taken);
+      // Only the times that start on `ds` in TZ: the answer can reach into the next day.
+      slotsCache = BookingLogic.daySlotsFromResponse(data, TZ, ds);
       fillSlots(list, ds);
     } catch {
+      if (!dayReq.isCurrent(token)) return;
       list.innerHTML = `<p class="hint" style="color:#dc2626">${t('could_not_load_times')}</p>`;
     }
+  }
+
+  // An error shown at the top of the times list (the form, where #form-error lives, is
+  // hidden by then). Cleared by the next fillSlots, which rewrites the list.
+  function showSlotsError(msg) {
+    $('slots-list').insertAdjacentHTML('afterbegin', `<p class="form-error" role="alert">${esc(msg)}</p>`);
   }
 
   // One tap on a time opens the form (pickSlot): no intermediate confirm step.
@@ -698,7 +719,7 @@ body {
     document.querySelectorAll('.slot-btn').forEach(b =>
       b.classList.toggle('sel', Number(b.dataset.i) === i)
     );
-    $('form-slot-label').textContent = `${fmtDate(pickedDate)} · ${fmtTime(pickedSlot.start)}`;
+    $('form-slot-label').textContent = slotLabel(pickedSlot);
     showView('form-view');
   }
 
@@ -1095,10 +1116,15 @@ body {
       });
 
       if (r.status === 409) {
-        errEl.textContent = t('slot_taken_error');
-        const ds = toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
-        await pickDate(ds, pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+        // The time went while the form was open. Back to this day's times, fetched again
+        // (the cached list still offers the taken time), with the message shown there:
+        // #form-error sits in the form, which pickDate hides.
+        errEl.textContent = '';
         btn.disabled = false; btn.textContent = t('confirm_booking');
+        const ds = toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+        delete slotsByDay[ds];
+        await pickDate(ds, pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+        showSlotsError(t('slot_taken_error'));
         return;
       }
 
@@ -1124,7 +1150,7 @@ body {
         renderHosts(booked.hosts.map(h => h.id));
       }
 
-      $('confirm-time').textContent = `${fmtDate(pickedDate)} · ${fmtTime(pickedSlot.start)}`;
+      $('confirm-time').textContent = slotLabel(pickedSlot);
       showView('confirm-view');
 
       if (window.__CALNODE_DL && typeof calnodePush === 'function') {
@@ -1178,7 +1204,9 @@ body {
 
   function populateTzSelect() {
     const sel = $('tz-select');
-    const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [TZ];
+    // The detected zone is added when the list lacks it (an alias such as
+    // America/Argentina/Buenos_Aires), so an option always matches TZ and is selected.
+    const zones = BookingLogic.zoneOptions(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [], TZ);
     const groups = {};
     zones.forEach(tz => {
       const region = tz.includes('/') ? tz.split('/')[0] : 'Other';
@@ -1202,6 +1230,9 @@ body {
   $('tz-select').addEventListener('change', async e => {
     TZ = e.target.value;
     resizeTzSelect();
+    // The cached days are keyed in the old zone: drop them, so nothing re-picks from them
+    // while the month for the new zone loads (pickDate falls back to a one-day fetch).
+    slotsByDay = {};
     await loadMonthAvailability(navYear, navMonth); // rebuild the day cache for the new tz
     if (pickedDate) {
       const ds = toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());

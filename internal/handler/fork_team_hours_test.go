@@ -167,8 +167,10 @@ func TestTeamHours_mentorHasAvailability(t *testing.T) {
 }
 
 // Review follow-up, kept per copy: a rule the slot engine cannot parse ("24:00": POST
-// accepts it, and resolveDay fails the whole slot request) and a rule too short or too
-// misaligned to hold one slot of the copy's duration never count as hours.
+// accepts it, and resolveDay fails the whole slot request) and a rule too short to hold
+// one slot of the copy's duration never count as hours. (A window starting off the hour
+// used to be "misaligned" too, when starts sat on an epoch grid; they are anchored at the
+// window's start now, so 09:05-09:35 holds its 09:05 slot and counts.)
 func TestTeamHours_rulesThatCannotHoldASlotDoNotCount(t *testing.T) {
 	f := newTeamFixture(t)
 	f.mustSettings(`{"soporte_template_id":"` + f.sID + `"}`)
@@ -191,13 +193,24 @@ func TestTeamHours_rulesThatCannotHoldASlotDoNotCount(t *testing.T) {
 		t.Error("after deleting the bad rule: no availability on adm's copy")
 	}
 
-	// Start over: short and misaligned windows on a 30-minute, 30-minute interval copy.
+	// Start over: short windows on a 30-minute, 30-minute interval copy.
 	mustExec(t, f.db, `DELETE FROM availability_rules WHERE user_id = 'adm'`)
 	f.addRule(admKey, `{"day_of_week":1,"start_time":"09:00","end_time":"09:05"}`)
-	f.addRule(admKey, `{"day_of_week":2,"start_time":"09:05","end_time":"09:35"}`)
+	offHour := f.addRule(admKey, `{"day_of_week":2,"start_time":"09:05","end_time":"09:30"}`)
 	if f.hasAvailability("adm") {
-		t.Error("09:00-09:05 and 09:05-09:35 rules: has_availability = true")
+		t.Error("09:00-09:05 and 09:05-09:30 rules: has_availability = true")
 	}
+	// Off the hour but long enough: the engine offers 09:05, so it counts (in step with
+	// the slot engine's window-anchored starts).
+	f.deleteRule(admKey, offHour)
+	offHour = f.addRule(admKey, `{"day_of_week":2,"start_time":"09:05","end_time":"09:35"}`)
+	if !f.hasAvailability("adm") {
+		t.Error("09:05-09:35 rule: has_availability = false; the engine offers 09:05")
+	}
+	if f.slotsOf(c.slug) == 0 {
+		t.Error("adm's copy has no slots with Tuesdays 09:05-09:35")
+	}
+	f.deleteRule(admKey, offHour)
 	// An exact fit (09:00-09:30) holds one.
 	f.addRule(admKey, `{"day_of_week":4,"start_time":"09:00","end_time":"09:30"}`)
 	if !f.hasAvailability("adm") {

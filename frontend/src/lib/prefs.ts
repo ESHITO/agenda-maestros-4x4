@@ -26,24 +26,36 @@ export function prefsFromUser(u: User): UserPrefs {
 	};
 }
 
-function fmtDatePart(date: Date, format: 'dmy' | 'mdy' | 'ymd'): string {
-	const d = String(date.getDate()).padStart(2, '0');
-	const m = String(date.getMonth() + 1).padStart(2, '0');
-	const y = date.getFullYear();
-	if (format === 'mdy') return `${m}/${d}/${y}`;
-	if (format === 'ymd') return `${y}-${m}-${d}`;
-	return `${d}/${m}/${y}`;
+// The zone every booking time in the panel is shown in: the signed-in user's profile zone
+// (Configuración > Perfil), not the device's. A mentor whose profile says America/Lima on a
+// laptop set to Madrid must still read a Lima session as 8:30 p. m., and the admin reschedule
+// picker asks /slots for days in this same zone. Falls back to the device's zone only when
+// the profile has none or this browser cannot load it.
+export function displayZone(p: UserPrefs = get(prefs)): string {
+	const tz = p.timezone;
+	if (tz) {
+		try {
+			new Intl.DateTimeFormat('en-US', { timeZone: tz });
+			return tz;
+		} catch {
+			// Unknown to this browser: use the device's zone below.
+		}
+	}
+	return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+// dayKeyInZone — "YYYY-MM-DD" of an instant in the display zone.
+export function dayKeyInZone(iso: string | Date, p: UserPrefs = get(prefs)): string {
+	return new Intl.DateTimeFormat('en-CA', {
+		timeZone: displayZone(p),
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit'
+	}).format(typeof iso === 'string' ? new Date(iso) : iso);
 }
 
 export function fmtDateTime(iso: string, p: UserPrefs = get(prefs)): string {
-	const date = new Date(iso);
-	const datePart = fmtDatePart(date, p.date_format);
-	const timePart = date.toLocaleTimeString(undefined, {
-		hour: '2-digit',
-		minute: '2-digit',
-		hour12: p.time_format === '12h'
-	});
-	return `${datePart}, ${timePart}`;
+	return `${fmtDate(dayKeyInZone(iso, p), p)}, ${fmtTime(iso, p)}`;
 }
 
 export function fmtDate(ymd: string, p: UserPrefs = get(prefs)): string {
@@ -58,8 +70,30 @@ export function fmtTime(iso: string, p: UserPrefs = get(prefs)): string {
 	return new Date(iso).toLocaleTimeString(undefined, {
 		hour: '2-digit',
 		minute: '2-digit',
-		hour12: p.time_format === '12h'
+		hour12: p.time_format === '12h',
+		timeZone: displayZone(p)
 	});
+}
+
+// fmtShortWhen — a short "when" in the display zone: "hoy 07:00", "mañana 07:00",
+// "ayer 07:00", or "30/09 07:00" (day/month order follows the date preference). "Today" is
+// today in that zone too, so the label and the time never disagree about the day.
+export function fmtShortWhen(iso: string | undefined, p: UserPrefs = get(prefs), now: Date = new Date()): string {
+	if (!iso) return '';
+	const d = new Date(iso);
+	if (isNaN(d.getTime())) return '';
+	const time = fmtTime(iso, p);
+	const key = dayKeyInZone(d, p);
+	const todayKey = dayKeyInZone(now, p);
+	const shift = (k: string, n: number) => {
+		const [y, m, dd] = k.split('-').map(Number);
+		return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10);
+	};
+	if (key === todayKey) return `hoy ${time}`;
+	if (key === shift(todayKey, 1)) return `mañana ${time}`;
+	if (key === shift(todayKey, -1)) return `ayer ${time}`;
+	const [, mm, dd] = key.split('-');
+	return `${p.date_format === 'mdy' || p.date_format === 'ymd' ? `${mm}/${dd}` : `${dd}/${mm}`} ${time}`;
 }
 
 export const WEEK_DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];

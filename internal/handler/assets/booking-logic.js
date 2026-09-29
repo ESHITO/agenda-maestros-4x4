@@ -30,17 +30,91 @@
   // ymd — "YYYY-MM-DD" for a local Date (the calendar grid's own day cells).
   function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 
+  // sameInstant — true when two ISO timestamps name the same moment, whatever offset each is
+  // written in. "2026-09-28T17:00:00Z" and "2026-09-28T12:00:00-05:00" are the same instant but
+  // different strings: the manage page gets the current booking in UTC and /slots answers in the
+  // booker's zone, so comparing the strings never matched.
+  function sameInstant(a, b) {
+    if (!a || !b) return false;
+    var ta = Date.parse(a), tb = Date.parse(b);
+    return !isNaN(ta) && ta === tb;
+  }
+
   // groupSlotsByDay — { "YYYY-MM-DD": [slot,…] } in the selected tz. Slots are {start,…} (or pass
   // a `key` selector for shapes that differ). Optionally drops one slot (reschedule excludes the
-  // current booking's own time).
+  // current booking's own time), compared as an instant, not as a string.
   function groupSlotsByDay(slots, tz, excludeStart) {
     var by = {};
     (slots || []).forEach(function (s) {
-      if (excludeStart && s.start === excludeStart) return;
+      if (excludeStart && sameInstant(s.start, excludeStart)) return;
       var k = dateKeyFromISO(s.start, tz);
       (by[k] = by[k] || []).push(s);
     });
     return by;
+  }
+
+  // slotsByDayFromResponse — a /slots answer ({slots, taken?}) as { "YYYY-MM-DD": [slot,…] } in
+  // the selected tz, each day's free and taken entries merged in time order (mergeDaySlots).
+  // The one grouping both pages use, for the month cache and for the one-day fallback.
+  function slotsByDayFromResponse(data, tz, excludeStart) {
+    var d = data || {};
+    var freeByDay = groupSlotsByDay(d.slots, tz, excludeStart);
+    var takenByDay = groupSlotsByDay(d.taken || [], tz, excludeStart);
+    var out = {};
+    Object.keys(freeByDay).concat(Object.keys(takenByDay)).forEach(function (k) {
+      if (!out[k]) out[k] = mergeDaySlots(freeByDay[k], takenByDay[k]);
+    });
+    return out;
+  }
+
+  // daySlotsFromResponse — only the entries of a /slots answer whose start falls on the day `ds`
+  // in the selected tz. The one-day fallback asks for from=ds&to=ds, but an answer can reach into
+  // the neighbouring days (a Lima evening is the next morning in Madrid); taking it whole listed
+  // the next day's times under the picked day, and the labels then named the wrong day.
+  function daySlotsFromResponse(data, tz, ds, excludeStart) {
+    return slotsByDayFromResponse(data, tz, excludeStart)[ds] || [];
+  }
+
+  // slotDay — the calendar day a slot starts on in the selected tz, as {ds, y, m, d} (m is
+  // 0-based, like Date). Used to move the picked day along with a zone change: 8:30 p. m. on
+  // Sat 31 Oct in Lima is 2:30 a. m. on Sun 1 Nov in Madrid.
+  function slotDay(iso, tz) {
+    var ds = dateKeyFromISO(iso, tz);
+    var p = ds.split('-');
+    return { ds: ds, y: Number(p[0]), m: Number(p[1]) - 1, d: Number(p[2]) };
+  }
+
+  // maxBookableDate — local midnight of the last day the calendar may open, maxDays calendar
+  // days after `today`, or null when there is no limit. Calendar arithmetic, not
+  // today + maxDays*86400000: across a fall-back (Madrid 25 Oct, New York 1 Nov) the
+  // millisecond sum lands at 23:00 of the day before and greyed out the last day.
+  function maxBookableDate(today, maxDays) {
+    if (!(maxDays > 0)) return null;
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate() + maxDays);
+  }
+
+  // latestOnly — a request counter for fetches whose answers may land out of order. start()
+  // hands out a token; isCurrent(token) is true only for the newest one. A month answer that
+  // arrives after the visitor moved on to another month (or zone) is dropped instead of
+  // replacing what the grid shows. embed.js keeps the same counter inline.
+  function latestOnly() {
+    var seq = 0;
+    return {
+      start: function () { seq += 1; return seq; },
+      isCurrent: function (token) { return token === seq; }
+    };
+  }
+
+  // zoneOptions — the zones for the timezone selector: `zones` (Intl.supportedValuesOf) plus
+  // `current` when it is missing, sorted. A browser can report an alias the list does not carry
+  // (America/Argentina/Buenos_Aires vs America/Buenos_Aires); without it no option matched, the
+  // selector showed its first entry (Africa/Abidjan) while the times used the real zone, and
+  // anything reading the selector's value got the wrong zone.
+  function zoneOptions(zones, current) {
+    var out = (zones || []).slice();
+    if (current && out.indexOf(current) === -1) out.push(current);
+    out.sort();
+    return out;
   }
 
   // mergeDaySlots — one day's entries in time order, each tagged `.taken`, for event
@@ -350,6 +424,13 @@
     dateKeyFromISO: dateKeyFromISO,
     ymd: ymd,
     groupSlotsByDay: groupSlotsByDay,
+    sameInstant: sameInstant,
+    slotsByDayFromResponse: slotsByDayFromResponse,
+    daySlotsFromResponse: daySlotsFromResponse,
+    slotDay: slotDay,
+    maxBookableDate: maxBookableDate,
+    latestOnly: latestOnly,
+    zoneOptions: zoneOptions,
     mergeDaySlots: mergeDaySlots,
     fmt: fmt,
     formatTime: formatTime,

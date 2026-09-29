@@ -21,6 +21,7 @@
 		type User
 	} from '$lib/api';
 	import { currentUser } from '$lib/stores';
+	import { prefs, displayZone } from '$lib/prefs';
 	import { Button } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -730,8 +731,9 @@
 	function fmtDate(iso: string) {
 		return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
 	}
+	// A session's time, in the signed-in user's profile zone like the Reservas list.
 	function fmtDateTime(iso: string) {
-		return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+		return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: displayZone($prefs) });
 	}
 	function daysLeft(iso: string) {
 		const diff = new Date(iso).getTime() - Date.now();

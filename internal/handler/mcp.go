@@ -203,8 +203,8 @@ func (h *Handler) mcpGetEventType(ctx context.Context, _ *mcp.CallToolRequest, i
 
 type getSlotsIn struct {
 	EventTypeID string `json:"event_type_id" jsonschema:"the event type slug (from list_event_types)"`
-	DateFrom    string `json:"date_from,omitempty" jsonschema:"start date YYYY-MM-DD; defaults to today"`
-	DateTo      string `json:"date_to,omitempty" jsonschema:"end date YYYY-MM-DD; defaults to the event type's max future window"`
+	DateFrom    string `json:"date_from,omitempty" jsonschema:"start date YYYY-MM-DD, a calendar day in timezone; defaults to today"`
+	DateTo      string `json:"date_to,omitempty" jsonschema:"end date YYYY-MM-DD, a calendar day in timezone; defaults to the event type's max future window"`
 	Timezone    string `json:"timezone,omitempty" jsonschema:"IANA timezone the returned times are expressed in (e.g. Pacific/Auckland); defaults to UTC"`
 }
 

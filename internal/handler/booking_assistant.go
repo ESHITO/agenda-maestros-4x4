@@ -291,7 +291,7 @@ func (h *Handler) assistantSystemPrompt(ctx context.Context, slug, tz, lang stri
 		questions = "\n" + strings.Join(qLines, "\n")
 	}
 
-	today := time.Now().UTC().Format("2006-01-02")
+	today := assistantToday(time.Now(), tz)
 	// locationLabel just needs *a* locale for the prompt text — this is independent of the
 	// reply-language directive below, which drives what language the model actually replies
 	// in (see the assistant section of internal-docs/i18n-plan.md).
@@ -318,6 +318,19 @@ Intake questions: %s
 // the booking page. Fork: with the 12-hour override on (internal/i18n/fork_clock.go) every
 // time a client sees is "5:00 p. m."; the model copies each slot's server-made "label"
 // (assistantSlot) instead of formatting times itself.
+// assistantToday is the prompt's "Today is" date: the calendar day in the visitor's zone
+// tz, because find_available_slots' date_from/date_to are days in that same zone
+// (computeSlots reads them with parseDateRangeStrIn in tz). A UTC date made "mañana" the
+// day after tomorrow for a Lima visitor from 19:00 on. "" and an unknown zone mean UTC,
+// as they do in computeSlots.
+func assistantToday(now time.Time, tz string) string {
+	loc, err := time.LoadLocation(tz)
+	if tz == "" || err != nil {
+		loc = time.UTC
+	}
+	return now.In(loc).Format("2006-01-02")
+}
+
 func assistantClockRule(loc *i18n.Locale) string {
 	sample := loc.FormatTimeOfDay(time.Date(2026, time.January, 1, 17, 0, 0, 0, time.UTC))
 	if loc.Uses12h() {

@@ -235,6 +235,49 @@ func (h *Handler) GetInvite(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{"id": id, "email": email})
 }
 
+// knownZone reports whether name is a zone a person can be said to be in: loadable, and
+// not "", "UTC", "Etc/UTC" or "Local". A bare UTC from a browser means "unknown" (privacy
+// modes report it), the same rule as webhook.AttendeeZone.
+func knownZone(name string) bool {
+	switch name {
+	case "", "UTC", "Etc/UTC", "Local":
+		return false
+	}
+	_, err := time.LoadLocation(name)
+	return err == nil
+}
+
+// claimTimezone picks the zone a new member's account is created with. The claim page
+// sends the browser's zone silently; used as is, a name Go cannot load (some ICU setups
+// report "Etc/Unknown") was stored and then read as UTC by the slot engine, and a privacy
+// browser's "UTC" was taken literally - either way a Lima mentor's 09:00-17:00 became
+// 04:00-12:00 with no warning. So an unknown browser zone falls back to the inviter's
+// zone, then the workspace owner's (the team shares one), and only then to UTC.
+func (h *Handler) claimTimezone(ctx context.Context, tx *sql.Tx, browserTZ, invitedBy string) string {
+	browserTZ = strings.TrimSpace(browserTZ)
+	if knownZone(browserTZ) {
+		return browserTZ
+	}
+	for _, q := range []struct{ sql, arg string }{
+		{`SELECT iana_timezone FROM users WHERE id = ?`, invitedBy},
+		{`SELECT iana_timezone FROM users WHERE is_owner = 1 ORDER BY created_at LIMIT 1`, ""},
+	} {
+		var tz string
+		var err error
+		if q.arg != "" {
+			err = tx.QueryRowContext(ctx, q.sql, q.arg).Scan(&tz)
+		} else {
+			err = tx.QueryRowContext(ctx, q.sql).Scan(&tz)
+		}
+		if err == nil && knownZone(strings.TrimSpace(tz)) {
+			h.logger.WarnContext(ctx, "claim invite: browser time zone unknown; using the team's", "browser_tz", browserTZ, "tz", tz)
+			return strings.TrimSpace(tz)
+		}
+	}
+	h.logger.WarnContext(ctx, "claim invite: no known time zone; storing UTC", "browser_tz", browserTZ)
+	return "UTC"
+}
+
 // ClaimInvite handles POST /v1/invites/{token}/claim — public. Creates the user
 // account from a valid invite token.
 func (h *Handler) ClaimInvite(w http.ResponseWriter, r *http.Request) {
@@ -261,9 +304,6 @@ func (h *Handler) ClaimInvite(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if req.Timezone == "" {
-		req.Timezone = "UTC"
-	}
 
 	tx, err := h.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -273,14 +313,15 @@ func (h *Handler) ClaimInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	var inviteID, email string
+	var inviteID, email, invitedBy string
 	if err := tx.QueryRowContext(r.Context(), `
-		SELECT id, email FROM invite_tokens
+		SELECT id, email, created_by FROM invite_tokens
 		WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?`,
-		tokenHash, now).Scan(&inviteID, &email); err != nil {
+		tokenHash, now).Scan(&inviteID, &email, &invitedBy); err != nil {
 		h.writeError(w, http.StatusNotFound, "invite not found or expired")
 		return
 	}
+	req.Timezone = h.claimTimezone(r.Context(), tx, req.Timezone, invitedBy)
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
