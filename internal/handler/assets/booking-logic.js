@@ -411,6 +411,75 @@
     return head.concat(rest.map(function (r) { return r.entry; }));
   }
 
+  // ── Fresh availability without a reload (fork, owner report sep 2026) ───────────────
+  // A mentor changing his free hours had to reload every page to see the change, and a
+  // visitor who left the booking page open saw a month that was no longer true. The three
+  // surfaces now fetch the shown month again on their own: when the page comes back to the
+  // foreground and every AUTO_REFRESH_PERIOD_MS while it is visible. embed.js mirrors these
+  // three helpers (it does not load this file) - keep them in step.
+
+  // slotStillOffered — whether `slot` is still a bookable (not taken) entry of `list`,
+  // compared as an instant: a refreshed answer may write the same start in another offset.
+  function slotStillOffered(list, slot) {
+    if (!slot) return false;
+    return (list || []).some(function (s) { return !s.taken && sameInstant(s.start, slot.start); });
+  }
+
+  // monthSignature — a string that changes exactly when a /slots answer would change what
+  // the page shows (times, taken times, their hosts, the notice days, the degraded flag), so
+  // a background refresh that brought nothing new repaints nothing: no flicker, and the
+  // keyboard focus on a day or a time is not thrown away every minute.
+  function monthSignature(data) {
+    var d = data || {};
+    var one = function (s) { return [s.start, s.end || '', (s.host_ids || []).join(',')]; };
+    return JSON.stringify([
+      (d.slots || []).map(one),
+      (d.taken || []).map(one),
+      (d.min_notice && d.min_notice.dates) || [],
+      !!d.degraded
+    ]);
+  }
+
+  // autoRefresh — calls opts.refresh() when the page comes back (visibilitychange to
+  // visible, window focus, a back/forward-cache restore) and the last successful fetch
+  // (opts.lastFetchAt(), ms) is older than minAgeMs, and on a periodMs tick while the page
+  // is visible (same age rule, so a month the visitor just opened is not fetched twice).
+  // One refresh at a time: a slow one is never stacked. refresh itself decides whether the
+  // moment is right (never under the booking form) and may return a promise. Returns
+  // { stop }. doc/win/now/setInterval/clearInterval are injectable for the tests.
+  var AUTO_REFRESH_MIN_AGE_MS = 15000;
+  var AUTO_REFRESH_PERIOD_MS = 60000;
+  function autoRefresh(opts) {
+    var doc = opts.doc, win = opts.win;
+    var minAge = opts.minAgeMs == null ? AUTO_REFRESH_MIN_AGE_MS : opts.minAgeMs;
+    var period = opts.periodMs == null ? AUTO_REFRESH_PERIOD_MS : opts.periodMs;
+    var now = opts.now || function () { return Date.now(); };
+    var setIv = opts.setInterval || setInterval, clearIv = opts.clearInterval || clearInterval;
+    var busy = false, stopped = false;
+    function visible() { return !doc || doc.visibilityState !== 'hidden'; }
+    function done() { busy = false; }
+    function run() {
+      if (stopped || busy || !visible()) return;
+      if (now() - (opts.lastFetchAt() || 0) < minAge) return;
+      busy = true;
+      var p;
+      try { p = opts.refresh(); } catch (e) { busy = false; return; }
+      if (p && typeof p.then === 'function') p.then(done, done); else busy = false;
+    }
+    function onVisibility() { if (visible()) run(); }
+    if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', onVisibility);
+    if (win && win.addEventListener) { win.addEventListener('focus', run); win.addEventListener('pageshow', run); }
+    var timer = setIv(run, period);
+    return {
+      stop: function () {
+        stopped = true;
+        clearIv(timer);
+        if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', onVisibility);
+        if (win && win.removeEventListener) { win.removeEventListener('focus', run); win.removeEventListener('pageshow', run); }
+      }
+    };
+  }
+
   // NOTE: there is deliberately no host-label helper here. Each surface builds its own
   // (hostsLabel in book.go for the server-rendered page, in book.html's script for the
   // post-slot-pick rewrite, and in embed.js), because the label needs the resolved locale's
@@ -444,6 +513,11 @@
     phoneDetectCountry: phoneDetectCountry,
     phoneCombine: phoneCombine,
     phoneFilter: phoneFilter,
-    phoneSort: phoneSort
+    phoneSort: phoneSort,
+    slotStillOffered: slotStillOffered,
+    monthSignature: monthSignature,
+    autoRefresh: autoRefresh,
+    AUTO_REFRESH_MIN_AGE_MS: AUTO_REFRESH_MIN_AGE_MS,
+    AUTO_REFRESH_PERIOD_MS: AUTO_REFRESH_PERIOD_MS
   };
 });

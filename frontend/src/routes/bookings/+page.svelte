@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { onResume } from '$lib/refresh';
 	import {
 		api,
 		teamApi,
@@ -215,8 +216,16 @@
 			kind === 'mentoria_template' ? `${name} (todos los mentores)`
 				: kind === 'soporte_template' ? `${name} (todo el personal de soporte)`
 					: name;
-		try {
-			const res = await api.get<{ items: EventType[] }>('/v1/event-types');
+		// The four lists are independent: ask for them at once (members cannot list users or
+		// the team settings; those failures only leave their dropdown empty).
+		const [etRes, tsRes, usersRes, teamsRes] = await Promise.allSettled([
+			api.get<{ items: EventType[] }>('/v1/event-types'),
+			canSeeAll ? teamApi.getSettings() : Promise.reject(new Error('not an admin')),
+			canSeeAll ? api.get<{ id: string; name: string }[]>('/v1/users') : Promise.reject(new Error('not an admin')),
+			canSeeAll ? api.get<{ items: { id: string; name: string }[] }>('/v1/teams') : Promise.reject(new Error('not an admin'))
+		]);
+		if (etRes.status === 'fulfilled') {
+			const res = etRes.value;
 			for (const et of res.items ?? []) {
 				const kind = et.team?.kind;
 				if (isTeamCopy(kind)) {
@@ -232,13 +241,13 @@
 				}
 				opts.set(et.slug, { slug: et.slug, name: et.name, label: templateLabel(kind, et.name) });
 			}
-		} catch { /* leave the dropdown empty */ }
+		} /* else: leave the dropdown empty */
 		eventTypes = [...opts.values()];
 		if (!canSeeAll) return;
 		// An admin who is not the owner lists only their own/hosted types; the team's two
 		// predefined types come from the team settings so they can filter by them too.
-		try {
-			const ts = await teamApi.getSettings();
+		if (tsRes.status === 'fulfilled') {
+			const ts = tsRes.value;
 			if (ts.mentoria_template) {
 				const t = ts.mentoria_template;
 				opts.set(t.slug, { slug: t.slug, name: t.name, label: templateLabel('mentoria_template', t.name) });
@@ -248,16 +257,11 @@
 				opts.set(t.slug, { slug: t.slug, name: t.name, label: templateLabel('soporte_template', t.name) });
 			}
 			eventTypes = [...opts.values()];
-		} catch { /* the own/hosted options stay */ }
-		try {
-			// /v1/users returns a bare array, not an { items } envelope like the others.
-			// Archived members are excluded by default, which is what we want here.
-			members = (await api.get<{ id: string; name: string }[]>('/v1/users')) ?? [];
-		} catch { /* leave the dropdown empty */ }
-		try {
-			const res = await api.get<{ items: { id: string; name: string }[] }>('/v1/teams');
-			teams = res.items ?? [];
-		} catch { /* leave the dropdown empty */ }
+		} /* else: the own/hosted options stay */
+		// /v1/users returns a bare array, not an { items } envelope like the others.
+		// Archived members are excluded by default, which is what we want here.
+		if (usersRes.status === 'fulfilled') members = usersRes.value ?? [];
+		if (teamsRes.status === 'fulfilled') teams = teamsRes.value.items ?? [];
 	}
 
 	// Refresh re-fetches in place (no full-page "Loading…" flash) — just spins the button.
@@ -273,6 +277,16 @@
 	onMount(() => {
 		load();
 		loadFilterOptions();
+		// Owner report (30 Sep 2026): nothing changed without a reload. Coming back to the
+		// tab, and every minute while it is visible, the page being viewed is asked again in
+		// place (same filters and page, no "Cargando…") - unless a dialog is open.
+		return onResume(
+			() => {
+				if (loading || refreshing || confirmOpen || passOpen || reschedulingId) return;
+				return load();
+			},
+			{ minIntervalMs: 5_000, everyMs: 60_000 }
+		);
 	});
 
 	let confirmOpen = $state(false);

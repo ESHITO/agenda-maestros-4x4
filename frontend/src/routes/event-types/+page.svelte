@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { onResume } from '$lib/refresh';
 	import { base } from '$app/paths';
 	import { api, teamApi, copyText, isTeamCopy, isTeamTemplate, type EventType, type TeamSettings, type TeamTemplate, type AvailabilityRule, type CopyLink } from '$lib/api';
 	import { currentUser } from '$lib/stores';
@@ -46,11 +47,16 @@
 		listed.some((et) => !et.archived && et.team && (et.owned === false || isTeamTemplate(et.team.kind)))
 	);
 
-	async function load() {
+	// quiet = the background refresh: a failure keeps the list shown, with no toast.
+	let loadSeq = 0;
+	async function load(quiet = false) {
+		const seq = ++loadSeq;
 		try {
 			const res = await api.get<{ items: EventType[] }>('/v1/event-types');
+			if (seq !== loadSeq) return;
 			items = res.items;
 		} catch (e: any) {
+			if (quiet || seq !== loadSeq) return;
 			toast.error(e.message || 'No se pudieron cargar los tipos de atención');
 		} finally {
 			loading = false;
@@ -72,6 +78,9 @@
 	onMount(() => {
 		load();
 		loadTeamContext();
+		// Owner report (30 Sep 2026): changes only showed after a reload. Coming back to the
+		// tab re-reads the list (and whether this person has hours yet) in place.
+		return onResume(() => Promise.all([load(true), loadTeamContext()]), { minIntervalMs: 5_000 });
 	});
 
 	async function create() {

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { onResume } from '$lib/refresh';
 	import { base } from '$app/paths';
 	import {
 		api,
@@ -99,18 +100,24 @@
 	const me = $derived($currentUser);
 	const isOwnerViewer = $derived(!!$currentUser?.is_owner);
 
+	// Members and invites at once. Only the newest call applies (a quick archive toggle, or
+	// a background refresh crossing a save, must not paint an older list over a newer one).
+	let loadSeq = 0;
 	async function load() {
-		try {
-			members = await api.get<TeamMember[]>(showArchived ? '/v1/users?include_archived=true' : '/v1/users');
-		} catch (e: any) {
-			error = e.message;
+		const seq = ++loadSeq;
+		const [m, inv] = await Promise.allSettled([
+			api.get<TeamMember[]>(showArchived ? '/v1/users?include_archived=true' : '/v1/users'),
+			api.get<Invite[]>('/v1/invites')
+		]);
+		if (seq !== loadSeq) return;
+		if (m.status === 'fulfilled') {
+			members = m.value;
+			error = '';
+		} else {
+			error = m.reason?.message || 'Error de conexión';
 		}
 		// Its own failure costs only the invites section.
-		try {
-			invites = await api.get<Invite[]>('/v1/invites');
-		} catch {
-			invites = [];
-		}
+		invites = inv.status === 'fulfilled' ? inv.value : [];
 		loading = false;
 	}
 
@@ -154,6 +161,18 @@
 		load();
 		loadSettings();
 		loadOwnerTypes();
+		// Owner report (30 Sep 2026): changes only showed after a reload. Coming back to the
+		// tab re-reads the team in place; the predefined-type settings only when the owner is
+		// not in the middle of changing them.
+		return onResume(
+			() =>
+				Promise.all([
+					load(),
+					settingsDirty || savingSettings ? null : loadSettings(),
+					settingsDirty || savingSettings ? null : loadOwnerTypes()
+				]),
+			{ minIntervalMs: 5_000 }
+		);
 	});
 
 	async function toggleArchived() {

@@ -668,7 +668,9 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 		logger.Info("trusting forwarded headers from proxies", "cidrs", cfg.TrustedProxyCIDRs)
 	}
 
-	return TrustClientIP(trustedProxies)(RequestID(Logging(logger, Recover(logger, SameOriginCheck(mux))))), drain
+	// Fork: every successful write makes the Panel's cached team calendar stale
+	// (handler/fork_free_time_changes.go), so a mentor's new hours show at once.
+	return TrustClientIP(trustedProxies)(RequestID(Logging(logger, Recover(logger, SameOriginCheck(h.FreeTimeChanges(mux)))))), drain
 }
 
 // seedSMTPToDB writes env-var SMTP settings into the DB on first boot so they

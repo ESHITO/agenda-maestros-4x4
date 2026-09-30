@@ -1029,5 +1029,6 @@ func (h *Handler) StartTeamBoot(ctx context.Context) {
 		if _, err := h.ReconcileTeam(bctx, ""); err != nil {
 			h.logger.ErrorContext(bctx, "team boot reconcile failed", "error", err)
 		}
+		h.InvalidateTeamAvailability() // the pass may have changed who is on the team calendar
 	}()
 }

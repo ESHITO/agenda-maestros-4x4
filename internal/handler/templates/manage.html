@@ -351,6 +351,9 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   let noticeDates = new Set();    // days the minimum-notice policy took starts away from
   let slotsDegraded = false;      // an external calendar check failed: busy data is
                                   // incomplete, so offered times may be unbookable
+  let loadedMonth = null;         // y*12+m whose answer slotsByDay holds (null: none / failed)
+  let lastFetchAt = 0;            // Date.now() of the last month answer applied (autoRefresh)
+  let monthSig = '';              // BookingLogic.monthSignature of that answer
 
   const $ = id => document.getElementById(id);
   const pad = n => String(n).padStart(2, '0');
@@ -399,12 +402,17 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   function dowIndex(date) { return BookingLogic.dowIndex(date); } // 0 = Monday
 
   // Returns true when this answer was applied, false when a newer request superseded it.
-  async function loadMonthAvailability(y, m) {
+  // quiet (the background refresh, autoRefresh below): no optimistic repaint first, a
+  // failure keeps what is shown, and an answer identical to the one shown repaints nothing.
+  async function loadMonthAvailability(y, m, opts) {
+    const quiet = !!(opts && opts.quiet);
     // Render immediately, treating every in-window day as available, so the
     // calendar paints without waiting on the slots fetch; refine once it returns.
     const token = monthReq.start();
-    availabilityLoaded = false;
-    renderCal();
+    if (!quiet) {
+      availabilityLoaded = false;
+      renderCal();
+    }
     const from = toDateStr(y, m, 1);
     const lastDay = new Date(y, m + 1, 0).getDate();
     const to = toDateStr(y, m, lastDay);
@@ -413,6 +421,11 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
       if (!monthReq.isCurrent(token)) return false;
+      lastFetchAt = Date.now();
+      const sig = BookingLogic.monthSignature(data);
+      if (quiet && sig === monthSig && loadedMonth === y * 12 + m) return false; // nothing new
+      monthSig = sig;
+      loadedMonth = y * 12 + m;
       // Cache the month's slots grouped by the SELECTED-timezone day (BookingLogic — tested,
       // tz-correct), excluding the current booking's slot (compared as an instant: it comes
       // in UTC, /slots answers in TZ); availableDates = the keys.
@@ -428,14 +441,47 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       if (data.degraded) slotsDegraded = true;
     } catch {
       if (!monthReq.isCurrent(token)) return false;
+      if (quiet) return false; // a failed background refresh keeps the month on screen
       slotsByDay = {};
       availableDates = new Set();
       noticeDates = new Set();
+      loadedMonth = null;
+      monthSig = '';
     }
     availabilityLoaded = true;
     renderCal(); // grey out days that came back with no slots
     renderPickDayHint();
     return true;
+  }
+
+  // ── Fresh times without a reload (fork) ─────────────────────────────────────
+  // Mirrors book.html: while the reschedule picker is what the visitor sees, the shown
+  // month is fetched again when the page comes back to the foreground (older than 15 s)
+  // and every 60 s while it is visible (BookingLogic.autoRefresh). Not on the confirm
+  // view (the visitor is deciding; the 409 path covers a time that went meanwhile), not on
+  // the main or cancel views, and never on top of a month still loading.
+  function refreshAvailability() {
+    if (!pickerOpened || !availabilityLoaded) return;
+    if ($('reschedule-view').classList.contains('hidden')) return;
+    return loadMonthAvailability(navYear, navMonth, { quiet: true }).then(applied => {
+      if (applied) rerenderPickedDay();
+    });
+  }
+
+  // rerenderPickedDay — the chosen day's list again from the month answer now held. The
+  // day stays chosen; if the time picked before going back is no longer offered, it is
+  // dropped with a short notice.
+  function rerenderPickedDay() {
+    if (!pickedDate) return;
+    if (loadedMonth !== pickedDate.getFullYear() * 12 + pickedDate.getMonth()) return;
+    if ($('reschedule-view').classList.contains('hidden')) return;
+    const ds = toDateStr(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+    const list = slotsByDay[ds] || [];
+    const gone = !!pickedSlot && !BookingLogic.slotStillOffered(list, pickedSlot);
+    slotsCache = list;
+    if (gone) pickedSlot = null;
+    fillSlots($('slots-list'), ds);
+    if (gone) showSlotsError(t('slot_no_longer_available_error'));
   }
 
   function renderCal() {
@@ -614,6 +660,9 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
       // Only the times that start on `ds` in TZ (the answer can reach into the next day),
       // without the current booking's own time.
       slotsCache = BookingLogic.daySlotsFromResponse(data, TZ, ds, CURRENT_ISO);
+      // Kept for rerenderPickedDay (the 409 path deleted the day from the month cache).
+      const dp = ds.split('-').map(Number);
+      if (loadedMonth === dp[0] * 12 + dp[1] - 1) slotsByDay[ds] = slotsCache;
       fillSlots(list, ds);
     } catch {
       if (!dayReq.isCurrent(token)) return;
@@ -674,7 +723,9 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
   });
   $('resched-back-main').addEventListener('click', () => showView('main-view'));
   $('back-to-main-from-cancel-btn').addEventListener('click', () => showView('main-view'));
-  $('back-to-picker-btn').addEventListener('click', () => { showView('reschedule-view'); setRStep('slots'); });
+  // Back from the confirm view: the list may have changed meanwhile (the refresh waits for
+  // the picker), so it is drawn again from the latest month answer.
+  $('back-to-picker-btn').addEventListener('click', () => { showView('reschedule-view'); setRStep('slots'); rerenderPickedDay(); });
 
   // ── Confirm reschedule ──────────────────────────────────────────────────────
   $('confirm-reschedule-btn').addEventListener('click', async () => {
@@ -835,6 +886,8 @@ a.btn-primary { display: block; box-sizing: border-box; text-align: center; text
     });
     populateTzSelect();
   }
+
+  BookingLogic.autoRefresh({ doc: document, win: window, lastFetchAt: () => lastFetchAt, refresh: refreshAvailability });
 
 }());
 </script>

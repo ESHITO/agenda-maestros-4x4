@@ -421,6 +421,17 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   Handler each), `is_you` set per viewer; `fresh=1` skips it. The panel groups by the RFC3339 wall clock the server
   wrote (no Intl day shifts), prints "9:00 a. m." itself, counts distinct people per day, reuses answers only 60 s,
   and at 375 px keeps 2-3 chips per hour row (área as an M/S dot on the avatar) - `TeamAvailability.test.ts`.
+  **The cache is also dropped on every successful write** (`h.FreeTimeChanges(mux)` in `server.go`,
+  `fork_free_time_changes.go`: a generation bumped by any 2xx/3xx POST/PUT/PATCH/DELETE outside `/v1/livekit/`,
+  `/v1/auth/`, `/oauth/`, plus the calendar OAuth callback GET). Still invisible to it: edits made directly in
+  Google/Microsoft and writes from the separate `calnode mcp` process (they wait for the 60 s expiry).
+- **Nothing needs a reload** (owner: "the mentor had to refresh after every change"). The availability editor is
+  optimistic and never locks: `lib/save-queue.ts` serializes each block's PATCHes and coalesces to the latest value;
+  start >= end moves the other end by 1 h instead of refusing; "Guardado ✓" / error + "Reintentar". Public surfaces
+  refetch the shown month on resume (visible again / focus, if the last fetch is > 15 s old) and every 60 s while
+  visible (`BookingLogic.autoRefresh`, mirrored in `embed.js`), never while the form or confirm step is open, keeping
+  the picked day. Admin pages re-load on resume through `lib/refresh.ts` (`onResume`); the Panel's team calendar
+  refetches with `fresh=1` on resume and every 60 s.
 - **Known, out of scope:** staff creating bookings for clients; per-person summary; the owner
   rescheduling others' sessions (the MCP `reschedule_booking` tool still lets admins do it).
 

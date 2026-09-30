@@ -5,6 +5,7 @@
 	// GET /v1/team/availability, which computes each person's link exactly like its public
 	// page: a time shown here is a time the client can book there.
 	import { onMount } from 'svelte';
+	import { onResume } from '$lib/refresh';
 	import { teamApi, copyText, AREA_LABELS, type TeamAvailability, type TeamAvailabilityPerson } from '$lib/api';
 	import { displayZone, timezoneItems, timezoneLabel } from '$lib/prefs';
 	import {
@@ -105,12 +106,14 @@
 		return daysBetween(today, d) > MAX_DAYS_AHEAD;
 	}
 
-	async function load(fresh = false) {
+	// silent = the background refresh (coming back to the tab, every minute while visible):
+	// the calendar stays on screen with no "Cargando…", and a failure keeps what is shown.
+	async function load(fresh = false, silent = false) {
 		const from = weekStart;
 		const to = addDays(weekStart, 6);
 		const key = `${tz}|${from}`;
 		const seq = ++requestSeq;
-		loadError = '';
+		if (!silent) loadError = '';
 		if (fresh) cache.clear(); // "Actualizar": every week is re-fetched from now on
 		const hit = fresh ? undefined : cache.get(key);
 		if (hit) {
@@ -118,14 +121,22 @@
 			loading = false;
 			return;
 		}
-		loading = true;
+		if (!silent) loading = true;
 		try {
 			const res = await teamApi.availability({ from, to, tz, area: 'all', fresh });
 			if (seq !== requestSeq) return; // a newer week or zone was asked meanwhile
 			cache.set(key, res);
 			data = res;
+			loadError = '';
+			// The open person card follows the new answer (or closes if they are gone).
+			if (dialogPerson) {
+				const k = personKey(dialogPerson);
+				const next = res.people.find((p) => personKey(p) === k) ?? null;
+				dialogPerson = next;
+				if (!next) dialogOpen = false;
+			}
 		} catch (e) {
-			if (seq !== requestSeq) return;
+			if (seq !== requestSeq || silent) return;
 			data = null;
 			loadError = e instanceof Error && e.message ? e.message : 'No se pudo cargar la disponibilidad.';
 		} finally {
@@ -184,6 +195,16 @@
 	onMount(() => {
 		pickDefaultDay();
 		load();
+		// Owner report (30 Sep 2026): changes only showed after a reload. Coming back to the
+		// tab, and every minute while it is visible, the week is asked again with fresh=1
+		// (past the server's cache) - quietly, keeping the chosen day, week and zone.
+		return onResume(
+			() => {
+				if (loading) return; // a load the person asked for is already on its way
+				return load(true, true);
+			},
+			{ minIntervalMs: 15_000, everyMs: 60_000 }
+		);
 	});
 </script>
 

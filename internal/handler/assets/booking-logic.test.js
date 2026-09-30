@@ -462,3 +462,122 @@ test('phoneSort does not modify the list it was given', () => {
   B.phoneSort(list, esName, 'es', ['PE']);
   assert.equal(JSON.stringify(list), before);
 });
+
+// ── Fresh availability without a reload (fork) ─────────────────────────────────────────
+test('slotStillOffered compares instants and ignores taken entries', () => {
+  const slot = { start: '2026-10-05T14:00:00Z' };
+  assert.equal(B.slotStillOffered([{ start: '2026-10-05T09:00:00-05:00', taken: false }], slot), true, 'same instant, other offset');
+  assert.equal(B.slotStillOffered([{ start: '2026-10-05T09:00:00-05:00', taken: true }], slot), false, 'now taken');
+  assert.equal(B.slotStillOffered([{ start: '2026-10-05T09:30:00-05:00' }], slot), false, 'gone');
+  assert.equal(B.slotStillOffered(undefined, slot), false);
+  assert.equal(B.slotStillOffered([{ start: '2026-10-05T14:00:00Z' }], null), false);
+});
+
+test('monthSignature changes exactly when the shown month would', () => {
+  const a = { slots: [{ start: 's1', end: 'e1', host_ids: ['u1'] }], min_notice: { dates: ['2026-10-05'] } };
+  assert.equal(B.monthSignature(a), B.monthSignature(JSON.parse(JSON.stringify(a))));
+  assert.notEqual(B.monthSignature(a), B.monthSignature({ ...a, slots: [] }), 'a time went');
+  assert.notEqual(B.monthSignature(a), B.monthSignature({ ...a, slots: [{ start: 's1', end: 'e1', host_ids: ['u2'] }] }), 'another host');
+  assert.notEqual(B.monthSignature(a), B.monthSignature({ ...a, taken: [{ start: 's1' }] }), 'a taken time');
+  assert.notEqual(B.monthSignature(a), B.monthSignature({ ...a, min_notice: { dates: [] } }), 'notice days');
+  assert.notEqual(B.monthSignature(a), B.monthSignature({ ...a, degraded: true }), 'degraded');
+  assert.equal(B.monthSignature(null), B.monthSignature({}));
+});
+
+// A fake page for autoRefresh: listeners, visibility, a manual clock and interval.
+function fakePage() {
+  const on = {};
+  const target = () => ({
+    addEventListener: (t, fn) => { (on[t] = on[t] || []).push(fn); },
+    removeEventListener: (t, fn) => { on[t] = (on[t] || []).filter((f) => f !== fn); },
+  });
+  const doc = Object.assign(target(), { visibilityState: 'visible' });
+  const win = target();
+  const p = {
+    doc, win, clock: 0, ticks: [], lastFetch: 0, calls: 0,
+    fire: (t) => (on[t] || []).slice().forEach((fn) => fn()),
+    listeners: (t) => (on[t] || []).length,
+    tick: () => p.ticks.forEach((x) => x.fn()),
+  };
+  p.opts = (extra) => Object.assign({
+    doc, win, now: () => p.clock, lastFetchAt: () => p.lastFetch,
+    refresh: () => { p.calls++; p.lastFetch = p.clock; },
+    setInterval: (fn, ms) => { const x = { fn, ms }; p.ticks.push(x); return x; },
+    clearInterval: (x) => { p.ticks = p.ticks.filter((y) => y !== x); },
+  }, extra);
+  return p;
+}
+
+test('autoRefresh: back to the foreground refreshes only a fetch older than 15 s', () => {
+  const p = fakePage();
+  B.autoRefresh(p.opts());
+  p.lastFetch = 0; p.clock = 10000;
+  p.fire('focus');
+  assert.equal(p.calls, 0, '10 s old: still fresh');
+  p.clock = 16000;
+  p.doc.visibilityState = 'hidden';
+  p.fire('visibilitychange');
+  assert.equal(p.calls, 0, 'hidden: nothing');
+  p.doc.visibilityState = 'visible';
+  p.fire('visibilitychange');
+  assert.equal(p.calls, 1, 'visible again after 16 s: refreshed');
+  p.fire('focus');
+  assert.equal(p.calls, 1, 'the focus right after does not fetch twice');
+  p.clock = 40000;
+  p.fire('pageshow');
+  assert.equal(p.calls, 2, 'a back/forward-cache restore counts as coming back');
+});
+
+test('autoRefresh: every 60 s while visible, never while hidden', () => {
+  const p = fakePage();
+  B.autoRefresh(p.opts());
+  assert.equal(p.ticks.length, 1);
+  assert.equal(p.ticks[0].ms, B.AUTO_REFRESH_PERIOD_MS);
+  assert.equal(B.AUTO_REFRESH_PERIOD_MS, 60000);
+  assert.equal(B.AUTO_REFRESH_MIN_AGE_MS, 15000);
+  p.clock = 60000; p.tick();
+  assert.equal(p.calls, 1);
+  p.doc.visibilityState = 'hidden';
+  p.clock = 120000; p.tick();
+  assert.equal(p.calls, 1, 'a background tab does not poll');
+  p.doc.visibilityState = 'visible';
+  p.lastFetch = 175000; p.clock = 180000; p.tick();
+  assert.equal(p.calls, 1, 'the visitor just loaded a month: the tick skips');
+});
+
+test('autoRefresh: one refresh at a time, and a failure does not jam it', async () => {
+  const p = fakePage();
+  let release, fail = false;
+  const opts = p.opts({ refresh: () => { p.calls++; return new Promise((res, rej) => { release = fail ? rej : res; }); } });
+  B.autoRefresh(opts);
+  p.clock = 20000;
+  p.fire('focus');
+  p.fire('focus');
+  p.tick();
+  assert.equal(p.calls, 1, 'a slow refresh is not stacked');
+  fail = true; release(); await new Promise((r) => setTimeout(r, 0));
+  p.fire('focus');
+  assert.equal(p.calls, 2);
+  release(new Error('x')); await new Promise((r) => setTimeout(r, 0));
+  p.fire('focus');
+  assert.equal(p.calls, 3, 'a rejected refresh frees the slot');
+});
+
+test('autoRefresh: a throwing refresh frees the slot too; stop removes everything', () => {
+  const p = fakePage();
+  let n = 0;
+  const r = B.autoRefresh(p.opts({ refresh: () => { n++; throw new Error('boom'); } }));
+  p.clock = 20000;
+  p.fire('focus'); p.fire('focus');
+  assert.equal(n, 2);
+  r.stop();
+  assert.equal(p.ticks.length, 0);
+  assert.equal(p.listeners('focus') + p.listeners('pageshow') + p.listeners('visibilitychange'), 0);
+});
+
+test('autoRefresh: works on a page without listeners (older harnesses, odd embeds)', () => {
+  let calls = 0, fn = null;
+  B.autoRefresh({ doc: {}, win: {}, lastFetchAt: () => 0, now: () => 99999, refresh: () => { calls++; }, setInterval: (f) => { fn = f; return 1; }, clearInterval() {} });
+  fn();
+  assert.equal(calls, 1);
+});

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { onResume } from '$lib/refresh';
 	import { base } from '$app/paths';
 	import { api, type CalendarStatus, type AvailabilityRule, type EventType } from '$lib/api';
 	import { authStatus, currentUser } from '$lib/stores';
@@ -19,8 +20,9 @@
 	let copyFailed = $state(false);
 	let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
-	onMount(async () => {
-		origin = window.location.origin;
+	// The checklist (calendar, hours, types). It never shows "Cargando…" again after the
+	// first time, so calling it from the background refresh keeps the page on screen.
+	async function loadStatus() {
 		try {
 			const [cal, rules, events] = await Promise.all([
 				api.get<CalendarStatus>('/v1/calendar/status').catch(() => ({ connected: false, configured: false })),
@@ -39,6 +41,14 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	onMount(() => {
+		origin = window.location.origin;
+		void loadStatus();
+		// Owner report (30 Sep 2026): changes only showed after a reload. Coming back to the
+		// tab re-checks the steps in place (the team calendar refreshes itself).
+		return onResume(loadStatus, { minIntervalMs: 15_000 });
 	});
 
 	onDestroy(() => {

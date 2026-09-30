@@ -28,7 +28,9 @@ package handler
 // person (error_kind "calendar", or "timeout" for the people the budget no longer reached)
 // instead of stalling everybody's answer. A whole answer with no error is cached for
 // teamAvailabilityTTL per range+tz+área on the Handler (h.teamAvail); fresh=1 skips the
-// cache (the panel's "Actualizar").
+// cache (the panel's "Actualizar"). Every successful write moves the cache's generation
+// and makes all of it stale at once (fork_free_time_changes.go): a mentor's new hours show
+// on the next read, not a minute later.
 
 import (
 	"context"
@@ -38,6 +40,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,10 +96,14 @@ type teamAvailabilityJSON struct {
 type teamAvailCache struct {
 	mu sync.Mutex
 	m  map[string]teamAvailCacheEntry
+	// gen moves on every change that may alter somebody's free time
+	// (fork_free_time_changes.go); an entry stored under an older generation is a miss.
+	gen atomic.Uint64
 }
 
 type teamAvailCacheEntry struct {
 	at  time.Time
+	gen uint64
 	out teamAvailabilityJSON
 }
 
@@ -105,27 +112,35 @@ func teamAvailCacheKey(from, to, tz, area string) string {
 }
 
 func (c *teamAvailCache) get(key string, now time.Time) (teamAvailabilityJSON, bool) {
+	gen := c.gen.Load()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.m[key]
-	if !ok || now.Sub(e.at) >= teamAvailabilityTTL {
+	if !ok || e.gen != gen || now.Sub(e.at) >= teamAvailabilityTTL {
 		return teamAvailabilityJSON{}, false
 	}
 	return e.out, true
 }
 
-func (c *teamAvailCache) put(key string, now time.Time, out teamAvailabilityJSON) {
+// put stores out under gen, the generation read BEFORE out was computed: a change that
+// landed while it was being computed has moved the generation on, so the entry is born
+// stale instead of hiding that change for a whole TTL.
+func (c *teamAvailCache) put(key string, now time.Time, gen uint64, out teamAvailabilityJSON) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.m == nil {
 		c.m = map[string]teamAvailCacheEntry{}
 	}
+	cur := c.gen.Load()
 	for k, e := range c.m { // a handful of entries: purge the stale ones here
-		if now.Sub(e.at) >= teamAvailabilityTTL {
+		if e.gen != cur || now.Sub(e.at) >= teamAvailabilityTTL {
 			delete(c.m, k)
 		}
 	}
-	c.m[key] = teamAvailCacheEntry{at: now, out: out}
+	if gen != cur {
+		return
+	}
+	c.m[key] = teamAvailCacheEntry{at: now, gen: gen, out: out}
 }
 
 // teamMayViewAvailability: the owner and the área-soporte people (owner decision: not the
@@ -218,6 +233,7 @@ func (h *Handler) GetTeamAvailability(w http.ResponseWriter, r *http.Request) {
 		out, hit = h.teamAvail.get(key, now)
 	}
 	if !hit {
+		gen := h.teamAvailGeneration() // before computing: see teamAvailCache.put
 		out, err = h.teamAvailability(ctx, from, to, tzName, area)
 		if err != nil {
 			h.logger.ErrorContext(ctx, "team availability: build", "error", err)
@@ -230,7 +246,7 @@ func (h *Handler) GetTeamAvailability(w http.ResponseWriter, r *http.Request) {
 			clean = clean && !p.Error
 		}
 		if clean { // an error is worth retrying at once, never cached
-			h.teamAvail.put(key, now, out)
+			h.teamAvail.put(key, now, gen, out)
 		}
 	}
 	people := make([]teamAvailPersonJSON, len(out.People))

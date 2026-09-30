@@ -107,6 +107,29 @@ function slotButtons(list) {
   return out;
 }
 
+// ---- clock, intervals and page events (the auto refresh) ---------------------------------
+// The clock starts at NOW and moves only when a test says so; intervals run only on tick();
+// listeners are recorded so a test can fire focus / visibilitychange itself.
+function fakeEnv() {
+  const env = { offset: 0, intervals: [], on: {} };
+  env.now = () => NOW + env.offset;
+  env.advance = (ms) => { env.offset += ms; };
+  env.setInterval = (fn, ms) => { const x = { fn, ms }; env.intervals.push(x); return x; };
+  env.clearInterval = (x) => { env.intervals = env.intervals.filter((y) => y !== x); };
+  env.tick = () => env.intervals.slice().forEach((x) => x.fn());
+  env.target = (name) => ({
+    addEventListener: (t, fn) => { (env.on[name + ':' + t] = env.on[name + ':' + t] || []).push(fn); },
+    removeEventListener: (t, fn) => { env.on[name + ':' + t] = (env.on[name + ':' + t] || []).filter((f) => f !== fn); },
+  });
+  env.fire = (name, t) => (env.on[name + ':' + t] || []).slice().forEach((fn) => fn({ type: t }));
+  env.listeners = (name, t) => (env.on[name + ':' + t] || []).length;
+  env.FakeDate = class extends Date {
+    constructor(...a) { if (a.length === 0) super(env.now()); else super(...a); }
+    static now() { return env.now(); }
+  };
+  return env;
+}
+
 // ---- page harness -----------------------------------------------------------------------
 function loadPage({ file, marker, values, browserTZ, zones }) {
   process.env.TZ = browserTZ; // the Date methods follow the process zone
@@ -114,12 +137,14 @@ function loadPage({ file, marker, values, browserTZ, zones }) {
   const $ = (id) => byId[id] || (byId[id] = makeEl(id === 'tz-select' ? 'select' : 'div', id));
   const card = makeEl('div');
   const requests = [];
-  const document = {
+  const env = fakeEnv();
+  const document = Object.assign(env.target('document'), {
+    visibilityState: 'visible',
     getElementById: $,
     querySelector: (sel) => (sel === '.card' ? card : null),
     querySelectorAll: () => [],
     createElement: (tag) => makeEl(tag),
-  };
+  });
   // fetch answers are released by the test: each request waits for respond().
   function fetch(url, opts) {
     return new Promise((resolve) => {
@@ -141,20 +166,15 @@ function loadPage({ file, marker, values, browserTZ, zones }) {
   const FakeIntl = Object.create(Intl);
   FakeIntl.DateTimeFormat = FakeDTF;
   FakeIntl.supportedValuesOf = () => zones || ['Africa/Abidjan', 'America/Lima', 'Europe/Madrid', 'Australia/Sydney'];
-  class FakeDate extends Date {
-    constructor(...a) { if (a.length === 0) super(NOW); else super(...a); }
-    static now() { return NOW; }
-  }
-  const window = {
+  const window = Object.assign(env.target('window'), {
     __CALNODE_I18N: { slot_taken_error: 'Ese horario ya fue tomado', slot_no_longer_available_error: 'Ese horario ya no está disponible' },
     location: { search: '', href: '' },
     innerWidth: 1200,
-    addEventListener() {},
-  };
+  });
   const ctx = {
-    window, document, fetch, Intl: FakeIntl, Date: FakeDate, URLSearchParams,
+    window, document, fetch, Intl: FakeIntl, Date: env.FakeDate, URLSearchParams,
     navigator: { languages: ['es-PE'], language: 'es-PE' },
-    setTimeout, clearTimeout, console,
+    setTimeout, clearTimeout, setInterval: env.setInterval, clearInterval: env.clearInterval, console,
   };
   window.document = document;
   vm.createContext(ctx);
@@ -162,7 +182,7 @@ function loadPage({ file, marker, values, browserTZ, zones }) {
   vm.runInContext(LOGIC, ctx);
   ctx.BookingLogic = ctx.self.BookingLogic;
   vm.runInContext(pageScript(file, marker, values), ctx);
-  return { $, requests, ctx, card };
+  return { $, requests, ctx, card, env, document };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -335,6 +355,136 @@ test('manage.html: a late month answer is dropped', async () => {
   assert.match(page.$('cal').innerHTML, /data-ds="2026-10-20"/);
 });
 
+// ---- fresh times without a reload (fork) ------------------------------------------------
+// Owner report (sep 2026): a mentor changing his free hours had to reload to see them. The
+// pages fetch the shown month again on their own (BookingLogic.autoRefresh).
+const SEP30 = { slots: [
+  { start: '2026-09-30T15:30:00-05:00', host_ids: [] }, { start: '2026-09-30T16:00:00-05:00', host_ids: [] },
+] };
+const slotsRequests = (page) => page.requests.filter((r) => r.url.includes('/slots?'));
+const nbsp = (s) => s.replace(/[  ]/g, ' ');
+
+test('book.html: coming back after 15 s refreshes the month and redraws the chosen day in place', async () => {
+  const page = loadPage({ ...BOOK, browserTZ: 'America/Lima' });
+  lastSlotsRequest(page).respond(200, SEP30);
+  await flush();
+  clickDay(page, '2026-09-30');
+  const dayLabel = page.$('slots-date').textContent;
+  page.env.advance(10000);
+  page.env.fire('window', 'focus');
+  assert.equal(slotsRequests(page).length, 1, '10 s old: no refresh yet');
+  page.env.advance(6000);
+  page.document.visibilityState = 'visible';
+  page.env.fire('document', 'visibilitychange');
+  assert.equal(slotsRequests(page).length, 2, 'back after 16 s: the month is fetched again');
+  const again = lastSlotsRequest(page);
+  assert.match(again.url, /from=2026-09-01&to=2026-09-30/);
+  assert.match(page.$('cal').innerHTML, /data-ds="2026-09-30"/);
+  assert.doesNotMatch(page.$('cal').innerHTML, /data-ds="2026-09-29"/, 'no optimistic repaint while it loads');
+  again.respond(200, { slots: [{ start: '2026-09-30T16:00:00-05:00', host_ids: [] }, { start: '2026-09-30T17:00:00-05:00', host_ids: [] }] });
+  await flush();
+  assert.equal(page.$('slots-view').classList.contains('hidden'), false);
+  assert.equal(page.$('slots-date').textContent, dayLabel, 'the day stays chosen');
+  assert.deepEqual(slotButtons(page.$('slots-list')).map((b) => b.label), ['4:00 p. m.', '5:00 p. m.']);
+});
+
+test('book.html: every 60 s while visible; never while hidden, never under the form', async () => {
+  const page = loadPage({ ...BOOK, browserTZ: 'America/Lima' });
+  lastSlotsRequest(page).respond(200, SEP30);
+  await flush();
+  page.env.advance(60000);
+  page.document.visibilityState = 'hidden';
+  page.env.tick();
+  assert.equal(slotsRequests(page).length, 1, 'hidden tab: no poll');
+  page.document.visibilityState = 'visible';
+  clickDay(page, '2026-09-30');
+  clickSlot(page, 0);
+  assert.equal(page.$('form-view').classList.contains('hidden'), false);
+  page.env.tick();
+  page.env.fire('window', 'focus');
+  assert.equal(slotsRequests(page).length, 1, 'the form is open: nothing moves under the visitor');
+  click(page.$('back-btn'));
+  page.env.tick();
+  assert.equal(slotsRequests(page).length, 2, 'back on the times: the tick refreshes');
+});
+
+test('book.html: a picked time that went is dropped with a notice; the day stays chosen', async () => {
+  const page = loadPage({ ...BOOK, browserTZ: 'America/Lima' });
+  lastSlotsRequest(page).respond(200, SEP30);
+  await flush();
+  clickDay(page, '2026-09-30');
+  clickSlot(page, 0); // 3:30 p. m.
+  click(page.$('back-btn'));
+  page.env.advance(20000);
+  page.env.fire('window', 'focus');
+  lastSlotsRequest(page).respond(200, { slots: [{ start: '2026-09-30T16:00:00-05:00', host_ids: [] }] });
+  await flush();
+  const list = page.$('slots-list');
+  assert.match(textOf(list), /Ese horario ya no está disponible/);
+  assert.deepEqual(slotButtons(list).map((b) => b.label), ['4:00 p. m.']);
+  assert.equal(page.$('slots-view').classList.contains('hidden'), false);
+});
+
+test('book.html: an unchanged answer repaints nothing; a failed refresh keeps the month', async () => {
+  const page = loadPage({ ...BOOK, browserTZ: 'America/Lima' });
+  lastSlotsRequest(page).respond(200, SEP30);
+  await flush();
+  clickDay(page, '2026-09-30');
+  page.$('slots-list').insertAdjacentHTML('beforeend', '<i>marker</i>');
+  page.env.advance(60000);
+  page.env.tick();
+  lastSlotsRequest(page).respond(200, JSON.parse(JSON.stringify(SEP30)));
+  await flush();
+  assert.match(page.$('slots-list').innerHTML, /marker/, 'same answer: the list was not rewritten');
+  page.env.advance(60000);
+  page.env.tick();
+  lastSlotsRequest(page).respond(500, {});
+  await flush();
+  assert.match(page.$('cal').innerHTML, /data-ds="2026-09-30"/, 'the day is still open after a failed refresh');
+  assert.match(page.$('slots-list').innerHTML, /marker/);
+});
+
+test('book.html: a refresh never overwrites a month the visitor moved to', async () => {
+  const page = loadPage({ ...BOOK, browserTZ: 'America/Lima' });
+  lastSlotsRequest(page).respond(200, SEP30);
+  await flush();
+  page.env.advance(20000);
+  page.env.fire('window', 'focus');
+  const refresh = lastSlotsRequest(page);
+  click(page.$('next-btn'));
+  lastSlotsRequest(page).respond(200, { slots: [{ start: '2026-10-05T09:00:00-05:00' }] });
+  await flush();
+  refresh.respond(200, { slots: [{ start: '2026-09-30T09:00:00-05:00' }, { start: '2026-10-01T09:00:00-05:00' }] });
+  await flush();
+  assert.match(page.$('cal').innerHTML, /data-ds="2026-10-05"/);
+  assert.doesNotMatch(page.$('cal').innerHTML, /data-ds="2026-10-01"/, 'the late September refresh was dropped');
+});
+
+test('manage.html: the open picker refreshes; the confirm view does not', async () => {
+  const page = loadPage({ ...MANAGE, browserTZ: 'America/Lima' });
+  page.env.advance(60000);
+  page.env.tick();
+  assert.equal(slotsRequests(page).length, 0, 'picker never opened: nothing to refresh');
+  click(page.$('reschedule-btn'));
+  lastSlotsRequest(page).respond(200, SEP30);
+  await flush();
+  clickDay(page, '2026-09-30');
+  assert.deepEqual(slotButtons(page.$('slots-list')).map((b) => b.label), ['3:30 p. m.', '4:00 p. m.']);
+  clickSlot(page, 0);
+  assert.equal(page.$('confirm-reschedule-view').classList.contains('hidden'), false);
+  page.env.advance(60000);
+  page.env.tick();
+  assert.equal(slotsRequests(page).length, 1, 'deciding on the confirm view: no refresh');
+  click(page.$('back-to-picker-btn'));
+  page.env.tick();
+  assert.equal(slotsRequests(page).length, 2);
+  lastSlotsRequest(page).respond(200, { slots: [{ start: '2026-09-30T16:00:00-05:00' }] });
+  await flush();
+  const list = page.$('slots-list');
+  assert.deepEqual(slotButtons(list).map((b) => b.label), ['4:00 p. m.']);
+  assert.match(textOf(list), /Ese horario ya no está disponible/, 'the time picked before going back went');
+});
+
 // ---- embed.js ---------------------------------------------------------------------------
 // The widget does not load booking-logic.js; it is run here as the standalone file it is.
 const EMBED = fs.readFileSync(path.join(__dirname, '..', 'embed.js'), 'utf8');
@@ -357,10 +507,7 @@ function loadEmbed({ browserTZ }) {
   }
   const FakeIntl = Object.create(Intl);
   FakeIntl.DateTimeFormat = FakeDTF;
-  class FakeDate extends Date {
-    constructor(...a) { if (a.length === 0) super(NOW); else super(...a); }
-    static now() { return NOW; }
-  }
+  const env = fakeEnv();
   class HTMLElementStub {
     constructor() { this.attrs = {}; this.style = { setProperty() {} }; this.events = []; }
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
@@ -369,19 +516,19 @@ function loadEmbed({ browserTZ }) {
     dispatchEvent(e) { this.events.push(e); }
   }
   let Widget = null;
-  const document = {
-    currentScript: null, readyState: 'complete',
+  const document = Object.assign(env.target('document'), {
+    currentScript: null, readyState: 'complete', visibilityState: 'visible',
     createElement: (tag) => makeEl(tag),
     createTextNode: (text) => { const n = makeEl('#text'); n.textContent = text; return n; },
     querySelectorAll: () => [],
-    addEventListener() {},
-  };
-  const window = { location: { origin: 'https://agenda.test' }, customElements: null, top: null };
+  });
+  const window = Object.assign(env.target('window'), { location: { origin: 'https://agenda.test' }, customElements: null, top: null });
   const ctx = {
-    window, document, fetch, Intl: FakeIntl, Date: FakeDate, HTMLElement: HTMLElementStub,
+    window, document, fetch, Intl: FakeIntl, Date: env.FakeDate, HTMLElement: HTMLElementStub,
     customElements: { get: () => undefined, define: (_n, c) => { Widget = c; } },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
-    URL, navigator: { languages: ['es-PE'], language: 'es-PE' }, setTimeout, clearTimeout, console,
+    URL, navigator: { languages: ['es-PE'], language: 'es-PE' }, setTimeout, clearTimeout,
+    setInterval: env.setInterval, clearInterval: env.clearInterval, console,
     requestAnimationFrame: (fn) => setTimeout(fn, 0),
   };
   window.customElements = ctx.customElements;
@@ -390,7 +537,7 @@ function loadEmbed({ browserTZ }) {
   const w = new Widget();
   w.attrs.slug = 'mentoria';
   w.connectedCallback();
-  return { w, requests };
+  return { w, requests, env, document };
 }
 
 // Depth-first search of the widget's element tree.
@@ -459,4 +606,65 @@ test('embed.js: a 409 returns to the day\'s times with the message and a refresh
   await flush();
   assert.deepEqual(times(), ['4:00 p. m.', '4:30 p. m.'], 'the refreshed list is shown');
   assert.equal(findAll(e.w.wrap, (n) => hasClass(n, 'form-error')).length, 1, 'with the message still there');
+});
+
+test('embed.js: the times refresh by themselves, never under the form, and stop when removed', async () => {
+  const e = await openEmbed('America/Lima', SEP30);
+  const slotsReqs = () => e.requests.filter((r) => r.url.includes('/slots?'));
+  const times = () => findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'slot-btn')).map((n) => nbsp(n.textContent));
+  click(findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'cd') && n.textContent === '30')[0], {});
+  assert.deepEqual(times(), ['3:30 p. m.', '4:00 p. m.']);
+  e.env.advance(10000);
+  e.env.fire('window', 'focus');
+  assert.equal(slotsReqs().length, 1, '10 s old: no refresh');
+  e.env.advance(6000);
+  e.env.fire('window', 'focus');
+  assert.equal(slotsReqs().length, 2, 'back after 16 s: refreshed');
+  slotsReqs().pop().respond(200, { slots: [{ start: '2026-09-30T16:00:00-05:00', host_ids: [] }, { start: '2026-09-30T17:00:00-05:00', host_ids: [] }] });
+  await flush();
+  assert.deepEqual(times(), ['4:00 p. m.', '5:00 p. m.'], 'the chosen day is redrawn');
+
+  click(findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'slot-btn'))[0], {}); // 4:00 -> form
+  assert.equal(findAll(e.w.wrap, (n) => n.tagName === 'FORM').length, 1);
+  e.env.advance(60000);
+  e.env.tick();
+  assert.equal(slotsReqs().length, 2, 'the form is open: no refresh');
+  click(findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'back-btn'))[0], {});
+  e.env.tick();
+  assert.equal(slotsReqs().length, 3);
+  slotsReqs().pop().respond(200, { slots: [{ start: '2026-09-30T17:00:00-05:00', host_ids: [] }] });
+  await flush();
+  assert.deepEqual(times(), ['5:00 p. m.']);
+  const err = findAll(e.w.wrap, (n) => hasClass(n, 'form-error'));
+  assert.equal(err.length, 1, 'the time picked before going back went: short notice');
+  assert.equal(err[0].textContent, 'slot_no_longer_available_error', 'the key (the test i18n table lacks it)');
+
+  e.w.disconnectedCallback();
+  assert.equal(e.env.intervals.length, 0, 'no timer left behind');
+  assert.equal(e.env.listeners('window', 'focus') + e.env.listeners('document', 'visibilitychange'), 0);
+  e.env.advance(60000);
+  e.env.fire('window', 'focus');
+  assert.equal(slotsReqs().length, 3);
+});
+
+test('embed.js: a refresh that lands while the form is open is checked on "back" (like book.html)', async () => {
+  const e = await openEmbed('America/Lima', SEP30);
+  const slotsReqs = () => e.requests.filter((r) => r.url.includes('/slots?'));
+  const times = () => findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'slot-btn')).map((n) => nbsp(n.textContent));
+  click(findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'cd') && n.textContent === '30')[0], {});
+  assert.deepEqual(times(), ['3:30 p. m.', '4:00 p. m.']);
+  e.env.advance(16000);
+  e.env.fire('window', 'focus'); // a refresh starts on the times view...
+  assert.equal(slotsReqs().length, 2);
+  click(findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'slot-btn'))[1], {}); // ...the visitor picks 4:00
+  assert.equal(findAll(e.w.wrap, (n) => n.tagName === 'FORM').length, 1);
+  slotsReqs().pop().respond(200, { slots: [{ start: '2026-09-30T15:30:00-05:00', host_ids: [] }] }); // 4:00 is gone
+  await flush();
+  assert.equal(findAll(e.w.wrap, (n) => n.tagName === 'FORM').length, 1, 'the form is not interrupted');
+  click(findAll(e.w.wrap, (n) => n.tagName === 'BUTTON' && hasClass(n, 'back-btn'))[0], {});
+  assert.deepEqual(times(), ['3:30 p. m.']);
+  const err = findAll(e.w.wrap, (n) => hasClass(n, 'form-error'));
+  assert.equal(err.length, 1, 'the time picked before going back went: short notice');
+  assert.equal(err[0].textContent, 'slot_no_longer_available_error');
+  e.w.disconnectedCallback();
 });

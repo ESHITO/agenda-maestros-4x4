@@ -380,6 +380,57 @@
   function endOfMonth(d) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
   function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
   function mondayIndex(d) { return (d.getDay() + 6) % 7; }
+
+  // ── Fresh times without a reload (fork) ────────────────────────────────────
+  // DELIBERATE MIRRORS of BookingLogic.slotStillOffered, monthSignature and autoRefresh
+  // (booking-logic.js, tested there; this file does not load it). Same rules: refresh the
+  // shown month when the page comes back (older than 15 s) and every 60 s while visible,
+  // one refresh at a time; repaint only when the answer changed. Change one, change both.
+  var AUTO_REFRESH_MIN_AGE_MS = 15000, AUTO_REFRESH_PERIOD_MS = 60000;
+  function sameInstant(a, b) {
+    if (!a || !b) return false;
+    var ta = Date.parse(a), tb = Date.parse(b);
+    return !isNaN(ta) && ta === tb;
+  }
+  function slotStillOffered(list, slot) {
+    if (!slot) return false;
+    return (list || []).some(function (s) { return !s.taken && sameInstant(s.start, slot.start); });
+  }
+  function monthSignature(data) {
+    var d = data || {};
+    var one = function (s) { return [s.start, s.end || '', (s.host_ids || []).join(',')]; };
+    return JSON.stringify([
+      (d.slots || []).map(one),
+      (d.taken || []).map(one),
+      (d.min_notice && d.min_notice.dates) || [],
+      !!d.degraded
+    ]);
+  }
+  function autoRefresh(opts) {
+    var busy = false, stopped = false;
+    function visible() { return document.visibilityState !== 'hidden'; }
+    function done() { busy = false; }
+    function run() {
+      if (stopped || busy || !visible()) return;
+      if (Date.now() - (opts.lastFetchAt() || 0) < AUTO_REFRESH_MIN_AGE_MS) return;
+      busy = true;
+      var p;
+      try { p = opts.refresh(); } catch (e) { busy = false; return; }
+      if (p && typeof p.then === 'function') p.then(done, done); else busy = false;
+    }
+    function onVisibility() { if (visible()) run(); }
+    if (document.addEventListener) document.addEventListener('visibilitychange', onVisibility);
+    if (window.addEventListener) { window.addEventListener('focus', run); window.addEventListener('pageshow', run); }
+    var timer = setInterval(run, AUTO_REFRESH_PERIOD_MS);
+    return {
+      stop: function () {
+        stopped = true;
+        clearInterval(timer);
+        if (document.removeEventListener) document.removeEventListener('visibilitychange', onVisibility);
+        if (window.removeEventListener) { window.removeEventListener('focus', run); window.removeEventListener('pageshow', run); }
+      }
+    };
+  }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   // Group host label: "Alex", "Alex & Sam", "Alex, Sam & Jo", "A, B, C & 2 others" — or
   // "Alex, Sam y 2 más" in Spanish. Separator and conjunction come from the locale, not
@@ -469,7 +520,7 @@
 
   class CalnodeBooking extends HTMLElement {
     connectedCallback() {
-      if (this._mounted) return;
+      if (this._mounted) { this.startRefresh(); return; } // moved in the page: resume refreshing
       this._mounted = true;
       this.slug = this.getAttribute('slug');
       this.root = this.attachShadow({ mode: 'open' });
@@ -496,8 +547,40 @@
         this._ro.observe(this.wrap);
       }
       this.load();
+      this.startRefresh();
     }
-    disconnectedCallback() { if (this._ro) this._ro.disconnect(); }
+    disconnectedCallback() {
+      if (this._ro) this._ro.disconnect();
+      // A closed popup (or a widget the host page removed) stops polling for good.
+      if (this._refresher) { this._refresher.stop(); this._refresher = null; }
+    }
+
+    startRefresh() {
+      if (this._refresher) return;
+      var self = this;
+      this._refresher = autoRefresh({
+        lastFetchAt: function () { return self._lastFetchAt || 0; },
+        refresh: function () { return self.refresh(); },
+      });
+    }
+
+    // refresh — the background refresh of the shown month (fork). Only on the times view:
+    // never while the visitor fills the form, never after the confirmation, never on top of
+    // a month still loading (the _monthReq counter would drop that answer anyway). The day
+    // stays chosen; a time picked before going back that is no longer offered is dropped
+    // with a short notice.
+    refresh() {
+      var self = this, st = this.state;
+      if (!this.info || !st || st.view !== 'pick' || this._monthLoading) return;
+      return this.loadMonth({ quiet: true }).then(function (applied) {
+        if (!applied || self.state.view !== 'pick') return;
+        if (st.slot && st.day && !slotStillOffered(st.slotsByDay[st.day], st.slot)) {
+          st.slot = null;
+          st.slotError = t(self.i18n, 'slot_no_longer_available_error');
+        }
+        self.render();
+      });
+    }
 
     async load() {
       this.wrap.innerHTML = '';
@@ -544,14 +627,25 @@
     // The request counter mirrors BookingLogic.latestOnly (booking-logic.js, not loaded
     // here): a slow answer for a month the visitor already left must not replace the one
     // on screen.
-    async loadMonth() {
+    // quiet (the background refresh): a failure keeps what is shown, and an answer identical
+    // to the one shown is not applied (false), so nothing repaints.
+    async loadMonth(opts) {
+      var quiet = !!(opts && opts.quiet);
       var token = this._monthReq = (this._monthReq || 0) + 1;
       var first = this.state.month, last = endOfMonth(first);
+      var monthKey = first.getFullYear() * 12 + first.getMonth();
       var today = new Date(); today.setHours(0, 0, 0, 0);
       var from = first < today ? today : first;
+      if (!quiet) this._monthLoading = true;
       try {
         var r = await api('/v1/event-types/' + encodeURIComponent(this.slug) + '/slots?from=' + ymd(from) + '&to=' + ymd(last) + '&tz=' + encodeURIComponent(TZ));
         if (token !== this._monthReq) return false;
+        this._monthLoading = false;
+        this._lastFetchAt = Date.now();
+        var sig = monthSignature(r);
+        if (quiet && sig === this._monthSig && this._loadedMonth === monthKey) return false; // nothing new
+        this._monthSig = sig;
+        this._loadedMonth = monthKey;
         // `taken` is present only when the event type opts into showing booked times.
         // Tag on the way in so the renderer needs no second lookup, and so a taken entry
         // can never be mistaken for a bookable one further down.
@@ -583,7 +677,10 @@
         });
       } catch (e) {
         if (token !== this._monthReq) return false;
+        this._monthLoading = false;
+        if (quiet) return false; // a failed background refresh keeps the month on screen
         this.state.slotsByDay = {}; this.state.noticeDates = [];
+        this._monthSig = ''; this._loadedMonth = null;
       }
       return true;
     }
@@ -1178,7 +1275,18 @@
     formView(slot) {
       var self = this;
       var back = el('button', { class: 'back-btn', html: SVG_BACK + ' ' + t(this.i18n, 'back') });
-      back.addEventListener('click', function () { self.state.view = 'pick'; self.render(); });
+      back.addEventListener('click', function () {
+        // Mirror of book.html's rerenderPickedDay on "back": a refresh may have landed while
+        // the form was open (refresh() skips the check then, and the next one sees the same
+        // answer), so the picked time is checked here against the month now held.
+        var st = self.state;
+        st.view = 'pick';
+        if (st.slot && st.day && !slotStillOffered(st.slotsByDay[st.day], st.slot)) {
+          st.slot = null;
+          st.slotError = t(self.i18n, 'slot_no_longer_available_error');
+        }
+        self.render();
+      });
       var form = el('form', { novalidate: 'novalidate' });
       var hp = el('input', { type: 'text', name: 'hp_extra', tabindex: '-1', autocomplete: 'off' });
       form.appendChild(el('div', { 'aria-hidden': 'true', style: 'position:absolute;left:-5000px;height:0;width:0;overflow:hidden;' }, [hp]));
