@@ -402,6 +402,17 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   the template, for its owner) and remaps answers in one tx; fresh LiveKit host link, `fork_livekit_host_links`).
   Attendance = our token mints (`fork_livekit_mints`) refined by LiveKit webhook sessions
   (`fork_livekit_sessions`), computed per list page (`fork_attendance.go`).
+- **Team calendar** (`fork_team_availability.go`, Panel → `TeamAvailability.svelte`): `GET /v1/team/availability?from&to&tz&area=all|mentoria|soporte[&fresh=1]`
+  for the owner and área-soporte people only (owner decision: not mentors, not an admin without área soporte; others 403); ≤ 7 days (400), days in `tz` like `/slots`. People = each
+  template's owner with T/S + the host of every ACTIVE copy (active user), each computed SEQUENTIALLY with the same
+  `computeSlots(..., slotsWanted{})` as the public page (never re-implement slots here); a link the public page 404s is
+  left out; one person's failure - or a `Degraded` calendar, since booking is fail-closed then - is `error: true`, never
+  the whole answer. Each person gets 5 s and the loop 20 s (under the 30 s WriteTimeout; provider free/busy has no
+  timeout of its own): a slow calendar is `error_kind: "calendar"`, people the budget never reached `"timeout"`. Clean
+  answers are cached 60 s per range+tz+área **on the Handler** (`h.teamAvail`, never a package global: tests build a
+  Handler each), `is_you` set per viewer; `fresh=1` skips it. The panel groups by the RFC3339 wall clock the server
+  wrote (no Intl day shifts), prints "9:00 a. m." itself, counts distinct people per day, reuses answers only 60 s,
+  and at 375 px keeps 2-3 chips per hour row (área as an M/S dot on the avatar) - `TeamAvailability.test.ts`.
 - **Known, out of scope:** staff creating bookings for clients; per-person summary; the owner
   rescheduling others' sessions (the MCP `reschedule_booking` tool still lets admins do it).
 

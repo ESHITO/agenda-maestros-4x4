@@ -82,6 +82,31 @@ export type EventType = {
 /** Fork: what a person attends. '' = nothing ("Sin área"). */
 export type Area = 'mentoria' | 'soporte' | '';
 
+/** Fork: GET /v1/team/availability - one person of the team and their free starts, as
+ *  their public link offers them (start/end are RFC3339 in the requested zone). */
+export type TeamAvailabilityPerson = {
+	user_id: string;
+	name: string;
+	area: Exclude<Area, ''>;
+	avatar_url: string;
+	/** Their booking accent, or null while on the default. */
+	color: string | null;
+	is_you: boolean;
+	link: { slug: string; url: string };
+	slots: { start: string; end: string }[];
+	/** Their times could not be computed now: "calendar" = their calendar did not answer
+	 *  (or not in time), "timeout" = the answer ran out of time before reaching them. */
+	error?: boolean;
+	error_kind?: 'calendar' | 'timeout' | 'internal';
+};
+export type TeamAvailability = {
+	tz: string;
+	from: string;
+	to: string;
+	generated_at: string;
+	people: TeamAvailabilityPerson[];
+};
+
 /** Fork: a personal booking link (GET /v1/users, /v1/users/me). */
 export type PersonalLink = { slug: string; url: string; active: boolean };
 
@@ -596,6 +621,12 @@ export const teamApi = {
 
 	/** DELETE /v1/users/{id}/avatar. */
 	deleteAvatar: (userId: string) => api.del(`/v1/users/${userId}/avatar`),
+
+	/** GET /v1/team/availability (owner, admins, área soporte): at most 7 days, days in tz. */
+	availability: (q: { from: string; to: string; tz: string; area?: 'all' | 'mentoria' | 'soporte'; fresh?: boolean }) =>
+		api.get<TeamAvailability>(
+			`/v1/team/availability?from=${q.from}&to=${q.to}&tz=${encodeURIComponent(q.tz)}&area=${q.area ?? 'all'}${q.fresh ? '&fresh=1' : ''}`
+		),
 
 	/** POST /v1/invites with the role the invitee will get. */
 	createInvite: (email: string, role: InviteRole) =>

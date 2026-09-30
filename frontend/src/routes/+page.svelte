@@ -3,6 +3,7 @@
 	import { base } from '$app/paths';
 	import { api, type CalendarStatus, type AvailabilityRule, type EventType } from '$lib/api';
 	import { authStatus, currentUser } from '$lib/stores';
+	import TeamAvailability from '$lib/components/TeamAvailability.svelte';
 
 	let calendarConnected = $state(false);
 	let calendarConfigured = $state(true);
@@ -50,6 +51,11 @@
 	// pointing at a dead-end connect flow otherwise.
 	const calendarRequired = $derived(calendarConfigured && !$authStatus.demo_mode);
 	const allDone = $derived((!calendarRequired || calendarDone) && hasAvailability && hasEventType);
+	// Fork: the team calendar is for the owner, the admins and the support people (the
+	// server answers 403 to anyone else, mentors included).
+	const showTeam = $derived(
+		!!$currentUser && ($currentUser.is_owner || $currentUser.area === 'soporte')
+	);
 	const bookingUrl = $derived(personalUrl || (firstSlug && origin ? `${origin}/book/${firstSlug}` : ''));
 
 	async function copyLink() {
@@ -223,4 +229,8 @@
 			</div>
 		</div>
 	</div>
+{/if}
+
+{#if !loading && showTeam}
+	<TeamAvailability />
 {/if}

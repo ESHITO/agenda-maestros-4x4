@@ -402,6 +402,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/users/{id}/restore", h.RequireAuth(h.TeamReconcileAfter(h.RestoreUser)))
 	// Fork: the owner's predefined event types (the Mentoría and Soporte templates).
 	mux.HandleFunc("GET /v1/team/settings", h.RequireAuth(h.GetTeamSettings))
+	// Fork: the team's free time for the Panel (owner, admins, área soporte) - fork_team_availability.go.
+	mux.HandleFunc("GET /v1/team/availability", h.RequireAuth(h.GetTeamAvailability))
 	mux.HandleFunc("GET /v1/users/{id}/upcoming-bookings", h.RequireAuth(h.ListUserUpcomingBookings))
 
 	// Teams

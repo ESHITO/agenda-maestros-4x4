@@ -55,6 +55,7 @@ type Handler struct {
 	demoResetInterval time.Duration
 	demoMu            sync.RWMutex
 	demoNextResetAt   time.Time
+	teamAvail         teamAvailCache // fork: the Panel's team calendar answers, per Handler (fork_team_availability.go)
 }
 
 // SetLiveKit swaps the active LiveKit client (nil disables built-in video rooms).
