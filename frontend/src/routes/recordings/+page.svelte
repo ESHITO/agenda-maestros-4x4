@@ -251,13 +251,14 @@
 
 <svelte:head><title>Grabaciones — Calnode</title></svelte:head>
 
-<div class="mb-8 flex items-start justify-between gap-4">
+<!-- Stacks on a phone: the button beside the long description squeezed it at 375 px. -->
+<div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Grabaciones</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Grabaciones de reuniones capturadas desde las videollamadas de Calnode. Los archivos viven en tu bucket de almacenamiento; los enlaces de abajo son de corta duración. Los nombres de los archivos descargados usan la fecha de la reunión en UTC.</p>
 	</div>
 	{#if $currentUser?.is_admin && recordings.length > 0}
-		<Button variant="outline" size="sm" class="shrink-0" disabled={deleting} onclick={askDeleteAll}>
+		<Button variant="outline" size="sm" class="w-full sm:w-auto sm:shrink-0" disabled={deleting} onclick={askDeleteAll}>
 			{deleting ? 'Eliminando…' : 'Eliminar todo'}
 		</Button>
 	{/if}
@@ -284,13 +285,18 @@
 	<div class="divide-y rounded-lg border bg-card">
 		{#each filtered as r (r.id)}
 			<div class="p-4">
-				<div class="flex items-center justify-between gap-4">
-					<div class="min-w-0">
-						<p class="truncate font-medium">{r.booker_name || r.room} · {fmtDay(r.created_at)}</p>
-						<p class="mt-0.5 text-xs text-muted-foreground">{fmtTime(r.created_at)} · {fmtDuration(r.duration_s)}</p>
+				<!-- Stacks on a phone: five actions in one row overflowed 375 px. The delete action
+				     carries text there (a Tooltip does not open on touch). -->
+				<div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-4">
+					<div class="flex min-w-0 items-center justify-between gap-3">
+						<div class="min-w-0">
+							<p class="truncate font-medium">{r.booker_name || r.room} · {fmtDay(r.created_at)}</p>
+							<p class="mt-0.5 text-xs text-muted-foreground">{fmtTime(r.created_at)} · {fmtDuration(r.duration_s)}</p>
+						</div>
+						<span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium md:hidden {statusStyle[r.status] ?? 'bg-muted text-muted-foreground'}">{statusLabel[r.status] ?? r.status}</span>
 					</div>
-					<div class="flex shrink-0 items-center gap-3">
-						<span class="rounded-full px-2 py-0.5 text-xs font-medium {statusStyle[r.status] ?? 'bg-muted text-muted-foreground'}">{statusLabel[r.status] ?? r.status}</span>
+					<div class="flex flex-wrap items-center gap-1.5 md:shrink-0 md:justify-end md:gap-3">
+						<span class="hidden rounded-full px-2 py-0.5 text-xs font-medium md:inline {statusStyle[r.status] ?? 'bg-muted text-muted-foreground'}">{statusLabel[r.status] ?? r.status}</span>
 						{#if r.booking_id}
 							<Button variant="ghost" size="sm" onclick={() => viewNotes(r)}>{openNotes === r.id ? 'Ocultar notas' : 'Notas'}</Button>
 							<Button variant="ghost" size="sm" onclick={() => viewTranscript(r)}>{openTranscript === r.id ? 'Ocultar transcripción' : 'Transcripción'}</Button>
@@ -299,26 +305,30 @@
 						<Button variant="outline" size="sm" disabled={!r.has_file} onclick={() => download(r)}>
 							{r.has_file ? 'Descargar' : 'Aún no disponible'}
 						</Button>
-						<Tooltip.Provider>
-							<Tooltip.Root>
-								<Tooltip.Trigger
-									class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-									disabled={r.status === 'active'}
-									onclick={() => askDelete(r)}
-								>
-									<!-- Trash icon -->
-									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-								</Tooltip.Trigger>
-								<Tooltip.Content>Eliminar</Tooltip.Content>
-							</Tooltip.Root>
-						</Tooltip.Provider>
+						<Button variant="ghost" class="h-10 text-destructive hover:text-destructive md:hidden" disabled={r.status === 'active'} onclick={() => askDelete(r)}>Eliminar</Button>
+						<div class="hidden md:block">
+							<Tooltip.Provider>
+								<Tooltip.Root>
+									<Tooltip.Trigger
+										class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+										disabled={r.status === 'active'}
+										aria-label="Eliminar"
+										onclick={() => askDelete(r)}
+									>
+										<!-- Trash icon -->
+										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+									</Tooltip.Trigger>
+									<Tooltip.Content>Eliminar</Tooltip.Content>
+								</Tooltip.Root>
+							</Tooltip.Provider>
+						</div>
 					</div>
 				</div>
 				{#if openNotes === r.id}
 					<div class="mt-3 rounded-md border bg-muted/40 p-3">
-						<div class="mb-2 flex items-center justify-between gap-2">
+						<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 							<p class="text-xs font-medium text-muted-foreground">Notas <span class="text-muted-foreground/70">(resumen de IA)</span></p>
-							<div class="flex items-center gap-1">
+							<div class="flex flex-wrap items-center gap-1">
 								<Button variant="ghost" size="sm" class="h-7 gap-1.5 px-2 text-xs" disabled={!notesContent} onclick={() => copyText(notesContent, 'Notas')}>
 									<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
 									Copiar
@@ -375,9 +385,9 @@
 							<p class="mb-2 text-xs font-medium text-muted-foreground">Aviso de grabación — quién lo confirmó</p>
 							<ul class="divide-y divide-border/60">
 								{#each consentRows as c (c.identity)}
-									<li class="flex items-center justify-between gap-3 py-1.5 text-sm">
+									<li class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-1.5 text-sm">
 										<span class="truncate">{c.name || 'Invitado'}</span>
-										<span class="flex shrink-0 items-center gap-2">
+										<span class="flex shrink-0 flex-wrap items-center gap-2">
 											<span class="rounded-full px-2 py-0.5 text-xs font-medium {c.decision === 'leave' ? 'bg-destructive/10 text-destructive' : 'bg-green-50 text-green-700'}">{c.decision === 'leave' ? 'Salió' : 'Continuó'}</span>
 											<span class="text-xs text-muted-foreground">{fmtDay(c.decided_at)} · {fmtTime(c.decided_at)}</span>
 										</span>

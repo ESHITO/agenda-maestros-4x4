@@ -158,7 +158,7 @@
 
 				<div class="space-y-1.5">
 					<p class="text-sm font-medium">Formato de hora</p>
-					<div class="flex gap-2">
+					<div class="flex flex-col gap-2 sm:flex-row">
 						{#each [{ value: '12h', label: '12 horas', hint: '1:30 PM' }, { value: '24h', label: '24 horas', hint: '13:30' }] as opt}
 							<label class="flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors {time_format === opt.value ? 'border-primary bg-primary/5' : 'bg-background hover:bg-accent/50'}">
 								<input type="radio" bind:group={time_format} value={opt.value} class="sr-only" />

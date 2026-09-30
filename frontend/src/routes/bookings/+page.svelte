@@ -573,7 +573,7 @@
 
 		<div class="grid w-full grid-cols-1 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
 			<Select.Root type="single" bind:value={fEventType} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-full sm:w-[170px]" aria-label="Filtrar por tipo de atención">
+				<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por tipo de atención">
 					{fEventType ? eventTypeName(fEventType) : 'Todos los tipos de atención'}
 				</Select.Trigger>
 				<Select.Content>
@@ -587,7 +587,7 @@
 			{#if canSeeAll && scope === 'all'}
 				<!-- Fork: área from the booking's type (Mentoría = the template and every copy). -->
 				<Select.Root type="single" bind:value={fArea} onValueChange={reload}>
-					<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por área">
+					<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por área">
 						{fArea === 'mentoria' || fArea === 'soporte' ? AREA_LABELS[fArea] : 'Todas las áreas'}
 					</Select.Trigger>
 					<Select.Content>
@@ -598,7 +598,7 @@
 				</Select.Root>
 
 				<Select.Root type="single" bind:value={fHost} onValueChange={reload}>
-					<Select.Trigger class="h-9 w-full sm:w-[150px]" aria-label="Filtrar por anfitrión">
+					<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por anfitrión">
 						{members.find((m) => m.id === fHost)?.name ?? 'Todos los anfitriones'}
 					</Select.Trigger>
 					<Select.Content>
@@ -611,7 +611,7 @@
 
 				{#if teams.length > 0}
 					<Select.Root type="single" bind:value={fTeam} onValueChange={reload}>
-						<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por equipo">
+						<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por equipo">
 							{teams.find((tm) => tm.id === fTeam)?.name ?? 'Todos los equipos'}
 						</Select.Trigger>
 						<Select.Content>
@@ -625,7 +625,7 @@
 			{/if}
 
 			<Select.Root type="single" bind:value={fStatus} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-full sm:w-[140px]" aria-label="Filtrar por estado">
+				<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por estado">
 					{fStatus ? (statusLabel[fStatus] ?? fStatus) : 'Cualquier estado'}
 				</Select.Trigger>
 				<Select.Content>

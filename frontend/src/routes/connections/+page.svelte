@@ -104,7 +104,7 @@
 		La app aparecerá abajo una vez que la apruebes.
 	</p>
 
-	<div class="mt-3 flex items-center gap-2">
+	<div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
 		<Input
 			readonly
 			value={mcpUrl}
@@ -112,7 +112,7 @@
 			onclick={(e) => e.currentTarget.select()}
 			class="min-w-0 flex-1 bg-muted/40 font-mono"
 		/>
-		<Button variant="outline" onclick={copyMcpUrl} disabled={!mcpUrl}>
+		<Button variant="outline" class="w-full sm:w-auto" onclick={copyMcpUrl} disabled={!mcpUrl}>
 			{copied ? 'Copiado' : 'Copiar'}
 		</Button>
 	</div>
@@ -135,7 +135,22 @@
 	</div>
 {:else}
 	<div class="overflow-hidden rounded-lg border bg-card">
-		<table class="w-full text-sm">
+		<!-- Below md, one card per app (the 4-column table clipped at 375 px). Actions carry
+		     text: a Tooltip does not open on touch. -->
+		<ul class="divide-y md:hidden">
+			{#each items as c}
+				<li class="flex items-start justify-between gap-3 p-4">
+					<div class="min-w-0">
+						<p class="break-words font-medium">{c.client_name}</p>
+						<p class="mt-0.5 text-xs text-muted-foreground">
+							Conectada el {fmtDate(c.created_at)} · Último uso: {#if c.last_used_at}{fmtDate(c.last_used_at)}{:else}nunca{/if}
+						</p>
+					</div>
+					<Button variant="ghost" class="h-10 shrink-0 text-destructive hover:text-destructive" onclick={() => revoke(c.id, c.client_name)}>Desconectar</Button>
+				</li>
+			{/each}
+		</ul>
+		<table class="hidden w-full text-sm md:table">
 			<thead>
 				<tr class="border-b">
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Aplicación</th>
@@ -157,6 +172,7 @@
 								<Tooltip.Root>
 									<Tooltip.Trigger
 										class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+										aria-label="Desconectar"
 										onclick={() => revoke(c.id, c.client_name)}
 									>
 										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>

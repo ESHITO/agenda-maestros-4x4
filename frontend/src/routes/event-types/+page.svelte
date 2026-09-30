@@ -226,7 +226,7 @@
 		<h1 class="text-2xl font-semibold tracking-tight">Tipos de atención</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Administra los tipos de reuniones que las personas pueden reservar contigo.</p>
 	</div>
-	<Button class="self-start sm:self-auto" onclick={() => { showCreate = !showCreate; }}>
+	<Button class="w-full sm:w-auto" onclick={() => { showCreate = !showCreate; }}>
 		{showCreate ? 'Cancelar' : 'Nuevo tipo de atención'}
 	</Button>
 </div>

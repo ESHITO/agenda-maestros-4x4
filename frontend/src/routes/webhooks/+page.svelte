@@ -387,7 +387,8 @@
 
 <svelte:head><title>Webhooks — Calnode</title></svelte:head>
 
-<div class="mb-8 flex items-center justify-between">
+<!-- Stacks on a phone: the title and the button collided at 375 px. -->
+<div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Webhooks</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Recibe notificaciones en tiempo real de eventos de reservas.</p>
@@ -397,7 +398,7 @@
 			<p class="mt-1 text-sm text-muted-foreground">Las citas que te agendan también llegan a los webhooks del dueño del equipo. Si él ya envía un mensaje de WhatsApp, no lo repitas aquí o el cliente lo recibirá dos veces.</p>
 		{/if}
 	</div>
-	<Button onclick={() => { showCreate = !showCreate; createError = ''; }}>
+	<Button class="w-full sm:w-auto" onclick={() => { showCreate = !showCreate; createError = ''; }}>
 		{showCreate ? 'Cancelar' : 'Nuevo webhook'}
 	</Button>
 </div>
@@ -464,7 +465,7 @@
 {/if}
 
 {#if showCreate}
-	<div class="mb-6 rounded-lg border bg-card p-6">
+	<div class="mb-6 rounded-lg border bg-card p-4 sm:p-6">
 		<h2 class="mb-4 text-sm font-semibold">Nuevo webhook</h2>
 		{#if createError}<p class="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{createError}</p>{/if}
 
@@ -547,11 +548,12 @@
 					<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 						{grp.group}{#if grp.pii}<span class="ml-1.5 font-normal normal-case text-amber-600">· datos personales</span>{/if}
 					</p>
-					<div class="grid grid-cols-2 gap-x-4 gap-y-1">
+					<!-- One column at 375 px: two columns of mono field names overflowed the card. -->
+					<div class="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
 						{#each grp.fields as f}
 							<label class="flex cursor-pointer items-center gap-2 font-mono text-sm">
 								<Checkbox checked={form.fields.includes(f.key)} onCheckedChange={() => toggleField(f.key)} />
-								<span>{f.label}{#if f.pii}<span class="ml-1 text-[10px] font-medium uppercase text-amber-600">PII</span>{/if}</span>
+								<span class="min-w-0 break-all">{f.label}{#if f.pii}<span class="ml-1 text-[10px] font-medium uppercase text-amber-600">PII</span>{/if}</span>
 							</label>
 						{/each}
 					</div>
@@ -575,7 +577,102 @@
 		<p class="mt-1 text-sm text-muted-foreground">Agrega un webhook para recibir notificaciones en tiempo real de eventos de reservas.</p>
 	</div>
 {:else}
-	<div class="rounded-lg border bg-card overflow-x-auto">
+	<!-- Recent deliveries of one webhook, shown under its card (phone) or its row (md+). -->
+	{#snippet deliveriesPanel()}
+		{#if deliveriesLoading}
+			<p class="text-xs text-muted-foreground">Cargando entregas…</p>
+		{:else if deliveries.length === 0}
+			<p class="text-xs text-muted-foreground">Aún no hay entregas para este webhook.</p>
+		{:else}
+			<ul class="divide-y divide-border/50 text-xs md:hidden">
+				{#each deliveries as d}
+					<li class="space-y-0.5 py-1.5">
+						<p class="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+							<span class="break-all font-mono">{d.event}</span>
+							<span class={d.status === 'delivered' ? 'text-green-700' : d.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>{d.status}</span>
+						</p>
+						<p class="text-muted-foreground">
+							HTTP {d.response_status ?? '—'} · {d.attempt_count} {d.attempt_count === 1 ? 'intento' : 'intentos'} · {d.last_attempted_at ? new Date(d.last_attempted_at).toLocaleString() : '—'}
+						</p>
+					</li>
+				{/each}
+			</ul>
+			<table class="hidden w-full text-xs md:table">
+				<thead>
+					<tr class="text-left text-muted-foreground">
+						<th class="py-1 pr-4 font-medium">Evento</th>
+						<th class="py-1 pr-4 font-medium">Estado</th>
+						<th class="py-1 pr-4 font-medium">HTTP</th>
+						<th class="py-1 pr-4 font-medium">Intentos</th>
+						<th class="py-1 font-medium">Último intento</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-border/50">
+					{#each deliveries as d}
+						<tr>
+							<td class="py-1 pr-4 font-mono">{d.event}</td>
+							<td class="py-1 pr-4">
+								<span class={d.status === 'delivered' ? 'text-green-700' : d.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>{d.status}</span>
+							</td>
+							<td class="py-1 pr-4">{d.response_status ?? '—'}</td>
+							<td class="py-1 pr-4">{d.attempt_count}</td>
+							<td class="py-1 text-muted-foreground">{d.last_attempted_at ? new Date(d.last_attempted_at).toLocaleString() : '—'}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+	{/snippet}
+
+	<!-- Below md, one card per webhook: the 7-column table scrolled sideways at 375 px and
+	     its icon-only actions had no label a touch screen could reveal. -->
+	<ul class="divide-y rounded-lg border bg-card md:hidden">
+		{#each items as wh}
+			<li class="space-y-3 p-4">
+				<div class="flex items-start justify-between gap-3">
+					<p class="min-w-0 break-all font-mono text-xs">{wh.url}</p>
+					{#if wh.is_active}
+						<Badge class="shrink-0 bg-green-50 text-green-700 border-green-200">Activo</Badge>
+					{:else}
+						<Badge variant="secondary" class="shrink-0">Inactivo</Badge>
+					{/if}
+				</div>
+				<dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+					<dt class="text-muted-foreground">Eventos</dt>
+					<dd class="break-all">{(wh.events ?? []).join(', ')}</dd>
+					<dt class="text-muted-foreground">Tipos</dt>
+					<dd class="break-words">{typesLabel(wh)}</dd>
+					<dt class="text-muted-foreground">Campos</dt>
+					<dd>
+						{(wh.fields ?? []).length} campos
+						{#if sendsWhatsApp(wh)}
+							<span class="block text-green-700">incluye mensaje de WhatsApp</span>
+						{:else if carriesMessage(wh) && isOwner}
+							<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addWhatsAppField(wh)}>
+								{addingWA === wh.id ? 'Añadiendo…' : 'Añadir mensaje de WhatsApp'}
+							</Button>
+						{/if}
+					</dd>
+					<dt class="text-muted-foreground">Creado</dt>
+					<dd>{fmtDate(wh.created_at)}</dd>
+				</dl>
+				<!-- Phone-only actions: 40 px tall (a finger's target), not the table's 28 px. -->
+				<div class="flex flex-wrap items-center gap-1.5">
+					<Button variant="outline" class="h-10" aria-expanded={openDeliveries === wh.id} onclick={() => toggleDeliveries(wh.id)}>
+						{openDeliveries === wh.id ? 'Ocultar entregas' : 'Entregas recientes'}
+					</Button>
+					<Button variant="ghost" class="h-10 text-destructive hover:text-destructive" onclick={() => del(wh.id)}>Eliminar</Button>
+				</div>
+				{#if openDeliveries === wh.id}
+					<div class="rounded-md border bg-muted/20 px-3 py-2">
+						{@render deliveriesPanel()}
+					</div>
+				{/if}
+			</li>
+		{/each}
+	</ul>
+
+	<div class="hidden rounded-lg border bg-card overflow-x-auto md:block">
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b">
@@ -615,13 +712,13 @@
 							<td class="px-4 py-3 text-muted-foreground">{fmtDate(wh.created_at)}</td>
 							<td class="px-4 py-3 text-right whitespace-nowrap">
 								<Tooltip.Root>
-									<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} onclick={() => toggleDeliveries(wh.id)}>
+									<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} aria-label={openDeliveries === wh.id ? 'Ocultar entregas' : 'Entregas recientes'} aria-expanded={openDeliveries === wh.id} onclick={() => toggleDeliveries(wh.id)}>
 										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
 									</Tooltip.Trigger>
 									<Tooltip.Content>{openDeliveries === wh.id ? 'Ocultar entregas' : 'Entregas recientes'}</Tooltip.Content>
 								</Tooltip.Root>
 								<Tooltip.Root>
-									<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} onclick={() => del(wh.id)}>
+									<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} aria-label="Eliminar webhook" onclick={() => del(wh.id)}>
 										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 									</Tooltip.Trigger>
 									<Tooltip.Content>Eliminar webhook</Tooltip.Content>
@@ -631,36 +728,7 @@
 						{#if openDeliveries === wh.id}
 							<tr class="bg-muted/20">
 								<td colspan="7" class="px-4 py-3">
-									{#if deliveriesLoading}
-										<p class="text-xs text-muted-foreground">Cargando entregas…</p>
-									{:else if deliveries.length === 0}
-										<p class="text-xs text-muted-foreground">Aún no hay entregas para este webhook.</p>
-									{:else}
-										<table class="w-full text-xs">
-											<thead>
-												<tr class="text-left text-muted-foreground">
-													<th class="py-1 pr-4 font-medium">Evento</th>
-													<th class="py-1 pr-4 font-medium">Estado</th>
-													<th class="py-1 pr-4 font-medium">HTTP</th>
-													<th class="py-1 pr-4 font-medium">Intentos</th>
-													<th class="py-1 font-medium">Último intento</th>
-												</tr>
-											</thead>
-											<tbody class="divide-y divide-border/50">
-												{#each deliveries as d}
-													<tr>
-														<td class="py-1 pr-4 font-mono">{d.event}</td>
-														<td class="py-1 pr-4">
-															<span class={d.status === 'delivered' ? 'text-green-700' : d.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>{d.status}</span>
-														</td>
-														<td class="py-1 pr-4">{d.response_status ?? '—'}</td>
-														<td class="py-1 pr-4">{d.attempt_count}</td>
-														<td class="py-1 text-muted-foreground">{d.last_attempted_at ? new Date(d.last_attempted_at).toLocaleString() : '—'}</td>
-													</tr>
-												{/each}
-											</tbody>
-										</table>
-									{/if}
+									{@render deliveriesPanel()}
 								</td>
 							</tr>
 						{/if}

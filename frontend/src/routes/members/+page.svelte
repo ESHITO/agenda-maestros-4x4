@@ -865,7 +865,7 @@
 		<p class="mt-1 text-sm text-muted-foreground">Administra los miembros, roles e invitaciones del espacio de trabajo.</p>
 	</div>
 	{#if $currentUser?.is_admin}
-		<Button class="self-start sm:self-auto" onclick={() => { showInvite = !showInvite; inviteError = ''; inviteResult = null; }}>
+		<Button class="w-full sm:w-auto" onclick={() => { showInvite = !showInvite; inviteError = ''; inviteResult = null; }}>
 			{showInvite ? 'Cancelar' : 'Invitar miembro'}
 		</Button>
 	{/if}

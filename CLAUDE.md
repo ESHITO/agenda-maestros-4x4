@@ -330,9 +330,17 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   "Cancelar reunión" (future confirmed only,
   `ConfirmDialog` with an optional reason sent as typed - it used to send the English "cancelled
   by admin"). `ConfirmDialog` takes an optional `children` snippet for that field.
-- **Admin shell on phones** (`routes/+layout.svelte`): below `md` the sidebar is a menu opened from
-  a top bar (shadcn `Dialog`, closed on navigation and when the screen reaches `md` - its overlay
-  is not `md:hidden`); from `md` up it is the old fixed column. In the event-type editor, Ctrl/Cmd+S
+- **Admin shell** (`routes/+layout.svelte`, owner: "two scrollbars on the PC; adapt it to the phone"):
+  **the document is the only scroller** - `html, body { min-height: 100% }` (never `height`), no
+  `overflow-y-auto` around `main`. Below `md`: sticky top bar (section name + avatar) and a fixed
+  bottom tab bar (`lib/components/nav-tab-bar.svelte`, 4 destinations from `bottomTabs()` in
+  `lib/nav.ts` by priority Inicio > Reservas > Miembros > Disponibilidad > Tipos > Calendario, short
+  labels from `SHORT_LABELS`, + "Más" = a bottom sheet with every visible item, `nav-sheet.svelte`);
+  `--app-bottom-inset` on `.app-shell` is the tab bar's height there (0 from `md`) - `main`'s bottom
+  padding and any sticky bottom bar (the editor's save bar) use it. `md`-`lg`: a sticky 76 px rail
+  (`nav-rail.svelte`, icon + short label). From `lg`: the sticky 224 px sidebar, scrolling itself
+  without a visible bar (`.app-scroll-quiet`) when the window is shorter than it. Toasts: top-center
+  on phones (offset below the top bar), bottom-right from `md`. In the event-type editor, Ctrl/Cmd+S
   on the WhatsApp tab saves the texts (`saveFromShortcut`), not the event type. The Webhooks page
   shows "No se pudo cargar" + Reintentar when `GET /v1/webhooks/settings` fails, never the defaults.
 - **Event-type filter** (`internal/webhook/fork_event_types.go`): `event_type_ids` on POST/PATCH/GET

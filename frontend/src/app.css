@@ -126,10 +126,45 @@
 	min-width: 0;
 }
 
+/*
+ * ONE scroller: the document. `height: 100%` here plus an `overflow-y-auto` <main> in the
+ * shell gave the owner's Chrome two scrollbars (page + panel) and broke phone ergonomics
+ * (address-bar collapse, momentum, pull-to-refresh, scroll-to-top on navigation). The shell
+ * is normal flow; only the document scrolls.
+ */
 html,
-body,
-#svelte {
-	height: 100%;
+body {
+	min-height: 100%;
+}
+
+/*
+ * The admin shell root (routes/+layout.svelte, `.app-shell`). --app-bottom-inset is the
+ * height of the phone tab bar (56 px + the iPhone home-indicator inset) below md and 0
+ * from md up. A page's own sticky bottom bar uses `bottom-(--app-bottom-inset)` so it sits
+ * above the tab bar; <main>'s bottom padding includes it so nothing ends hidden under it.
+ */
+.app-shell {
+	--app-tab-bar-height: 3.5rem;
+	--app-bottom-inset: calc(var(--app-tab-bar-height) + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 768px) {
+	.app-shell {
+		--app-bottom-inset: 0px;
+	}
+}
+
+/*
+ * A side column (desktop sidebar, tablet rail) that scrolls itself only when the window is
+ * shorter than its items - a 1366×768 laptop with the owner's 12 entries - but draws no
+ * scrollbar: on Windows the classic bar would sit next to the document's, and "two
+ * scrollbars" is the complaint this shell exists to fix. The wheel and touch still scroll it.
+ */
+.app-scroll-quiet {
+	scrollbar-width: none;
+}
+.app-scroll-quiet::-webkit-scrollbar {
+	display: none;
 }
 
 body {

@@ -139,7 +139,7 @@
 		<!-- dataLayer events -->
 		<div class="rounded-lg border bg-card p-6">
 			<div class="flex items-start justify-between gap-4">
-				<div>
+				<div class="min-w-0">
 					<h2 class="text-sm font-semibold">Eventos de dataLayer</h2>
 					<p class="mt-0.5 text-xs text-muted-foreground">
 						Envía <code class="rounded bg-muted px-1">calnode_booking_confirmed</code> /
@@ -155,11 +155,12 @@
 					<p class="text-xs font-medium text-muted-foreground">
 						Campos a incluir — desmarca lo que no quieras exponer al navegador / GTM.
 					</p>
-					<div class="grid grid-cols-2 gap-x-4 gap-y-1">
+					<!-- One column at 375 px: two columns of mono field names overflowed the card. -->
+					<div class="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
 						{#each availableFields as key}
 							<label class="flex cursor-pointer items-center gap-2 font-mono text-sm">
 								<Checkbox checked={dlFields.includes(key)} onCheckedChange={() => toggleField(key)} />
-								<span>{fieldLabels[key] ?? key}{#if piiFields.has(key)}<span class="ml-1 text-[10px] font-medium uppercase text-amber-600">PII</span>{/if}</span>
+								<span class="min-w-0 break-all">{fieldLabels[key] ?? key}{#if piiFields.has(key)}<span class="ml-1 text-[10px] font-medium uppercase text-amber-600">PII</span>{/if}</span>
 							</label>
 						{/each}
 					</div>

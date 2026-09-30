@@ -340,7 +340,7 @@
 	</div>
 
 	<Dialog.Root bind:open={cropOpen} onOpenChange={(o) => { if (!o) cancelCrop(); }}>
-		<Dialog.Content class="max-w-lg">
+		<Dialog.Content class="max-w-[calc(100%-2rem)] rounded-lg sm:max-w-lg">
 			<Dialog.Header>
 				<Dialog.Title>{cropTarget === 'logo' ? 'Recortar logo' : 'Recortar banner'}</Dialog.Title>
 				<Dialog.Description>Arrastra para ajustar, o simplemente guarda para usar la imagen completa.</Dialog.Description>

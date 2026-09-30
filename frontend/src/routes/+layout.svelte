@@ -6,32 +6,45 @@
 	import { api, type User } from '$lib/api';
 	import { currentUser, authStatus, type AuthStatus } from '$lib/stores';
 	import { prefs, prefsFromUser } from '$lib/prefs';
+	import { bottomTabs, initials, type NavItem } from '$lib/nav';
 	import { Toaster } from '$lib/components/ui/sonner';
-	import { Button, buttonVariants } from '$lib/components/ui/button';
+	import { buttonVariants } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import DemoBanner from '$lib/components/demo-banner.svelte';
+	import NavTabBar from '$lib/components/nav-tab-bar.svelte';
+	import NavRail from '$lib/components/nav-rail.svelte';
+	import NavSheet from '$lib/components/nav-sheet.svelte';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
 
 	let checking = $state(true);
 	let reportOpen = $state(false);
-	// Fork (Agenda Maestros 4x4): below md the sidebar is a menu opened from a top bar -
-	// the fixed 224 px column left a phone 151 px for the page. Closed on every navigation.
-	let navOpen = $state(false);
+
+	// Fork (Agenda Maestros 4x4): ONE scroller (the document) and a shell per size. Phone
+	// (< md, the primary case): sticky top bar + fixed bottom tab bar whose "Más" opens a
+	// bottom sheet with every section. Tablet (md-lg): a sticky 76 px rail. Desktop (lg+):
+	// the sticky full sidebar. The sheet is closed on every navigation...
+	let moreOpen = $state(false);
 	$effect(() => {
 		void $page.url.pathname;
-		navOpen = false;
+		moreOpen = false;
 	});
-	// ...and when the screen reaches md (a phone turned sideways): the menu's content is
+	// ...and when the screen reaches md (a phone turned sideways): the sheet's content is
 	// md:hidden, but the Dialog's own dark overlay is not, and would stay over the page.
+	// The same media query places the toasts: top-center on phones (a bottom toast would
+	// sit on the tab bar), bottom-right from md up. The built-in browser does not emit
+	// `resize`; matchMedia's `change` is what fires.
+	let isMd = $state(false);
 	$effect(() => {
 		const mq = window.matchMedia('(min-width: 768px)');
-		const closeOnDesktop = () => {
-			if (mq.matches) navOpen = false;
+		const apply = () => {
+			isMd = mq.matches;
+			if (mq.matches) moreOpen = false;
 		};
-		mq.addEventListener('change', closeOnDesktop);
-		return () => mq.removeEventListener('change', closeOnDesktop);
+		apply();
+		mq.addEventListener('change', apply);
+		return () => mq.removeEventListener('change', apply);
 	});
 	let recordingsConfigured = $state(false);
 	let version = $state('');
@@ -39,6 +52,7 @@
 	const ISSUES_URL = 'https://github.com/Calnode/calnode/issues';
 	const NEW_ISSUE_URL = 'https://github.com/Calnode/calnode/issues/new/choose';
 	const RELEASES_URL = 'https://github.com/Calnode/calnode/releases';
+	const PROFILE_HREF = `${base}/settings/profile`;
 
 	const isLogin = $derived($page.route.id === '/login');
 	const isPublicRoute = $derived(
@@ -49,7 +63,9 @@
 		$page.route.id === '/invite/[token]'
 	);
 
-	const navItems = [
+	// The rail's and the tab bar's short labels come from SHORT_LABELS in lib/nav.ts (keyed by
+	// `label`), so the tests can check their length against the real data.
+	const navItems: NavItem[] = [
 		{
 			section: 'Programación',
 			href: `${base}/`,
@@ -152,12 +168,20 @@
 		)
 	);
 
+	// One rule for every surface (sidebar, rail, tab bar, sheet, top bar).
+	const isActive = (item: NavItem) =>
+		item.exact
+			? $page.url.pathname === item.href || $page.url.pathname === base
+			: $page.url.pathname.startsWith(item.href);
+
 	// The phone top bar names the current section.
-	const activeLabel = $derived(
-		visibleNavItems.find((item) =>
-			item.exact ? $page.url.pathname === item.href || $page.url.pathname === base : $page.url.pathname.startsWith(item.href)
-		)?.label ?? 'Agenda'
-	);
+	const activeItem = $derived(visibleNavItems.find(isActive));
+	const activeLabel = $derived(activeItem?.label ?? 'Agenda');
+
+	// Phone tab bar: 4 destinations by priority (lib/nav.ts) + "Más". "Más" reads as active
+	// while the sheet is open or when the current section is one that only lives there.
+	const tabs = $derived(bottomTabs(visibleNavItems));
+	const moreActive = $derived(moreOpen || (!!activeItem && !tabs.includes(activeItem)));
 
 	onMount(async () => {
 		if (isPublicRoute) {
@@ -199,52 +223,52 @@
 		window.location.href = '/admin/login';
 	}
 
-	function initials(name: string) {
-		return name
-			.split(' ')
-			.map((p) => p[0])
-			.join('')
-			.toUpperCase()
-			.slice(0, 2);
+	function openReport() {
+		moreOpen = false;
+		reportOpen = true;
 	}
 </script>
 
+{#snippet avatar(sizeClass: string)}
+	<!-- Fixed-size clip container: the image fills it and is clipped by the
+	     parent's overflow-hidden (not its own border-radius). A rounded,
+	     object-cover image on its own composited layer gets mis-painted by
+	     Chrome — a smeared tile over the sidebar — when the main panel
+	     repaints on scroll; clipping via the parent box prevents that. -->
+	<span class="flex {sizeClass} shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+		{#if $currentUser?.avatar_url}
+			<img src={$currentUser.avatar_url} alt={$currentUser.name} class="h-full w-full object-cover" />
+		{:else}
+			{initials($currentUser?.name ?? 'U')}
+		{/if}
+	</span>
+{/snippet}
+
 {#snippet sidebarContent()}
 	<!-- User section -->
-	<a href="{base}/settings/profile" class="flex items-center gap-3 border-b border-sidebar-border px-4 py-3 hover:bg-sidebar-accent/60 transition-colors">
-		<!-- Fixed-size clip container: the image fills it and is clipped by the
-		     parent's overflow-hidden (not its own border-radius). A rounded,
-		     object-cover image on its own composited layer gets mis-painted by
-		     Chrome — a smeared tile over the sidebar — when the main panel
-		     repaints on scroll; clipping via the parent box prevents that. -->
-		<span class="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-			{#if $currentUser?.avatar_url}
-				<img src={$currentUser.avatar_url} alt={$currentUser.name} class="h-full w-full object-cover" />
-			{:else}
-				{initials($currentUser?.name ?? 'U')}
-			{/if}
-		</span>
+	<a href={PROFILE_HREF} class="flex items-center gap-3 border-b border-sidebar-border px-4 py-3 hover:bg-sidebar-accent/60 transition-colors">
+		{@render avatar('h-7 w-7')}
 		<div class="min-w-0 flex-1">
 			<p class="truncate text-sm font-medium text-sidebar-foreground">{$currentUser?.name ?? ''}</p>
 		</div>
 	</a>
 
-	<!-- Nav -->
+	<!-- Nav. Compact spacing (py-1.5 links, mt-3 sections): the owner's 12 entries fit a
+	     1366×768 laptop without the column scrolling itself. -->
 	<nav class="flex-1 space-y-0.5 p-2">
-		{#each visibleNavItems as item, i}
+		{#each visibleNavItems as item, i (item.href)}
 			{#if item.section && item.section !== visibleNavItems[i - 1]?.section}
-				<p class="mb-1 px-2.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/40 first:mt-0 mt-4">
+				<p class="mb-1 px-2.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/40 first:mt-0 mt-3">
 					{item.section}
 				</p>
 			{:else if !item.section && visibleNavItems[i - 1]?.section}
 				<div class="my-2 border-t border-sidebar-border"></div>
 			{/if}
-			{@const active = item.exact
-				? $page.url.pathname === item.href || $page.url.pathname === base
-				: $page.url.pathname.startsWith(item.href)}
+			{@const active = isActive(item)}
 			<a
 				href={item.href}
-				class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors
+				aria-current={active ? 'page' : undefined}
+				class="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors
 					{active
 						? 'bg-sidebar-accent text-sidebar-accent-foreground'
 						: 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'}"
@@ -258,7 +282,7 @@
 	<!-- Footer -->
 	<div class="border-t border-sidebar-border p-2">
 		<button
-			onclick={() => { navOpen = false; reportOpen = true; }}
+			onclick={openReport}
 			class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-sidebar-foreground/45 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/70"
 		>
 			<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
@@ -290,53 +314,92 @@
 	</div>
 {/snippet}
 
-<Toaster position="bottom-right" />
+<!-- Phones: top-center, pushed below the 48 px sticky top bar (sonner's own mobile offset
+     is 16 px, which put every toast over the section title). From md: bottom-right. -->
+<Toaster
+	position={isMd ? 'bottom-right' : 'top-center'}
+	mobileOffset={{ top: 'calc(3.5rem + env(safe-area-inset-top, 0px))' }}
+/>
 
 {#if isPublicRoute}
 	{@render children()}
 {:else if checking}
-	<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+	<div class="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
 		Cargando…
 	</div>
 {:else}
-	<div class="flex h-full flex-col">
-	{#if $authStatus.demo_mode}
-		<DemoBanner />
-	{/if}
-	<div class="flex flex-1 overflow-hidden">
-		<!-- Sidebar -->
-		<aside class="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-			{@render sidebarContent()}
-		</aside>
-
-		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
-			<!-- Fork: phone top bar with the menu button (hidden from md up). -->
-			<header class="flex items-center gap-2 border-b border-sidebar-border bg-sidebar px-2 py-1.5 md:hidden">
-				<Button variant="ghost" size="icon" aria-label="Abrir menú" onclick={() => (navOpen = true)}>
-					<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-				</Button>
-				<span class="truncate text-sm font-medium">{activeLabel}</span>
-			</header>
-			<!-- Main content -->
-			<main class="flex-1 overflow-y-auto bg-background">
-				<div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
-					{@render children()}
+	<!-- .app-shell defines --app-bottom-inset (app.css). Normal flow: the document is the only scroller. -->
+	<div class="app-shell flex min-h-dvh flex-col">
+		<div class="flex flex-1 items-stretch">
+			<!-- Desktop (lg+): the full sidebar. The column stretches with the document (its
+			     tint runs the whole height); the sticky block inside stays in view, capped at
+			     the viewport, and scrolls itself - bar hidden - only in a window shorter than
+			     its content. -->
+			<aside class="hidden w-56 shrink-0 border-r border-sidebar-border bg-sidebar lg:block">
+				<div class="app-scroll-quiet sticky top-0 flex h-dvh flex-col overflow-y-auto">
+					{@render sidebarContent()}
 				</div>
-			</main>
+			</aside>
+
+			<!-- Tablet (md to lg): the rail (sticky, md:flex lg:hidden inside). -->
+			<NavRail
+				items={visibleNavItems}
+				{isActive}
+				profileHref={PROFILE_HREF}
+				name={$currentUser?.name ?? ''}
+				avatarUrl={$currentUser?.avatar_url}
+				onReport={openReport}
+				onLogout={logout}
+			/>
+
+			<div class="flex min-w-0 flex-1 flex-col">
+				<!-- The demo banner sits in the content column, not above the side columns: above
+				     them it pushed the sticky sidebar/rail down by its height, and their bottom
+				     (Salir, the version) sat below the fold until the page was scrolled. -->
+				{#if $authStatus.demo_mode}
+					<DemoBanner />
+				{/if}
+				<!-- Phone top bar: the section's name and the avatar (→ profile). The menu lives in "Más". -->
+				<header
+					class="sticky top-0 z-30 flex items-center gap-3 border-b border-sidebar-border bg-sidebar/95 px-4 backdrop-blur md:hidden"
+					style="padding-top: env(safe-area-inset-top, 0px)"
+				>
+					<p class="min-w-0 flex-1 truncate py-3 text-base font-semibold leading-6">{activeLabel}</p>
+					<a
+						href={PROFILE_HREF}
+						class="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
+						aria-label="Mi perfil"
+					>
+						{@render avatar('h-8 w-8')}
+					</a>
+				</header>
+				<!-- Main content: no overflow rules; the bottom padding reserves the tab bar on phones. -->
+				<main class="flex-1 bg-background">
+					<div class="mx-auto max-w-4xl px-4 py-4 pb-[calc(var(--app-bottom-inset)+1rem)] md:px-8 md:py-8">
+						{@render children()}
+					</div>
+				</main>
+			</div>
 		</div>
 	</div>
-	</div>
 
-	<!-- Fork: the sidebar as a left-hand menu on phones (shadcn Dialog, no animation). -->
-	<Dialog.Root bind:open={navOpen}>
-		<Dialog.Content class="left-0 top-0 flex h-full w-72 max-w-[85vw] translate-x-0 translate-y-0 flex-col gap-0 overflow-y-auto rounded-none border-r border-sidebar-border bg-sidebar p-0 sm:rounded-none md:hidden data-[state=open]:animate-none! data-[state=closed]:animate-none!">
-			<Dialog.Title class="sr-only">Menú</Dialog.Title>
-			{@render sidebarContent()}
-		</Dialog.Content>
-	</Dialog.Root>
+	<!-- Phone (< md): the fixed bottom tab bar and the "Más" sheet. -->
+	<NavTabBar {tabs} {isActive} {moreActive} onMore={() => (moreOpen = true)} />
+	<NavSheet
+		bind:open={moreOpen}
+		items={visibleNavItems}
+		{isActive}
+		profileHref={PROFILE_HREF}
+		name={$currentUser?.name ?? ''}
+		avatarUrl={$currentUser?.avatar_url}
+		{version}
+		releasesUrl={RELEASES_URL}
+		onReport={openReport}
+		onLogout={logout}
+	/>
 
 	<Dialog.Root bind:open={reportOpen}>
-		<Dialog.Content class="max-w-md">
+		<Dialog.Content class="max-w-[calc(100%-2rem)] rounded-lg sm:max-w-md">
 			<Dialog.Header>
 				<Dialog.Title>Reportar un problema</Dialog.Title>
 				<Dialog.Description>

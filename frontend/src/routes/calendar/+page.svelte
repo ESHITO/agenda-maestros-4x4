@@ -294,7 +294,9 @@
 			<div class="divide-y rounded-lg border bg-card">
 				{#each connections as c (c.id)}
 					<div class="p-4">
-						<div class="flex items-center justify-between gap-3">
+						<!-- Stacks on a phone: the radio and the button beside the account squeezed the
+						     e-mail to nothing at 375 px. -->
+						<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 						<div class="flex min-w-0 items-center gap-3">
 							<ProviderIcon provider={c.provider} />
 							<div class="min-w-0">
@@ -305,7 +307,7 @@
 								{/if}
 							</div>
 						</div>
-						<div class="flex shrink-0 items-center gap-4">
+						<div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pl-8 sm:shrink-0 sm:justify-end sm:pl-0">
 							<label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
 								<input type="radio" name="destination" checked={c.is_destination} disabled={busy} onchange={() => setDestination(c)} />
 								Agregar reservas aquí
@@ -388,12 +390,12 @@
 			{#each providers as p}
 				{#if p === 'caldav'}
 					<div class="rounded-lg border bg-card p-4">
-						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-3">
+						<div class="flex items-center justify-between gap-3">
+							<div class="flex min-w-0 items-center gap-3">
 								<ProviderIcon provider={p} />
 								<p class="font-medium">{label('caldav')}</p>
 							</div>
-							<Button variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (caldavOpen = !caldavOpen)}>
+							<Button class="shrink-0" variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (caldavOpen = !caldavOpen)}>
 								{caldavOpen ? 'Cancelar' : 'Conectar'}
 							</Button>
 						</div>
@@ -437,27 +439,27 @@
 						{/if}
 					</div>
 				{:else}
-					<div class="flex items-center justify-between rounded-lg border bg-card p-4">
-						<div class="flex items-center gap-3">
+					<div class="flex items-center justify-between gap-3 rounded-lg border bg-card p-4">
+						<div class="flex min-w-0 items-center gap-3">
 							<ProviderIcon provider={p} />
 							<p class="font-medium">{label(p)}</p>
 						</div>
-						<Button variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (window.location.href = `/v1/calendar/connect?provider=${p}`)}>Conectar</Button>
+						<Button class="shrink-0" variant={connections.length > 0 ? 'outline' : 'default'} onclick={() => (window.location.href = `/v1/calendar/connect?provider=${p}`)}>Conectar</Button>
 					</div>
 				{/if}
 			{/each}
 			{#each status?.unconfigured_providers ?? [] as p}
-				<div class="flex items-center justify-between rounded-lg border border-dashed bg-muted/20 p-4">
-					<div class="flex items-center gap-3">
+				<div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed bg-muted/20 p-4">
+					<div class="flex min-w-0 items-center gap-3">
 						<ProviderIcon provider={p} muted />
-						<div>
+						<div class="min-w-0">
 							<p class="font-medium text-muted-foreground">{label(p)}</p>
 							<p class="text-xs text-muted-foreground">No configurado en esta instancia</p>
 						</div>
 					</div>
 					{#if UNCONFIGURED_SETUP[p]}
 						<a href={UNCONFIGURED_SETUP[p].href}
-							class="text-sm font-medium text-primary underline-offset-2 hover:underline"
+							class="pl-8 text-sm font-medium text-primary underline-offset-2 hover:underline sm:pl-0"
 							target={UNCONFIGURED_SETUP[p].external ? '_blank' : undefined}
 							rel={UNCONFIGURED_SETUP[p].external ? 'noopener noreferrer' : undefined}>
 							{UNCONFIGURED_SETUP[p].text}

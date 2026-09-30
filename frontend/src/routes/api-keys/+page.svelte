@@ -83,12 +83,13 @@
 
 <svelte:head><title>Claves de API — Calnode</title></svelte:head>
 
-<div class="mb-8 flex items-center justify-between">
+<!-- Stacks on a phone: the title and the button collided at 375 px. -->
+<div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Claves de API</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Autentica herramientas de CLI e integraciones.</p>
 	</div>
-	<Button onclick={() => { showCreate = !showCreate; createError = ''; newKey = ''; }}>
+	<Button class="w-full sm:w-auto" onclick={() => { showCreate = !showCreate; createError = ''; newKey = ''; }}>
 		{showCreate ? 'Cancelar' : 'Nueva clave'}
 	</Button>
 </div>
@@ -104,7 +105,7 @@
 {/if}
 
 {#if showCreate}
-	<div class="mb-6 rounded-lg border bg-card p-6">
+	<div class="mb-6 rounded-lg border bg-card p-4 sm:p-6">
 		<h2 class="mb-4 text-sm font-semibold">Nueva clave de API</h2>
 		{#if createError}<p class="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{createError}</p>{/if}
 		<div class="mb-4 max-w-sm space-y-1.5">
@@ -131,8 +132,23 @@
 		<p class="mt-1 text-sm text-muted-foreground">Crea una clave para autenticar herramientas de CLI e integraciones.</p>
 	</div>
 {:else}
-	<div class="rounded-lg border bg-card overflow-hidden">
-		<table class="w-full text-sm">
+	<div class="overflow-hidden rounded-lg border bg-card">
+		<!-- Below md, one card per key (the 4-column table clipped at 375 px). Actions carry
+		     text: a Tooltip does not open on touch. -->
+		<ul class="divide-y md:hidden">
+			{#each items as k}
+				<li class="flex items-start justify-between gap-3 p-4">
+					<div class="min-w-0">
+						<p class="break-words font-medium">{k.name}</p>
+						<p class="mt-0.5 text-xs text-muted-foreground">
+							Creada el {fmtDate(k.created_at)} · Último uso: {#if k.last_used_at}{fmtDate(k.last_used_at)}{:else}nunca{/if}
+						</p>
+					</div>
+					<Button variant="ghost" class="h-10 shrink-0 text-destructive hover:text-destructive" onclick={() => revoke(k.id, k.name)}>Revocar</Button>
+				</li>
+			{/each}
+		</ul>
+		<table class="hidden w-full text-sm md:table">
 			<thead>
 				<tr class="border-b">
 					<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Nombre</th>
@@ -152,7 +168,7 @@
 							</td>
 							<td class="px-4 py-3 text-right">
 								<Tooltip.Root>
-									<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} onclick={() => revoke(k.id, k.name)}>
+									<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} aria-label="Revocar clave" onclick={() => revoke(k.id, k.name)}>
 										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 									</Tooltip.Trigger>
 									<Tooltip.Content>Revocar clave</Tooltip.Content>

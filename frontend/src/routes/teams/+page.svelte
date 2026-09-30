@@ -158,23 +158,24 @@
 
 <svelte:head><title>Equipos — Calnode</title></svelte:head>
 
-<div class="mb-8 flex items-center justify-between">
+<!-- Stacks on a phone: the title and the button collided at 375 px. -->
+<div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight">Equipos</h1>
 		<p class="mt-1 text-sm text-muted-foreground">Agrupa miembros para tipos de atención por turnos (round robin) y grupales.</p>
 	</div>
-	<Button onclick={() => { showCreate = !showCreate; }}>{showCreate ? 'Cancelar' : 'Nuevo equipo'}</Button>
+	<Button class="w-full sm:w-auto" onclick={() => { showCreate = !showCreate; }}>{showCreate ? 'Cancelar' : 'Nuevo equipo'}</Button>
 </div>
 
 {#if showCreate}
-	<div class="mb-6 rounded-lg border bg-card p-6">
+	<div class="mb-6 rounded-lg border bg-card p-4 sm:p-6">
 		<h2 class="mb-4 text-sm font-semibold">Nuevo equipo</h2>
-		<div class="flex items-end gap-3">
-			<div class="flex-1 space-y-1.5">
+		<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+			<div class="min-w-0 flex-1 space-y-1.5">
 				<Label for="team-name">Nombre del equipo</Label>
 				<Input id="team-name" bind:value={newTeamName} placeholder="p. ej. Ventas" onkeydown={(e) => e.key === 'Enter' && createTeam()} />
 			</div>
-			<Button onclick={createTeam} disabled={creating}>{creating ? 'Creando…' : 'Crear equipo'}</Button>
+			<Button class="w-full sm:w-auto" onclick={createTeam} disabled={creating}>{creating ? 'Creando…' : 'Crear equipo'}</Button>
 		</div>
 	</div>
 {/if}
@@ -192,23 +193,23 @@
 	<div class="space-y-3">
 		{#each teams as team (team.id)}
 			<div class="rounded-lg border bg-card">
-				<div class="flex items-center justify-between gap-3 p-4">
+				<div class="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
 					<div class="min-w-0">
 						{#if renamingId === team.id}
-							<div class="flex items-center gap-2">
-								<Input bind:value={renameValue} class="h-8 w-56" onkeydown={(e) => e.key === 'Enter' && saveRename(team)} />
+							<div class="flex flex-wrap items-center gap-2">
+								<Input bind:value={renameValue} class="h-8 w-full sm:w-56" onkeydown={(e) => e.key === 'Enter' && saveRename(team)} />
 								<Button size="sm" class="h-8" onclick={() => saveRename(team)}>Guardar</Button>
 								<Button size="sm" variant="ghost" class="h-8" onclick={cancelRename}>Cancelar</Button>
 							</div>
 						{:else}
-							<div class="flex items-center gap-2">
-								<p class="font-medium">{team.name}</p>
+							<div class="flex flex-wrap items-center gap-2">
+								<p class="min-w-0 break-words font-medium">{team.name}</p>
 								<Badge variant="outline" class="font-mono text-xs">{team.slug}</Badge>
 							</div>
 							<p class="mt-0.5 text-xs text-muted-foreground">{team.member_count} {team.member_count === 1 ? 'miembro' : 'miembros'}</p>
 						{/if}
 					</div>
-					<div class="flex shrink-0 items-center gap-1">
+					<div class="flex flex-wrap items-center gap-1 sm:shrink-0">
 						<Button size="sm" variant="outline" class="h-8 text-xs" onclick={() => toggleExpand(team)}>
 							{expanded[team.id] ? 'Cerrar' : 'Gestionar'}
 						</Button>
@@ -223,7 +224,34 @@
 						{#if (expanded[team.id].members ?? []).length === 0}
 							<p class="mb-3 text-sm text-muted-foreground">Aún no hay miembros en este equipo.</p>
 						{:else}
-							<table class="mb-3 w-full text-sm">
+							<!-- Below md, one card per member (the 3-column table clipped at 375 px). -->
+							<ul class="mb-3 divide-y rounded-md border md:hidden">
+								{#each expanded[team.id].members ?? [] as m (m.id)}
+									<li class="space-y-2 px-3 py-2.5">
+										<div class="min-w-0">
+											<p class="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+												<span class="break-words">{m.name}</span>
+												{#if m.archived}<Badge variant="outline" class="text-xs text-muted-foreground">Archivado</Badge>{/if}
+											</p>
+											<p class="break-all text-xs text-muted-foreground">{m.email}</p>
+										</div>
+										<div class="flex flex-wrap items-center justify-between gap-2">
+											<label class="flex items-center gap-2 text-xs text-muted-foreground">
+												Prioridad de enrutamiento
+												<Input
+													type="number"
+													value={m.routing_priority}
+													class="h-10 w-24"
+													onchange={(e) => savePriority(team.id, m.id, +(e.currentTarget as HTMLInputElement).value)}
+												/>
+											</label>
+											<!-- Phone-only: 40 px tall (a finger's target), not the table's 28 px. -->
+											<Button variant="ghost" class="h-10 text-destructive hover:text-destructive" onclick={() => removeMember(team.id, m.id)}>Quitar</Button>
+										</div>
+									</li>
+								{/each}
+							</ul>
+							<table class="mb-3 hidden w-full text-sm md:table">
 								<thead>
 									<tr class="border-b">
 										<th class="pb-2 text-left text-xs font-medium text-muted-foreground">Miembro</th>
@@ -235,7 +263,7 @@
 									{#each expanded[team.id].members ?? [] as m (m.id)}
 										<tr>
 											<td class="py-2">
-												<div class="flex items-center gap-2">
+												<div class="flex flex-wrap items-center gap-2">
 													<span class="font-medium">{m.name}</span>
 													<span class="text-xs text-muted-foreground">{m.email}</span>
 													{#if m.archived}<Badge variant="outline" class="text-xs text-muted-foreground">Archivado</Badge>{/if}
@@ -259,14 +287,14 @@
 						{/if}
 
 						<!-- Add a member -->
-						<div class="flex items-center gap-2">
+						<div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
 							<Select.Root
 								type="single"
 								value={addChoice[team.id] ?? ''}
 								onValueChange={(v) => { addChoice = { ...addChoice, [team.id]: v ?? '' }; }}
 								disabled={membersNotIn(team).length === 0}
 							>
-								<Select.Trigger class="w-fit min-w-48">
+								<Select.Trigger class="w-full sm:w-fit sm:min-w-48">
 									{#if addChoice[team.id]}
 										{@const u = users.find((x) => x.id === addChoice[team.id])}
 										{u ? `${u.name} (${u.email})` : 'Agregar un miembro…'}
@@ -280,7 +308,7 @@
 									{/each}
 								</Select.Content>
 							</Select.Root>
-							<Button size="sm" variant="outline" class="h-8" disabled={!addChoice[team.id]} onclick={() => addMember(team.id)}>Agregar</Button>
+							<Button size="sm" variant="outline" class="h-8 w-full sm:w-auto" disabled={!addChoice[team.id]} onclick={() => addMember(team.id)}>Agregar</Button>
 							{#if membersNotIn(team).length === 0}
 								<span class="text-xs text-muted-foreground">Todos los miembros activos ya están en este equipo.</span>
 							{/if}

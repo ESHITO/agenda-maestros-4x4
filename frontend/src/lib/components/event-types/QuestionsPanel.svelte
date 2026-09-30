@@ -135,6 +135,44 @@
 	onConfirm={doDeleteQuestion}
 />
 
+<!-- The inline edit form of one question: under its card (phone) or in its row (md+). Both
+     copies are in the DOM at once (CSS hides one), so `scope` keeps their ids apart: with
+     one id set, the table's labels pointed at the hidden card's inputs and focused nothing. -->
+{#snippet editQuestionForm(q: Question, scope: 'card' | 'row')}
+	{@const id = `eq-${scope}-${q.id}`}
+	<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+		<div class="space-y-1.5">
+			<Label for="{id}-label" class="text-xs text-muted-foreground">Etiqueta</Label>
+			<Input id="{id}-label" bind:value={editQForm.label} />
+		</div>
+		<div class="space-y-1.5">
+			<Label for="{id}-type" class="text-xs text-muted-foreground">Tipo</Label>
+			<Select.Root type="single" value={editQForm.type} onValueChange={(v) => { if (v) editQForm.type = v as 'text'|'select'|'checkbox'|'phone'; }}>
+				<Select.Trigger id="{id}-type" class="w-full">
+					{QUESTION_TYPES.find((t) => t.value === editQForm.type)?.label ?? 'Seleccionar…'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each QUESTION_TYPES as t}
+						<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		</div>
+		{#if editQForm.type === 'select'}
+			<div class="space-y-1.5 sm:col-span-2">
+				<Label for="{id}-options" class="text-xs text-muted-foreground">Opciones (una por línea)</Label>
+				<Textarea id="{id}-options" bind:value={editQForm.options} rows={3} />
+			</div>
+		{:else if editQForm.type === 'phone'}
+			<p class="text-xs text-muted-foreground sm:col-span-2">Muestra un selector de país (parte del país que se detecta para cada visitante; no hay uno fijo) y guarda el número con el código incluido: +51 987654321.</p>
+		{/if}
+		<div class="flex items-center gap-2 sm:col-span-2">
+			<Checkbox id="{id}-required" bind:checked={editQForm.required} />
+			<Label for="{id}-required" class="cursor-pointer font-normal">Obligatorio</Label>
+		</div>
+	</div>
+{/snippet}
+
 <!-- Intake Questions -->
 <div>
 	<h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Preguntas de admisión</h2>
@@ -144,7 +182,47 @@
 		{#if qLoading}
 			<p class="px-4 py-4 text-sm text-muted-foreground">Cargando…</p>
 		{:else if questions.length > 0}
-			<table class="w-full text-sm">
+			<!-- Below md, one card per question (the 5-column table clipped at 375 px). Actions
+			     carry text there: a Tooltip does not open on touch. -->
+			<ul class="divide-y md:hidden">
+				{#each questions as q}
+					<li class="space-y-3 px-4 py-3 {editingQId === q.id ? 'bg-muted/20' : ''}">
+						<div class="flex items-start gap-3">
+							<span class="shrink-0 pt-0.5 text-sm text-muted-foreground">{q.position + 1}.</span>
+							<div class="min-w-0 flex-1">
+								<p class="break-words font-medium">{q.label}</p>
+								{#if q.type === 'select' && q.options?.length}
+									<p class="mt-0.5 break-words text-xs text-muted-foreground">{q.options.join(', ')}</p>
+								{:else if isPhone(q.type)}
+									<p class="mt-0.5 text-xs text-muted-foreground">Se guarda como +51 987654321</p>
+								{/if}
+								<div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+									<span class="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 font-medium text-secondary-foreground">
+										{QUESTION_TYPES.find((t) => t.value === q.type)?.label ?? q.type}
+									</span>
+									<span>{q.required ? 'Obligatoria' : 'Opcional'}</span>
+								</div>
+							</div>
+						</div>
+						<!-- Phone-only actions: 40 px tall (a finger's target), not the table's 28 px. -->
+						{#if editingQId === q.id}
+							{@render editQuestionForm(q, 'card')}
+							<div class="flex flex-wrap items-center gap-2">
+								<Button class="h-10" onclick={() => saveQuestion(q)} disabled={qSaving}>
+									{qSaving ? 'Guardando…' : 'Guardar'}
+								</Button>
+								<Button class="h-10" variant="outline" onclick={cancelEditQ}>Cancelar</Button>
+							</div>
+						{:else}
+							<div class="flex flex-wrap items-center gap-1.5">
+								<Button class="h-10" variant="outline" onclick={() => startEditQ(q)}>Editar</Button>
+								<Button class="h-10 text-destructive hover:text-destructive" variant="ghost" onclick={() => deleteQuestion(q)}>Eliminar</Button>
+							</div>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+			<table class="hidden w-full text-sm md:table">
 				<thead>
 					<tr class="border-b">
 						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">#</th>
@@ -160,37 +238,7 @@
 							<tr class="bg-muted/20">
 								<td class="px-4 py-3 text-muted-foreground">{q.position + 1}</td>
 								<td colspan="3" class="px-4 py-3">
-									<div class="grid grid-cols-2 gap-3">
-										<div class="space-y-1.5">
-											<Label for="eq-label-{q.id}" class="text-xs text-muted-foreground">Etiqueta</Label>
-											<Input id="eq-label-{q.id}" bind:value={editQForm.label} />
-										</div>
-										<div class="space-y-1.5">
-											<Label for="eq-type-{q.id}" class="text-xs text-muted-foreground">Tipo</Label>
-											<Select.Root type="single" value={editQForm.type} onValueChange={(v) => { if (v) editQForm.type = v as 'text'|'select'|'checkbox'|'phone'; }}>
-												<Select.Trigger id="eq-type-{q.id}" class="w-full">
-													{QUESTION_TYPES.find((t) => t.value === editQForm.type)?.label ?? 'Seleccionar…'}
-												</Select.Trigger>
-												<Select.Content>
-													{#each QUESTION_TYPES as t}
-														<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>
-													{/each}
-												</Select.Content>
-											</Select.Root>
-										</div>
-										{#if editQForm.type === 'select'}
-											<div class="col-span-2 space-y-1.5">
-												<Label for="eq-options-{q.id}" class="text-xs text-muted-foreground">Opciones (una por línea)</Label>
-												<Textarea id="eq-options-{q.id}" bind:value={editQForm.options} rows={3} />
-											</div>
-										{:else if editQForm.type === 'phone'}
-											<p class="col-span-2 text-xs text-muted-foreground">Muestra un selector de país (parte del país que se detecta para cada visitante; no hay uno fijo) y guarda el número con el código incluido: +51 987654321.</p>
-										{/if}
-										<div class="col-span-2 flex items-center gap-2">
-											<Checkbox id="eq-required-{q.id}" bind:checked={editQForm.required} />
-											<Label for="eq-required-{q.id}" class="cursor-pointer font-normal">Obligatorio</Label>
-										</div>
-									</div>
+									{@render editQuestionForm(q, 'row')}
 								</td>
 								<td class="px-4 py-3 align-top">
 									<div class="flex items-center justify-end gap-2 pt-5">
@@ -224,6 +272,7 @@
 											<Tooltip.Root>
 												<Tooltip.Trigger
 													class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+													aria-label="Editar"
 													onclick={() => startEditQ(q)}
 												>
 													<!-- Pencil/edit icon -->
@@ -234,6 +283,7 @@
 											<Tooltip.Root>
 												<Tooltip.Trigger
 													class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+													aria-label="Eliminar"
 													onclick={() => deleteQuestion(q)}
 												>
 													<!-- Trash icon -->
@@ -255,7 +305,7 @@
 
 		<!-- Add question form -->
 		<div class="border-t px-4 py-4">
-			<div class="grid grid-cols-2 gap-3">
+			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				<div class="space-y-1.5">
 					<Label for="q-label">Etiqueta</Label>
 					<Input id="q-label" bind:value={qForm.label} placeholder="Ej.: ¿De qué tratará la reunión?" />
@@ -274,14 +324,14 @@
 					</Select.Root>
 				</div>
 				{#if qForm.type === 'select'}
-					<div class="col-span-2 space-y-1.5">
+					<div class="space-y-1.5 sm:col-span-2">
 						<Label for="q-options">Opciones (una por línea)</Label>
 						<Textarea id="q-options" bind:value={qForm.options} rows={3} placeholder={"Opción A\nOpción B\nOpción C"} />
 					</div>
 				{:else if qForm.type === 'phone'}
-					<p class="col-span-2 text-xs text-muted-foreground">Muestra un selector de país (parte del país que se detecta para cada visitante; no hay uno fijo) y guarda el número con el código incluido: +51 987654321.</p>
+					<p class="text-xs text-muted-foreground sm:col-span-2">Muestra un selector de país (parte del país que se detecta para cada visitante; no hay uno fijo) y guarda el número con el código incluido: +51 987654321.</p>
 				{/if}
-				<div class="col-span-2 flex items-center gap-2">
+				<div class="flex items-center gap-2 sm:col-span-2">
 					<Checkbox id="q-required" bind:checked={qForm.required} />
 					<Label for="q-required" class="cursor-pointer font-normal">Obligatorio</Label>
 				</div>

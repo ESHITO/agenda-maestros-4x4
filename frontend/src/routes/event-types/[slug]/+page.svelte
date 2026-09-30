@@ -530,7 +530,7 @@
 {/snippet}
 
 {#snippet hostPickers(target: Target, idPrefix: string)}
-	<div class="grid grid-cols-2 gap-4">
+	<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 		<div class="space-y-1.5">
 			<Label for="{idPrefix}-add-member">Agregar miembro</Label>
 			<Select.Root type="single" value="" onValueChange={(v) => addMember(target, v)}>
@@ -579,11 +579,12 @@
 		Tipos de atención
 	</a>
 	<div class="flex items-center gap-3">
-		<h1 class="text-2xl font-semibold tracking-tight">{et?.name ?? slug}</h1>
+		<h1 class="min-w-0 break-words text-2xl font-semibold tracking-tight">{et?.name ?? slug}</h1>
 		<Tooltip.Provider>
 			<Tooltip.Root>
 				<Tooltip.Trigger
-					class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+					class="{buttonVariants({ variant: 'ghost', size: 'icon' })} shrink-0"
+					aria-label="Vista previa de la página de reserva"
 					onclick={() => window.open(`/book/${slug}`, '_blank')}
 				>
 					<!-- External link icon (matches the event-types list) -->
@@ -654,7 +655,8 @@
 	</div>
 {/if}
 
-<div class="mb-6 flex gap-1 overflow-x-auto border-b">
+<!-- On a phone the tab strip bleeds into the page gutter and scrolls sideways. -->
+<div class="-mx-4 mb-6 flex gap-1 overflow-x-auto border-b px-4 md:mx-0 md:px-0">
 	{#each TABS as t}
 		<button
 			type="button"
@@ -670,13 +672,13 @@
 <!-- General Settings -->
 <div class="mb-8">
 	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">General</h2>
-	<div class="rounded-lg border bg-card p-6">
-		<div class="grid grid-cols-2 gap-4">
+	<div class="rounded-lg border bg-card p-4 sm:p-6">
+		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 			<div class="space-y-1.5">
 				<Label for="et-name">Nombre</Label>
 				<Input id="et-name" bind:value={form.name} />
 			</div>
-			<div class="space-y-1.5 col-span-2">
+			<div class="space-y-1.5 sm:col-span-2">
 				<Label for="et-slug">Enlace de reserva</Label>
 				<div class="flex items-center gap-1.5">
 					<span class="text-sm text-muted-foreground whitespace-nowrap">/book/</span>
@@ -701,7 +703,7 @@
 					para ofrecer más horarios de inicio, o súbelo para mantener los turnos en punto.
 				</p>
 			</div>
-			<div class="col-span-2 space-y-1.5">
+			<div class="space-y-1.5 sm:col-span-2">
 				<Label for="et-desc">Descripción</Label>
 				<Textarea id="et-desc" bind:value={form.description} placeholder="Opcional — admite **negrita** y *cursiva* en markdown" rows={3} class="resize-y" />
 			</div>
@@ -744,7 +746,7 @@
 		<!-- Location -->
 		<div class="mt-6 border-t pt-5">
 			<p class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Ubicación</p>
-			<div class="grid grid-cols-2 gap-4">
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<div class="space-y-1.5">
 					<Label for="et-loc">Tipo</Label>
 					<Select.Root type="single" bind:value={form.location_type} disabled={isManaged && et?.location_type === 'livekit'}>
@@ -809,7 +811,7 @@
 		<!-- Price -->
 		<div class="mt-6 border-t pt-5">
 			<p class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Precio</p>
-			<div class="grid grid-cols-2 gap-4">
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<div class="space-y-1.5">
 					<Label for="et-price">Monto</Label>
 					<Input id="et-price" type="number" min="0" step="0.01" bind:value={priceMajor} placeholder="0.00" />
@@ -828,7 +830,7 @@
 		<!-- Scheduling -->
 		<div class="mt-6 border-t pt-5">
 			<p class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Programación</p>
-			<div class="grid grid-cols-2 gap-4">
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<div class="space-y-1.5">
 					<Label for="et-buf-before">Margen antes (min)</Label>
 					<Input id="et-buf-before" type="number" min="0" step="5" bind:value={form.buffer_before_minutes} />
@@ -894,14 +896,14 @@
 {:else if activeTab === 'hosts'}
 <div class="mb-8">
 	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Anfitriones</h2>
-	<div class="rounded-lg border bg-card p-6">
+	<div class="rounded-lg border bg-card p-4 sm:p-6">
 		<div>
 			<p class="-mt-1 mb-4 text-sm text-muted-foreground">Quién puede ser anfitrión de este evento y cómo se asignan las reuniones.</p>
 
 			<!-- Q1 — who can host -->
 			<div class="space-y-1.5">
 				<Label>¿Quién puede ser anfitrión de este evento?</Label>
-				<div class="inline-flex rounded-lg border bg-muted/40 p-0.5">
+				<div class="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
 					<button type="button" onclick={() => setScope('me')}
 						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {hostScope === 'me' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}">
 						Solo yo
@@ -924,7 +926,7 @@
 				<!-- Q2 — how the meeting is staffed -->
 				<div class="mt-4 space-y-1.5">
 					<Label>¿Cómo se debe asignar la reunión?</Label>
-					<div class="inline-flex rounded-lg border bg-muted/40 p-0.5">
+					<div class="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
 						<button type="button" onclick={() => (staffing = 'rotate')}
 							class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {staffing === 'rotate' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}">
 							Rotar entre ellos
@@ -1007,12 +1009,14 @@
 						{#if togetherHosts.length > 0}
 							<div class="space-y-2">
 								{#each togetherHosts as h (h.user_id)}
-									<div class="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+									<!-- Stacks on a phone: the Requerido/Opcional toggle beside the name
+									     left it no room at 375 px. -->
+									<div class="flex flex-col gap-2 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
 										<div class="min-w-0">
 											<div class="truncate text-sm font-medium">{h.name}</div>
 											<div class="truncate text-xs text-muted-foreground">{h.email}</div>
 										</div>
-										<div class="flex shrink-0 items-center gap-2">
+										<div class="flex flex-wrap items-center justify-between gap-2 sm:shrink-0 sm:justify-end">
 											<div class="inline-flex rounded-md border p-0.5">
 												<button type="button" onclick={() => setOptional(h.user_id, false)}
 													class="rounded px-2 py-0.5 text-xs font-medium transition-colors {!h.optional ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:text-foreground'}">
@@ -1048,7 +1052,7 @@
 <!-- Notifications -->
 <div class="mb-8">
 	<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Notificaciones</h2>
-	<div class="rounded-lg border bg-card p-6 space-y-6">
+	<div class="space-y-6 rounded-lg border bg-card p-4 sm:p-6">
 
 		<!-- Reminders -->
 		<div>
@@ -1079,6 +1083,7 @@
 							type="button"
 							variant="ghost"
 							size="icon"
+							aria-label="Quitar recordatorio"
 							onclick={() => { reminders = reminders.filter((_, idx) => idx !== i); }}
 						>
 							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1166,7 +1171,7 @@
 								{/if}
 
 								<!-- Send test button -->
-								<div class="flex items-center gap-3">
+								<div class="flex flex-wrap items-center gap-3">
 									<Button
 										type="button"
 										variant="outline"
@@ -1238,7 +1243,7 @@
 </div>
 
 {#if activeTab === 'general' || activeTab === 'hosts' || activeTab === 'notifications'}
-	<div class="sticky bottom-0 mt-4 flex justify-end border-t bg-background/90 py-3 backdrop-blur">
+	<div class="sticky bottom-(--app-bottom-inset) mt-4 flex justify-end border-t bg-background/90 py-3 backdrop-blur">
 		<Button onclick={saveET} disabled={etSaving}>
 			{etSaving ? 'Guardando…' : 'Guardar cambios'}
 		</Button>

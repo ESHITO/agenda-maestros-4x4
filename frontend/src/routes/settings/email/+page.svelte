@@ -159,8 +159,8 @@
 							clave de arriba.
 						</p>
 					{/if}
-				<div class="grid grid-cols-3 gap-3">
-					<div class="col-span-2 space-y-1.5">
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+					<div class="space-y-1.5 sm:col-span-2">
 						<Label for="smtp-host">Servidor SMTP</Label>
 						<Input id="smtp-host" type="text" placeholder="smtp.gmail.com" bind:value={smtpHost} />
 					</div>
@@ -170,7 +170,7 @@
 					</div>
 				</div>
 
-				<div class="grid grid-cols-2 gap-3">
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					<div class="space-y-1.5">
 						<Label for="smtp-user">Usuario</Label>
 						<Input id="smtp-user" type="text" placeholder="you@example.com" bind:value={smtpUser} />
@@ -186,7 +186,7 @@
 					</div>
 				</div>
 
-				<div class="grid grid-cols-2 gap-3">
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					<div class="space-y-1.5">
 						<Label for="email-from">Dirección de remitente</Label>
 						<Input id="email-from" type="email" placeholder="bookings@example.com" bind:value={emailFrom} />

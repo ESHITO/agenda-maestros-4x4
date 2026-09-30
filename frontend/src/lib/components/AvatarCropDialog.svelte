@@ -104,7 +104,7 @@
 />
 
 <Dialog.Root bind:open={cropOpen} onOpenChange={(o) => { if (!o) cancelCrop(); }}>
-	<Dialog.Content class="max-w-md">
+	<Dialog.Content class="max-w-[calc(100%-2rem)] rounded-lg sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title>{wasReplacing ? 'Reemplazar foto' : 'Subir foto'}</Dialog.Title>
 			<Dialog.Description>Arrastra o pellizca para ajustar. Se guardará el área recortada.</Dialog.Description>

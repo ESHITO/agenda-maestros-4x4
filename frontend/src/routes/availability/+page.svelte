@@ -301,14 +301,16 @@
 		<div class="rounded-lg border bg-card">
 			<Tooltip.Provider>
 				{#each orderedDays as day, i}
-					<div class="flex gap-4 px-4 py-3 {i > 0 ? 'border-t' : ''}">
+					<!-- The day name sits above its blocks on a phone: beside them, two time selects
+					     and the delete button did not fit in 375 px. -->
+					<div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:gap-4 {i > 0 ? 'border-t' : ''}">
 						<!-- Day name -->
-						<div class="w-24 shrink-0 pt-1.5 text-sm {day.blocks.length === 0 ? 'font-normal text-muted-foreground' : 'font-medium'}">
+						<div class="shrink-0 text-sm sm:w-24 sm:pt-1.5 {day.blocks.length === 0 ? 'font-normal text-muted-foreground' : 'font-medium'}">
 							{DAY_NAMES[day.day_of_week]}
 						</div>
 
 						<!-- Blocks -->
-						<div class="flex-1 space-y-2">
+						<div class="min-w-0 flex-1 space-y-2">
 							{#if day.error}
 								<p class="text-xs text-destructive">{day.error}</p>
 							{/if}
@@ -325,7 +327,7 @@
 								</div>
 							{:else}
 								{#each day.blocks as block}
-									<div class="flex items-center gap-2">
+									<div class="flex flex-wrap items-center gap-2">
 										<Select.Root
 											type="single"
 											bind:value={block.start_time}
@@ -354,16 +356,29 @@
 										{:else if block.error}
 											<span class="text-xs text-destructive">{block.error}</span>
 										{/if}
-										<Tooltip.Root>
-											<Tooltip.Trigger
-												class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-												onclick={() => removeBlock(day, block)}
-												disabled={block.saving}
-											>
-												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-											</Tooltip.Trigger>
-											<Tooltip.Content>Eliminar</Tooltip.Content>
-										</Tooltip.Root>
+										<!-- On a phone the delete is a 40 px text button (a Tooltip never opens
+										     on touch, and a 32 px icon is a poor target); the icon + Tooltip from md. -->
+										<Button
+											variant="ghost"
+											class="h-10 text-destructive hover:text-destructive md:hidden"
+											onclick={() => removeBlock(day, block)}
+											disabled={block.saving}
+										>
+											Quitar
+										</Button>
+										<div class="hidden md:block">
+											<Tooltip.Root>
+												<Tooltip.Trigger
+													class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+													aria-label="Eliminar horario"
+													onclick={() => removeBlock(day, block)}
+													disabled={block.saving}
+												>
+													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+												</Tooltip.Trigger>
+												<Tooltip.Content>Eliminar</Tooltip.Content>
+											</Tooltip.Root>
+										</div>
 									</div>
 								{/each}
 								<button
@@ -393,7 +408,51 @@
 		{#if overridesLoading}
 			<p class="px-4 py-4 text-sm text-muted-foreground">Cargando…</p>
 		{:else if overrides.length > 0}
-			<table class="w-full text-sm">
+			<!-- Below md, one card per exception (the 4-column table clipped at 375 px). The
+			     delete action carries text there: a Tooltip does not open on touch. -->
+			<ul class="divide-y md:hidden">
+				{#each overrideEntries as entry (entry.kind === 'span' ? entry.group_id : entry.ov.id)}
+					<li class="flex items-center justify-between gap-3 px-4 py-3">
+						<div class="min-w-0 space-y-1">
+							{#if entry.kind === 'span'}
+								<p class="font-medium">{fmtDate(entry.start, $prefs)} – {fmtDate(entry.end, $prefs)}</p>
+								<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+									{#if entry.reason === 'out_of_office'}
+										<Badge class="bg-amber-50 text-amber-700 border-amber-200">Fuera de oficina</Badge>
+									{:else}
+										<Badge variant="secondary">Día libre</Badge>
+									{/if}
+									<span>{entry.days} días</span>
+								</div>
+							{:else}
+								{@const ov = entry.ov}
+								<p class="font-medium">{fmtDate(ov.date, $prefs)}</p>
+								<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+									{#if ov.reason === 'custom_hours'}
+										<Badge class="bg-blue-50 text-blue-700 border-blue-200">Horario personalizado</Badge>
+									{:else if ov.reason === 'out_of_office'}
+										<Badge class="bg-amber-50 text-amber-700 border-amber-200">Fuera de oficina</Badge>
+									{:else}
+										<Badge variant="secondary">Día libre</Badge>
+									{/if}
+									<span>
+										{ov.is_available && ov.start_time && ov.end_time
+											? `${fmtTime(ov.start_time)} – ${fmtTime(ov.end_time)}`
+											: '1 día'}
+									</span>
+								</div>
+							{/if}
+						</div>
+						<!-- Phone-only: 40 px tall (a finger's target), not the table's 28 px. -->
+						{#if entry.kind === 'span'}
+							<Button variant="ghost" class="h-10 shrink-0 text-destructive hover:text-destructive" onclick={() => deleteGroup(entry.group_id)}>Eliminar</Button>
+						{:else}
+							<Button variant="ghost" class="h-10 shrink-0 text-destructive hover:text-destructive" onclick={() => deleteOverride(entry.ov.id)}>Eliminar</Button>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+			<table class="hidden w-full text-sm md:table">
 				<thead>
 					<tr class="border-b">
 						<th class="px-4 pb-3 pt-3 text-left text-xs font-medium text-muted-foreground">Fecha</th>
@@ -419,7 +478,7 @@
 									<Tooltip.Provider>
 										<div class="flex items-center justify-end gap-1">
 											<Tooltip.Root>
-												<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} onclick={() => deleteGroup(entry.group_id)}>
+												<Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon' })} aria-label="Eliminar rango" onclick={() => deleteGroup(entry.group_id)}>
 													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 												</Tooltip.Trigger>
 												<Tooltip.Content>Eliminar rango</Tooltip.Content>
@@ -452,6 +511,7 @@
 											<Tooltip.Root>
 												<Tooltip.Trigger
 													class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+													aria-label="Eliminar excepción"
 													onclick={() => deleteOverride(ov.id)}
 												>
 													<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
@@ -515,7 +575,7 @@
 						</Select.Root>
 					</div>
 				{/if}
-				<Button onclick={addOverride} disabled={addingOv}>
+				<Button class="w-full sm:w-auto" onclick={addOverride} disabled={addingOv}>
 					{addingOv ? 'Agregando…' : 'Agregar excepción'}
 				</Button>
 			</div>
