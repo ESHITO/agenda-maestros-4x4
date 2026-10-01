@@ -578,6 +578,28 @@ export const INVITE_ROLE_LABELS: Record<InviteRole, string> = {
 	admin: 'Administrador'
 };
 
+/** Fork: a support person's transition (fork_member_transition.go). minutes null = the
+ *  Soporte template's buffer after (template_minutes). */
+export type MemberTransition = {
+	user_id: string;
+	applies: boolean;
+	minutes: number | null;
+	template_minutes: number;
+	template_interval: number;
+	duration: number;
+	interval_effective: number;
+};
+
+/** Fork: GET /v1/team/transitions. items: user id → chosen minutes (no key = template). */
+export type TeamTransitions = {
+	has_template: boolean;
+	template_minutes: number;
+	template_interval: number;
+	duration: number;
+	choices: number[];
+	items: Record<string, number>;
+};
+
 export const teamApi = {
 	/** GET /v1/team/settings (admins). */
 	getSettings: () => api.get<TeamSettings>('/v1/team/settings'),
@@ -627,6 +649,19 @@ export const teamApi = {
 		api.get<TeamAvailability>(
 			`/v1/team/availability?from=${q.from}&to=${q.to}&tz=${encodeURIComponent(q.tz)}&area=${q.area ?? 'all'}${q.fresh ? '&fresh=1' : ''}`
 		),
+
+	/** GET /v1/users/me/transition: the caller's time between sessions (Soporte). */
+	myTransition: () => api.get<MemberTransition>('/v1/users/me/transition'),
+
+	/** PUT /v1/users/me/transition (área soporte). null = back to the template's. */
+	putMyTransition: (minutes: number | null) => api.put<MemberTransition>('/v1/users/me/transition', { minutes }),
+
+	/** PUT /v1/users/{id}/transition (owner; admins for non-admin members). */
+	putUserTransition: (userId: string, minutes: number | null) =>
+		api.put<MemberTransition>(`/v1/users/${userId}/transition`, { minutes }),
+
+	/** GET /v1/team/transitions (owner, admins): S's times and every person's choice. */
+	teamTransitions: () => api.get<TeamTransitions>('/v1/team/transitions'),
 
 	/** POST /v1/invites with the role the invitee will get. */
 	createInvite: (email: string, role: InviteRole) =>

@@ -257,9 +257,19 @@ func hostsByStart(req Request, p params, applyBusy bool, belowNotice map[time.Ti
 			// day the window starts on. Per-window grids would not line up (09:00 and 09:30
 			// windows on 60 minutes never share a start), and collective or round robin
 			// with a required host needs the same instant free for everyone.
+			//
+			// Fork (Agenda Maestros 4x4, transition between sessions, 30 Sep 2026): busy
+			// time is widened by max(before, after) on BOTH ends. Upstream widened it by
+			// before/after only, i.e. the buffers belonged to the session already booked:
+			// a new candidate could end exactly when the next booking or calendar event
+			// began, so the "transition after each session" the owner set was guaranteed
+			// only after a session booked earlier, never before one booked later. The
+			// symmetric margin keeps both gaps: after a booking, and before the next one.
+			// calendarFreeHosts (booking_calendar_check.go) checks the same margin.
 			var busy []Interval
 			if applyBusy {
-				busy = expandBusy(host.Busy, p.bufBefore, p.bufAfter)
+				m := BufferMargin(p.bufBefore, p.bufAfter)
+				busy = expandBusy(host.Busy, m, m)
 			}
 			for _, w := range mergeIntervals(windows) {
 				avail := []Interval{w}

@@ -18,10 +18,13 @@
 		type ReassignCandidate,
 		type TeamMember,
 		type TeamSettings,
+		type TeamTransitions,
 		type UpcomingBooking,
 		type User
 	} from '$lib/api';
 	import { currentUser } from '$lib/stores';
+	// Fork: each Soporte person's time between sessions (fork_member_transition.go).
+	import { TRANSITION_CHOICES, effectiveInterval, supportCadenceSentence } from '$lib/transition';
 	import { prefs, displayZone } from '$lib/prefs';
 	import { Button } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
@@ -157,10 +160,75 @@
 		}
 	}
 
+	// --- Fork: time between sessions (Soporte cards; owner and admins edit it) ---
+	// Mentoría follows its template (edited in the event type); each Soporte person may have
+	// their own, which the owner or an admin can also set here (same rule as the role: an
+	// admin only for non-admin members).
+	let transitions = $state<TeamTransitions | null>(null);
+	let transitionBusy = $state<Record<string, boolean>>({});
+	const TEMPLATE_CHOICE = 'template';
+
+	async function loadTransitions() {
+		if (!$currentUser?.is_admin) return;
+		try {
+			transitions = await teamApi.teamTransitions();
+		} catch {
+			transitions = null; // only the small selects disappear
+		}
+	}
+	function canEditTransition(m: TeamMember): boolean {
+		if (!me || !transitions?.has_template || m.archived || m.area !== 'soporte' || !m.personal_link?.active) return false;
+		if (me.is_owner || m.id === me.id) return true;
+		return me.is_admin && !m.is_admin && !m.is_owner;
+	}
+	function transitionChoice(m: TeamMember): string {
+		const v = transitions?.items[m.id];
+		return v === undefined ? TEMPLATE_CHOICE : String(v);
+	}
+	function transitionLabel(v: string): string {
+		if (v === TEMPLATE_CHOICE) return `Como la plantilla (${transitions?.template_minutes ?? 0} min)`;
+		return Number(v) === 0 ? 'Sin transición (0 min)' : `${v} min`;
+	}
+	function transitionCadence(m: TeamMember): string {
+		if (!transitions) return '';
+		const v = transitions.items[m.id];
+		const interval = effectiveInterval(transitions.duration, transitions.template_interval, v === undefined ? null : v);
+		return supportCadenceSentence(
+			transitions.duration,
+			interval,
+			m.id === me?.id ? 'Tus' : 'Sus',
+			v === undefined ? transitions.template_minutes : v
+		);
+	}
+	async function changeTransition(m: TeamMember, v: string | undefined) {
+		if (!transitions || !v || v === transitionChoice(m) || transitionBusy[m.id]) return;
+		const minutes = v === TEMPLATE_CHOICE ? null : Number(v);
+		const prev = transitions.items;
+		const next = { ...prev };
+		if (minutes === null) delete next[m.id];
+		else next[m.id] = minutes;
+		transitions = { ...transitions, items: next }; // optimistic
+		transitionBusy = { ...transitionBusy, [m.id]: true };
+		try {
+			await teamApi.putUserTransition(m.id, minutes);
+			toast.success(
+				minutes === null
+					? `${m.name} usará el tiempo de la plantilla entre sesiones.`
+					: `${m.name}: ${minutes} min entre sesiones.`
+			);
+		} catch (e: any) {
+			if (transitions) transitions = { ...transitions, items: prev };
+			toast.error(e?.message || 'No se pudo guardar el tiempo entre sesiones.');
+		} finally {
+			transitionBusy = { ...transitionBusy, [m.id]: false };
+		}
+	}
+
 	onMount(() => {
 		load();
 		loadSettings();
 		loadOwnerTypes();
+		loadTransitions();
 		// Owner report (30 Sep 2026): changes only showed after a reload. Coming back to the
 		// tab re-reads the team in place; the predefined-type settings only when the owner is
 		// not in the middle of changing them.
@@ -168,6 +236,7 @@
 			() =>
 				Promise.all([
 					load(),
+					Object.values(transitionBusy).some(Boolean) ? null : loadTransitions(),
 					settingsDirty || savingSettings ? null : loadSettings(),
 					settingsDirty || savingSettings ? null : loadOwnerTypes()
 				]),
@@ -1009,6 +1078,25 @@
 										<a href={m.personal_link.url} target="_blank" rel="noopener noreferrer" class="break-all text-sm text-primary hover:underline">{m.personal_link.url}</a>
 									</div>
 									<Button variant="outline" size="sm" class="self-start sm:self-auto" onclick={() => copyLink(m.personal_link!.url)}>Copiar enlace</Button>
+								</div>
+							{/if}
+
+							{#if canEditTransition(m)}
+								{@const cur = transitionChoice(m)}
+								<div class="flex flex-col gap-2 rounded-md border bg-background px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+									<div class="min-w-0">
+										<Label for="transition-{m.id}" class="text-xs font-medium text-muted-foreground">Tiempo entre sesiones</Label>
+										<p class="mt-0.5 text-xs text-muted-foreground">{transitionCadence(m)}</p>
+									</div>
+									<Select.Root type="single" value={cur} onValueChange={(v) => changeTransition(m, v)} disabled={!!transitionBusy[m.id]}>
+										<Select.Trigger id="transition-{m.id}" class="w-full sm:w-52">{transitionLabel(cur)}</Select.Trigger>
+										<Select.Content>
+											<Select.Item value={TEMPLATE_CHOICE} label={transitionLabel(TEMPLATE_CHOICE)}>{transitionLabel(TEMPLATE_CHOICE)}</Select.Item>
+											{#each TRANSITION_CHOICES as c}
+												<Select.Item value={String(c)} label={transitionLabel(String(c))}>{transitionLabel(String(c))}</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
 								</div>
 							{/if}
 

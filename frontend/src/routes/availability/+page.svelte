@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type AvailabilityRule, type AvailabilityOverride } from '$lib/api';
+	import { api, teamApi, type AvailabilityRule, type AvailabilityOverride, type MemberTransition } from '$lib/api';
 	import { prefs, fmtDate } from '$lib/prefs';
 	import { onResume } from '$lib/refresh';
 	import { SaveQueue, errorMessage, type SaveStatus } from '$lib/save-queue';
@@ -11,6 +11,9 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Select from '$lib/components/ui/select';
 	import { DatePicker } from '$lib/components/ui/date-picker';
+	import { toast } from 'svelte-sonner';
+	// Fork: the time between sessions, chosen per person in Soporte (fork_member_transition.go).
+	import { TRANSITION_CHOICES, effectiveInterval, supportCadenceSentence } from '$lib/transition';
 
 	const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -505,16 +508,75 @@
 		ovForm.end_time = next.end_time;
 	}
 
+	// ── Fork: "Tiempo entre sesiones" (Soporte only) ──────────────────────────────
+	// Shown only when it applies (área soporte with an active copy of the Soporte template).
+	// Saved at once on change, like the rest of this page; "" = like the template.
+	let transition = $state<MemberTransition | null>(null);
+	let transitionSaving = $state(false);
+	const TEMPLATE_CHOICE = 'template';
+	const transitionValue = $derived(transition?.minutes == null ? TEMPLATE_CHOICE : String(transition.minutes));
+	const transitionLabel = (v: string) =>
+		v === TEMPLATE_CHOICE
+			? `Como la plantilla (${transition?.template_minutes ?? 0} min)`
+			: Number(v) === 0
+				? 'Sin transición (0 min)'
+				: `${v} min`;
+	const transitionHelper = $derived(
+		transition
+			? supportCadenceSentence(
+					transition.duration,
+					transition.interval_effective,
+					'Tus',
+					transition.minutes ?? transition.template_minutes
+				)
+			: ''
+	);
+
+	async function loadTransition() {
+		try {
+			transition = await teamApi.myTransition();
+		} catch {
+			transition = null; // the card is a convenience: its failure hides only the card
+		}
+	}
+
+	async function changeTransition(v: string | undefined) {
+		if (!transition || !v || v === transitionValue || transitionSaving) return;
+		const minutes = v === TEMPLATE_CHOICE ? null : Number(v);
+		const prev = transition;
+		// Optimistic: the helper follows at once; the server's answer replaces it.
+		transition = {
+			...prev,
+			minutes,
+			interval_effective: effectiveInterval(prev.duration, prev.template_interval, minutes)
+		};
+		transitionSaving = true;
+		try {
+			transition = await teamApi.putMyTransition(minutes);
+			toast.success(
+				minutes === null
+					? 'Guardado: usarás el tiempo de la plantilla.'
+					: `Guardado: ${minutes} min entre sesiones.`
+			);
+		} catch (e) {
+			transition = prev;
+			toast.error(errorMessage(e, 'No se pudo guardar el tiempo entre sesiones.'));
+		} finally {
+			transitionSaving = false;
+		}
+	}
+
 	onMount(() => {
 		// Both lists at once.
-		void Promise.all([loadRules(), loadOverrides()]);
+		void Promise.all([loadRules(), loadOverrides(), loadTransition()]);
 		// Coming back to the tab (after looking at the booking page, another device…) shows
 		// what the server has now - but never over an edit still on its way.
 		return onResume(
 			async () => {
 				await Promise.all([
 					rulesBusy() || rulesLoading ? null : loadRules(true),
-					ovOps > 0 || overridesLoading ? null : loadOverrides(true)
+					ovOps > 0 || overridesLoading ? null : loadOverrides(true),
+					transitionSaving ? null : loadTransition()
 				]);
 			},
 			{ minIntervalMs: 5_000 }
@@ -556,6 +618,30 @@
 	<h1 class="text-2xl font-semibold tracking-tight">Disponibilidad</h1>
 	<p class="mt-1 text-sm text-muted-foreground">Configura tu horario semanal y bloquea fechas específicas.</p>
 </div>
+
+{#if transition?.applies}
+	<!-- Fork: Soporte chooses its own transition; Mentoría follows the template. -->
+	<div class="mb-8 rounded-lg border bg-card p-4">
+		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+			<div class="min-w-0">
+				<h2 class="text-sm font-semibold">Tiempo entre sesiones</h2>
+				<p class="mt-0.5 text-xs text-muted-foreground">El descanso después de cada sesión, antes de que puedan reservarte la siguiente.</p>
+			</div>
+			<Select.Root type="single" value={transitionValue} onValueChange={changeTransition} disabled={transitionSaving}>
+				<Select.Trigger id="transition-minutes" class="w-full sm:w-56" aria-label="Tiempo entre sesiones">
+					{transitionLabel(transitionValue)}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value={TEMPLATE_CHOICE} label={transitionLabel(TEMPLATE_CHOICE)}>{transitionLabel(TEMPLATE_CHOICE)}</Select.Item>
+					{#each TRANSITION_CHOICES as m}
+						<Select.Item value={String(m)} label={transitionLabel(String(m))}>{transitionLabel(String(m))}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		</div>
+		<p class="mt-3 rounded-md bg-muted/40 px-3 py-2 text-sm" aria-live="polite">{transitionHelper}</p>
+	</div>
+{/if}
 
 <!-- Weekly Hours -->
 <div class="mb-8">

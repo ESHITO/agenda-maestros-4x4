@@ -71,6 +71,17 @@ func cutOut(window, busy Interval) []Interval {
 	return out
 }
 
+// BufferMargin is the gap the slot engine keeps on each side of a busy interval: the
+// larger of an event type's buffer before and buffer after (fork; see hostsByStart).
+// Every session then has its "before" margin before it and its transition ("after")
+// after it, whichever order the sessions were booked in.
+func BufferMargin(before, after time.Duration) time.Duration {
+	if before > after {
+		return before
+	}
+	return after
+}
+
 // expandBusy widens each busy interval by the given before/after durations.
 func expandBusy(busy []Interval, before, after time.Duration) []Interval {
 	if before == 0 && after == 0 {

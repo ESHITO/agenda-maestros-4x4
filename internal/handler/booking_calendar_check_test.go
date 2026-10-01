@@ -162,8 +162,14 @@ func TestBookingCalendarBuffersMatchSlots(t *testing.T) {
 	}{
 		{"before_blocks_later_event", 15, 0, 30, false},
 		{"after_blocks_earlier_event", 0, 30, -45, false},
-		{"before_allows_earlier_event", 15, 0, -30, true},
-		{"after_allows_later_event", 0, 30, 45, true},
+		// Fork (transition between sessions): the margin is max(before, after) on BOTH
+		// sides (slots.BufferMargin), so these two, which upstream allowed, now block -
+		// a session may no longer end right when the next event starts, nor start right
+		// when the previous one ends, inside the margin.
+		{"before_blocks_earlier_event_too", 15, 0, -30, false},
+		{"after_blocks_later_event_too", 0, 30, 45, false},
+		{"before_earlier_event_outside_margin", 15, 0, -45, true},
+		{"after_later_event_outside_margin", 0, 30, 60, true},
 		{"before_touching_boundary", 15, 0, 45, true},
 		{"after_touching_boundary", 0, 30, -60, true},
 	} {

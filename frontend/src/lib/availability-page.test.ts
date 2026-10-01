@@ -15,11 +15,28 @@ function fake(method: string) {
 		});
 }
 
+// Fork: the Soporte "Tiempo entre sesiones" card (teamApi, not the faked api object). By
+// default it does not apply, so the page shows no extra select.
+const { NO_TRANSITION, transitionApi } = vi.hoisted(() => {
+	const NO_TRANSITION = {
+		user_id: 'me', applies: false, minutes: null as number | null, template_minutes: 15,
+		template_interval: 30, duration: 40, interval_effective: 30
+	};
+	const transitionApi = {
+		myTransition: vi.fn(async () => ({ ...NO_TRANSITION })),
+		putMyTransition: vi.fn(async (minutes: number | null) => ({
+			...NO_TRANSITION, applies: true, minutes, interval_effective: minutes === null ? 30 : 40 + minutes
+		}))
+	};
+	return { NO_TRANSITION, transitionApi };
+});
+
 vi.mock('$lib/api', async (importOriginal) => {
 	const mod = await importOriginal<typeof import('$lib/api')>();
 	return {
 		...mod,
-		api: { ...mod.api, get: fake('GET'), post: fake('POST'), patch: fake('PATCH'), del: fake('DELETE') }
+		api: { ...mod.api, get: fake('GET'), post: fake('POST'), patch: fake('PATCH'), del: fake('DELETE') },
+		teamApi: { ...mod.teamApi, ...transitionApi }
 	};
 });
 
@@ -47,6 +64,8 @@ async function mountWithMondayBlock() {
 
 beforeEach(() => {
 	calls.length = 0;
+	transitionApi.myTransition.mockImplementation(async () => ({ ...NO_TRANSITION }));
+	transitionApi.putMyTransition.mockClear();
 });
 
 afterEach(() => {
@@ -125,5 +144,35 @@ describe('Disponibilidad: saving never blocks and never drops a change', () => {
 		await vi.waitFor(() => expect(triggers().length).toBe(before - 2));
 		await vi.waitFor(() => expect(of('DELETE')).toHaveLength(1));
 		expect(of('DELETE')[0].path).toBe('/v1/availability-rules/r1');
+	});
+});
+
+describe('Disponibilidad: Tiempo entre sesiones (Soporte)', () => {
+	test('hidden when it does not apply (Mentoría, no área)', async () => {
+		await mountWithMondayBlock();
+		expect(page.getByText('Tiempo entre sesiones').query()).toBeNull();
+	});
+
+	test('a support person picks 10 min: saved at once, the helper shows the new cadence', async () => {
+		transitionApi.myTransition.mockImplementation(async () => ({ ...NO_TRANSITION, applies: true }));
+		await mountWithMondayBlock();
+		await expect.element(page.getByText('Tiempo entre sesiones')).toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'Tus sesiones de 40 min + 15 min de transición se ofrecen cada 30 min: 9:00 a. m., 9:30 a. m., 10:00 a. m., 10:30 a. m.… Tras cada reserva, el siguiente horario libre es 60 min después de su inicio.'
+				)
+			)
+			.toBeVisible();
+		const trigger = document.getElementById('transition-minutes')!;
+		expect(trigger.textContent).toContain('Como la plantilla (15 min)');
+		await pick(trigger, '10 min');
+		await vi.waitFor(() => expect(transitionApi.putMyTransition).toHaveBeenCalledWith(10));
+		await expect
+			.element(page.getByText('Tus sesiones de 40 min empezarán cada 50 min: 9:00 a. m., 9:50 a. m., 10:40 a. m., 11:30 a. m.…'))
+			.toBeVisible();
+		// Back to the template: null.
+		await pick(document.getElementById('transition-minutes')!, 'Como la plantilla (15 min)');
+		await vi.waitFor(() => expect(transitionApi.putMyTransition).toHaveBeenLastCalledWith(null));
 	});
 });

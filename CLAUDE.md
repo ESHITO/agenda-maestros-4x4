@@ -432,6 +432,21 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   visible (`BookingLogic.autoRefresh`, mirrored in `embed.js`), never while the form or confirm step is open, keeping
   the picked day. Admin pages re-load on resume through `lib/refresh.ts` (`onResume`); the Panel's team calendar
   refetches with `fresh=1` on resume and every 60 s.
+- **Transition between sessions** (owner, 30 Sep 2026; `fork_member_transition.go`, `lib/transition.ts`). Transition =
+  `buffer_after_minutes`, "Empezar una sesión cada" = `slot_interval_minutes`, grouped in the editor's "Duración y
+  transición" block (live example starts from 9:00, "Una sesión por hora" = interval 60; warnings only, never a block).
+  **Mentoría is template-wide**: the owner sets T, copies follow by the generic sync. **Soporte is per person**:
+  `fork_member_transition(user_id, minutes ∈ 0,5,…,30,45,60)` (EnsureTeamSchema); for a SOPORTE copy whose host has a
+  row, `syncTeamCopy` drops `teamTransitionColumns` from the generic UPDATE and writes buffer_after = minutes, interval
+  = S's duration + minutes (so an S duration edit still moves it); no row (or a value off the list) = S's values,
+  Mentoría copies never read it (`TestTeamSyncColumns_classified` pins both columns as synced in general).
+  `GET|PUT /v1/users/me/transition` (PUT: área soporte, else 403; `null` = back to S), `PUT /v1/users/{id}/transition`
+  (owner; admin for non-admin members; target área soporte, else 400), `GET /v1/team/transitions` (owner, admins) for
+  Miembros; PUTs reconcile that person after a 2xx. UI: Disponibilidad card (only when `applies`), a Select on the
+  Soporte cards in Miembros. **The engine keeps the margin on BOTH sides** (fork divergence in `hostsByStart`):
+  busy time is widened by `slots.BufferMargin` = max(before, after) at each end, and `calendarFreeHosts` checks the
+  same window - upstream widened only before/after, so a new session could end right when a later one began. The
+  margins overlap, never add up: the UI's `sessionSpan` = duration + max(after, before) (`slots/transition_both_sides_test.go`).
 - **Known, out of scope:** staff creating bookings for clients; per-person summary; the owner
   rescheduling others' sessions (the MCP `reschedule_booking` tool still lets admins do it).
 

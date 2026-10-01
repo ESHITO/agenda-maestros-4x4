@@ -32,6 +32,7 @@ func TestMigrateWithForkSchema_freshAndRepeated(t *testing.T) {
 			{"table", "fork_question_links"},
 			{"table", "fork_member_areas"},
 			{"table", "fork_template_areas"},
+			{"table", "fork_member_transition"},
 			{"table", "fork_invite_roles"},
 			{"table", "fork_livekit_mints"},
 			{"table", "fork_livekit_sessions"},

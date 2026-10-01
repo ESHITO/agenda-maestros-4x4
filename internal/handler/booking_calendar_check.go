@@ -18,9 +18,13 @@ func (h *Handler) calendarFreeHosts(ctx context.Context, et *bookableEventType, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	// Fork: the same symmetric margin the slot engine keeps (slots.BufferMargin, see
+	// hostsByStart): max(before, after) on both sides of the new session, so a calendar
+	// event right after it is caught too, not only one right before it.
+	margin := slots.BufferMargin(time.Duration(et.BufferBeforeMinutes)*time.Minute, time.Duration(et.BufferAfterMinutes)*time.Minute)
 	window := slots.Interval{
-		Start: start.Add(-time.Duration(et.BufferAfterMinutes) * time.Minute),
-		End:   end.Add(time.Duration(et.BufferBeforeMinutes) * time.Minute),
+		Start: start.Add(-margin),
+		End:   end.Add(margin),
 	}
 	free := map[string]bool{}
 	check := func(id string) (bool, error) {

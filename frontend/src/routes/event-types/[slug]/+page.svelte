@@ -19,6 +19,8 @@
 	import EmbedPanel from '$lib/components/event-types/EmbedPanel.svelte';
 	// Fork: WhatsApp texts per moment (saved on their own, see the component).
 	import WhatsAppMessagesPanel from '$lib/components/event-types/WhatsAppMessagesPanel.svelte';
+	// Fork: the transition time between sessions, explained live (lib/transition.ts).
+	import { transitionSentence, cadenceWarning, hourlyWarning } from '$lib/transition';
 
 	// Ordered by expected usage. 'custom_video' is retired from the picker but the
 	// backend still renders any legacy event types that use it.
@@ -103,6 +105,26 @@
 
 	// Price is edited in major units (e.g. dollars); stored as integer cents.
 	let priceMajor = $state('0');
+
+	// Fork: "Duración y transición" (owner decision, 30 Sep 2026). The transition is
+	// buffer_after_minutes; "Empezar una sesión cada" is slot_interval_minutes. Only
+	// explained and warned about here - never blocked (validation stays on change, server side).
+	const cadenceText = $derived(
+		transitionSentence(Number(form.duration_minutes), Number(form.buffer_after_minutes), Number(form.slot_interval_minutes))
+	);
+	const cadenceWarn = $derived(
+		cadenceWarning(
+			Number(form.duration_minutes),
+			Number(form.buffer_after_minutes),
+			Number(form.slot_interval_minutes),
+			Number(form.buffer_before_minutes)
+		)
+	);
+	function oneSessionPerHour() {
+		form.slot_interval_minutes = 60;
+		const w = hourlyWarning(Number(form.duration_minutes), Number(form.buffer_after_minutes), Number(form.buffer_before_minutes));
+		if (w) toast.warning(w);
+	}
 
 	// True when the connected calendar will auto-generate the chosen platform's link.
 	const meetAutoGen = $derived(
@@ -514,8 +536,11 @@
 			<dt class="text-muted-foreground">Nombre</dt><dd class="mb-2 font-medium sm:mb-0">{e.name}</dd>
 			{#if e.description}<dt class="text-muted-foreground">Descripción</dt><dd class="mb-2 whitespace-pre-line sm:mb-0">{e.description}</dd>{/if}
 			<dt class="text-muted-foreground">Duración</dt><dd class="mb-2 sm:mb-0">{e.duration_minutes} min</dd>
+			{#if e.buffer_after_minutes > 0}
+				<dt class="text-muted-foreground">Transición</dt><dd class="mb-2 sm:mb-0">{e.buffer_after_minutes} min después de cada sesión</dd>
+			{/if}
 			{#if e.slot_interval_minutes !== e.duration_minutes}
-				<dt class="text-muted-foreground">Intervalo entre turnos</dt><dd class="mb-2 sm:mb-0">{e.slot_interval_minutes} min</dd>
+				<dt class="text-muted-foreground">Empieza una sesión cada</dt><dd class="mb-2 sm:mb-0">{e.slot_interval_minutes} min</dd>
 			{/if}
 			<dt class="text-muted-foreground">Ubicación</dt><dd class="mb-2 break-words sm:mb-0">{LOCATION_TYPES.find((l) => l.value === e.location_type)?.label ?? e.location_type}{#if e.location_value} · {e.location_value}{/if}</dd>
 			<dt class="text-muted-foreground">Enrutamiento</dt><dd class="mb-2 capitalize sm:mb-0">{ROUTING_MODE_LABELS[e.routing_mode] ?? e.routing_mode.replace('_', ' ')}</dd>
@@ -690,19 +715,6 @@
 					con <code>-copy</code> al final.
 				</p>
 			</div>
-			<div class="space-y-1.5">
-				<Label for="et-dur">Duración (minutos)</Label>
-				<Input id="et-dur" type="number" min="5" step="5" bind:value={form.duration_minutes} />
-				<p class="text-xs text-muted-foreground">Cuánto dura la reunión.</p>
-			</div>
-			<div class="space-y-1.5">
-				<Label for="et-slot">Intervalo entre turnos (minutos)</Label>
-				<Input id="et-slot" type="number" min="1" step="5" bind:value={form.slot_interval_minutes} />
-				<p class="text-xs text-muted-foreground">
-					Cada cuánto puede empezar una reserva. Normalmente es igual a la duración. Bájalo
-					para ofrecer más horarios de inicio, o súbelo para mantener los turnos en punto.
-				</p>
-			</div>
 			<div class="space-y-1.5 sm:col-span-2">
 				<Label for="et-desc">Descripción</Label>
 				<Textarea id="et-desc" bind:value={form.description} placeholder="Opcional — admite **negrita** y *cursiva* en markdown" rows={3} class="resize-y" />
@@ -719,6 +731,48 @@
 				<div class="flex items-center gap-2">
 					<Checkbox id="is-public" bind:checked={form.is_public} />
 					<Label for="is-public" class="cursor-pointer font-normal">Público (visible en la página de reserva)</Label>
+				</div>
+			</div>
+		</div>
+
+		<!-- Fork: duration and transition in one block, with the starts clients will see. -->
+		<div class="mt-6 border-t pt-5">
+			<p class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Duración y transición</p>
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+				<div class="flex flex-col gap-1.5">
+					<Label for="et-dur">Duración de la sesión (min)</Label>
+					<Input id="et-dur" type="number" min="5" step="5" class="mt-auto" bind:value={form.duration_minutes} />
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="et-buf-after">Tiempo de transición después de cada sesión (min)</Label>
+					<Input id="et-buf-after" type="number" min="0" step="5" class="mt-auto" bind:value={form.buffer_after_minutes} />
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="et-slot">Empezar una sesión cada (min)</Label>
+					<Input id="et-slot" type="number" min="1" step="5" class="mt-auto" bind:value={form.slot_interval_minutes} />
+				</div>
+			</div>
+			<p class="mt-3 rounded-md border bg-muted/40 px-3 py-2 text-sm" aria-live="polite">{cadenceText}</p>
+			{#if cadenceWarn}
+				<p class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">{cadenceWarn}</p>
+			{/if}
+			<div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+				<Button variant="outline" size="sm" class="self-start" onclick={oneSessionPerHour}>Una sesión por hora</Button>
+				<p class="text-xs text-muted-foreground">Los horarios se cuentan desde el inicio de cada bloque de disponibilidad (si tu bloque empieza a las 9:00 a. m., las sesiones caen a las 9:00 a. m., 10:00 a. m.…).</p>
+			</div>
+			{#if teamKind === 'mentoria_template'}
+				<p class="mt-3 text-xs text-muted-foreground">Todos los mentores usan estos tiempos en su copia.</p>
+			{:else if teamKind === 'soporte_template'}
+				<p class="mt-3 text-xs text-muted-foreground">
+					Cada persona de Soporte puede elegir su propio tiempo de transición en Disponibilidad; quien no elija usa
+					el de aquí.
+				</p>
+			{/if}
+			<div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+				<div class="space-y-1.5">
+					<Label for="et-buf-before">Margen antes (min)</Label>
+					<Input id="et-buf-before" type="number" min="0" step="5" bind:value={form.buffer_before_minutes} />
+					<p class="text-xs text-muted-foreground">Tiempo bloqueado antes de cada sesión. Normalmente 0.</p>
 				</div>
 			</div>
 		</div>
@@ -831,16 +885,6 @@
 		<div class="mt-6 border-t pt-5">
 			<p class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Programación</p>
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-				<div class="space-y-1.5">
-					<Label for="et-buf-before">Margen antes (min)</Label>
-					<Input id="et-buf-before" type="number" min="0" step="5" bind:value={form.buffer_before_minutes} />
-					<p class="text-xs text-muted-foreground">Tiempo bloqueado antes de cada reunión</p>
-				</div>
-				<div class="space-y-1.5">
-					<Label for="et-buf-after">Margen después (min)</Label>
-					<Input id="et-buf-after" type="number" min="0" step="5" bind:value={form.buffer_after_minutes} />
-					<p class="text-xs text-muted-foreground">Tiempo bloqueado después de cada reunión</p>
-				</div>
 				<div class="space-y-1.5">
 					<Label for="et-notice">Aviso mínimo (min)</Label>
 					<Input id="et-notice" type="number" min="0" step="30" bind:value={form.min_notice_minutes} />

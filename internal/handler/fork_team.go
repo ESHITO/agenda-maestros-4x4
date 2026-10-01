@@ -27,6 +27,11 @@ package handler
 //     (owner, fixed routing, empty location_value, not archived, is_active by rule 3).
 //     TestTeamSyncColumns_classified pins the column set, so an upstream column
 //     addition fails CI until someone decides whether it syncs.
+//     The one per-copy exception: a SOPORTE copy whose person chose their transition
+//     (fork_member_transition, fork_member_transition.go) leaves buffer_after_minutes and
+//     slot_interval_minutes out of the generic sync and gets buffer_after = minutes,
+//     interval = S's duration + minutes instead. Without a row both sync from S like
+//     every other column; Mentoría copies never read the table (T's values rule).
 //  3. is_active = U active AND U's área is P's AND P not archived AND P still the setting
 //     of that área. P's own is_active is not propagated. Losing eligibility deactivates
 //     the copy (never deletes it: bookings are RESTRICT); regaining it reactivates it.
@@ -345,10 +350,14 @@ func (h *Handler) ReconcileTeam(ctx context.Context, userID string) (teamStats, 
 	if err != nil {
 		return stats, fmt.Errorf("team: load users: %w", err)
 	}
+	transitions, err := loadTeamTransitions(ctx, h.db)
+	if err != nil {
+		return stats, fmt.Errorf("team: load transitions: %w", err)
+	}
 
 	for _, u := range users {
 		if err := h.teamTx(ctx, func(tx *sql.Tx) error {
-			return reconcileTeamUser(ctx, tx, tmpls, cols, u, &stats)
+			return reconcileTeamUser(ctx, tx, tmpls, cols, transitions, u, &stats)
 		}); err != nil {
 			return stats, fmt.Errorf("team: user pass: %w", err)
 		}
@@ -397,7 +406,8 @@ func (h *Handler) teamTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 }
 
 // reconcileTeamUser is rules 1-6 for one user and every current template, inside tx.
-func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpls []teamTemplate, cols []string, u teamUser, stats *teamStats) error {
+// transitions are the Soporte people's chosen minutes (loadTeamTransitions).
+func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpls []teamTemplate, cols []string, transitions map[string]int, u teamUser, stats *teamStats) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT copy_id, template_id FROM fork_event_type_links WHERE user_id = ? AND kind = ?`, u.id, linkKindCopy)
 	if err != nil {
@@ -450,7 +460,12 @@ func reconcileTeamUser(ctx context.Context, tx *sql.Tx, tmpls []teamTemplate, co
 			copyID = id
 			stats.Created++
 		}
-		if err := syncTeamCopy(ctx, tx, p.teamType, cols, copyID, u.id, active, stats); err != nil {
+		// The per-person transition applies to Soporte copies only (Mentoría: the template).
+		var transition *int
+		if m, ok := transitions[u.id]; ok && p.area == areaSoporte {
+			transition = &m
+		}
+		if err := syncTeamCopy(ctx, tx, p.teamType, cols, copyID, u.id, active, transition, stats); err != nil {
 			return err
 		}
 	}
@@ -481,21 +496,32 @@ func createTeamCopy(ctx context.Context, tx *sql.Tx, tmpl *teamType, cols []stri
 	return id, nil
 }
 
-// syncTeamCopy is rules 2-5 for one existing copy of tmpl hosted by userID.
-func syncTeamCopy(ctx context.Context, tx *sql.Tx, tmpl *teamType, cols []string, copyID, userID string, active bool, stats *teamStats) error {
+// syncTeamCopy is rules 2-5 for one existing copy of tmpl hosted by userID. A non-nil
+// transition (a Soporte person's chosen minutes) replaces the template's buffer after and
+// slot interval on this copy: buffer_after = minutes, interval = duration + minutes (the
+// template's duration, so a duration change on S still moves it).
+func syncTeamCopy(ctx context.Context, tx *sql.Tx, tmpl *teamType, cols []string, copyID, userID string, active bool, transition *int, stats *teamStats) error {
 	var wasActive bool
 	if err := tx.QueryRowContext(ctx, `SELECT is_active FROM event_types WHERE id = ?`, copyID).Scan(&wasActive); err != nil {
 		return fmt.Errorf("load copy: %w", err)
 	}
-	colList := quoteColumns(cols)
 	isActive := 0
 	if active {
 		isActive = 1
 	}
+	syncCols, extraSet := cols, ""
+	args := []any{tmpl.id, tmpl.userID, isActive}
+	if transition != nil {
+		syncCols = withoutColumns(cols, teamTransitionColumns)
+		extraSet = `, buffer_after_minutes = ?, slot_interval_minutes = MAX(1, (SELECT duration_minutes FROM event_types WHERE id = ?) + ?)`
+		args = append(args, *transition, tmpl.id, *transition)
+	}
+	args = append(args, copyID)
+	colList := quoteColumns(syncCols)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE event_types SET (`+colList+`) = (SELECT `+colList+` FROM event_types WHERE id = ?),
-		       user_id = ?, routing_mode = 'fixed', location_value = '', archived_at = NULL, is_active = ?
-		WHERE id = ?`, tmpl.id, tmpl.userID, isActive, copyID); err != nil { // #nosec G202 -- colList comes from PRAGMA table_info, quoted; every value is bound
+		       user_id = ?, routing_mode = 'fixed', location_value = '', archived_at = NULL, is_active = ?`+extraSet+`
+		WHERE id = ?`, args...); err != nil { // #nosec G202 -- colList comes from PRAGMA table_info, quoted; extraSet is a constant; every value is bound
 		return fmt.Errorf("sync copy row: %w", err)
 	}
 	switch {

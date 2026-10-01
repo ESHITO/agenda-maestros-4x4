@@ -64,6 +64,10 @@ var forkTeamLinkSchema = []string{
 //     with no row (a copy made before Soporte was a template) is Mentoría.
 //   - fork_invite_roles: the role an invite grants on claim ('mentoria' | 'soporte' |
 //     'admin'), keyed by the lowercased email because a resend re-creates the invite row.
+//   - fork_member_transition: the minutes a SOPORTE person chose between sessions (the
+//     reconcile writes them into their copy of S as buffer_after_minutes, with the slot
+//     interval = S's duration + minutes); no row = their copy follows S. Mentoría copies
+//     ignore it (the owner sets T's transition for every mentor).
 //   - fork_livekit_mints / fork_livekit_sessions / fork_livekit_host_links: attendance of
 //     the built-in video room (who got a room token, the LiveKit webhook's sessions, and
 //     the hash of the host link a booking's current host holds).
@@ -77,6 +81,11 @@ var forkTeamSchema = []string{
 		template_id TEXT PRIMARY KEY,
 		area        TEXT NOT NULL,
 		updated_at  TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS fork_member_transition (
+		user_id    TEXT PRIMARY KEY,
+		minutes    INTEGER NOT NULL,
+		updated_at TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS fork_invite_roles (
 		email      TEXT PRIMARY KEY,

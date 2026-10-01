@@ -80,6 +80,18 @@ func TestTeamSyncColumns_classified(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("synced columns = %v\nwant %v", got, want)
 	}
+	// The per-copy override (fork_member_transition.go): a Soporte copy whose person chose
+	// a transition leaves exactly these two out of the generic sync. In general they stay
+	// synced (a copy without a choice, and every Mentoría copy, takes the template's), so
+	// they must be pinned above and never excluded.
+	for c := range teamTransitionColumns {
+		if !slices.Contains(teamSyncedPinned, c) || teamSyncExcluded[c] {
+			t.Errorf("teamTransitionColumns names %q, which must be a synced column (pinned, not excluded)", c)
+		}
+	}
+	if n := len(withoutColumns(got, teamTransitionColumns)); n != len(got)-len(teamTransitionColumns) {
+		t.Errorf("withoutColumns dropped %d of the %d override columns", len(got)-n, len(teamTransitionColumns))
+	}
 }
 
 func TestTeamCopySlugBase(t *testing.T) {

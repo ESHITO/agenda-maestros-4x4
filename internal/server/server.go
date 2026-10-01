@@ -404,6 +404,12 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("GET /v1/team/settings", h.RequireAuth(h.GetTeamSettings))
 	// Fork: the team's free time for the Panel (owner, admins, área soporte) - fork_team_availability.go.
 	mux.HandleFunc("GET /v1/team/availability", h.RequireAuth(h.GetTeamAvailability))
+	// Fork: the transition time between sessions - per person in Soporte, reconciled into
+	// their copy of S after a 2xx (fork_member_transition.go).
+	mux.HandleFunc("GET /v1/users/me/transition", h.RequireAuth(h.GetMyTransition))
+	mux.HandleFunc("PUT /v1/users/me/transition", h.RequireAuth(h.TeamReconcileAfterCaller(h.PutMyTransition)))
+	mux.HandleFunc("PUT /v1/users/{id}/transition", h.RequireAuth(h.TeamReconcileAfter(h.PutUserTransition)))
+	mux.HandleFunc("GET /v1/team/transitions", h.RequireAuth(h.ListTeamTransitions))
 	mux.HandleFunc("GET /v1/users/{id}/upcoming-bookings", h.RequireAuth(h.ListUserUpcomingBookings))
 
 	// Teams
