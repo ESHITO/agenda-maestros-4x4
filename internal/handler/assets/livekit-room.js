@@ -50,24 +50,41 @@
   // ----- Prejoin -----
   var roomToken = new URLSearchParams(location.search).get('t');
   var accessToken = ''; // the LiveKit access JWT (proves our identity for temp-host actions)
-  var previewTrack = null;
+  // The prejoin camera and mic tracks. join() PUBLISHES these same tracks: it never stops the
+  // camera and opens it again (on an iPhone that re-acquisition, outside any tap, is where the
+  // camera used to fail silently).
+  var previewVideo = null, previewAudio = null;
+  var previewBusy = null; // the running startPreview(), so toggles queue up and join() can wait
   var camOn = true, micOn = true;
+  var camPicked = false, micPicked = false; // the person chose a device in the list (else: front camera / default mic)
+  var UA = navigator.userAgent || '';
+  var IOS = RoomLogic.isIOS(UA, navigator.platform, navigator.maxTouchPoints);
+  var IN_APP = RoomLogic.inAppBrowser(UA);
 
   async function listDevices() {
     try {
       var devices = await navigator.mediaDevices.enumerateDevices();
-      fillSelect($('lk-cam'), devices.filter(function (d) { return d.kind === 'videoinput'; }));
-      fillSelect($('lk-mic'), devices.filter(function (d) { return d.kind === 'audioinput'; }));
+      fillSelect($('lk-cam'), devices.filter(function (d) { return d.kind === 'videoinput'; }), trackDeviceId(previewVideo));
+      fillSelect($('lk-mic'), devices.filter(function (d) { return d.kind === 'audioinput'; }), trackDeviceId(previewAudio));
     } catch (e) { /* labels need permission; ignore */ }
   }
-  function fillSelect(sel, devs) {
+  // The device a running track really uses, so the list shows THAT one (on an iPhone the first
+  // listed camera is often a back or virtual multi-lens one, not the front camera we opened).
+  function trackDeviceId(track) {
+    try { return (track && track.mediaStreamTrack && track.mediaStreamTrack.getSettings().deviceId) || ''; } catch (e) { return ''; }
+  }
+  function fillSelect(sel, devs, current) {
+    var keep = current || sel.value;
     sel.innerHTML = '';
     devs.forEach(function (d, i) {
       var o = document.createElement('option');
       o.value = d.deviceId; o.textContent = cleanLabel(d.label) || t('room_device_fallback', String(i + 1));
       sel.appendChild(o);
     });
+    if (keep && devs.some(function (d) { return d.deviceId === keep; })) sel.value = keep;
   }
+  function camOptions() { return RoomLogic.captureOptions('video', camPicked, $('lk-cam').value); }
+  function micOptions() { return RoomLogic.captureOptions('audio', micPicked, $('lk-mic').value); }
   // Browsers tack on noisy hardware detail — USB vendor:product IDs, Windows "Default - " /
   // "Communications - " role prefixes, and enumeration indices like "(3- …)". Strip them for a
   // clean picker (e.g. "Default - Microphone (3- AT2020 USB ) (17a0:0002)" → "AT2020 USB").
@@ -81,26 +98,184 @@
     return s;
   }
 
-  async function startPreview() {
-    stopPreview();
-    // Set the overlay text in BOTH branches: after a failure it read "Camera unavailable", and a
-    // later switch-off must say "Camera off" again, not keep the stale failure text.
-    if (!camOn) { $('lk-preview-off').textContent = t('room_preview_camera_off'); $('lk-preview-off').classList.remove('hidden'); return; }
-    $('lk-preview-off').classList.add('hidden');
-    try {
-      var opts = {};
-      if ($('lk-cam').value) opts.deviceId = $('lk-cam').value;
-      previewTrack = await LK.createLocalVideoTrack(opts);
-      previewTrack.attach($('lk-preview'));
-      await listDevices(); // labels now available
-    } catch (e) {
-      camOn = false; syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off');
-      $('lk-preview-off').textContent = t('room_camera_unavailable');
-      $('lk-preview-off').classList.remove('hidden');
-    }
+  // startPreview brings the prejoin tracks in line with the two toggles. Calls queue up (a tap
+  // during a permission prompt waits for it) instead of racing two getUserMedia calls.
+  function startPreview() {
+    var run = (previewBusy || Promise.resolve()).then(acquirePreview, acquirePreview);
+    previewBusy = run;
+    return run;
   }
-  function stopPreview() {
-    if (previewTrack) { previewTrack.detach(); previewTrack.stop(); previewTrack = null; }
+  async function acquirePreview() {
+    if (!camOn) stopVideoPreview();
+    if (!micOn) stopAudioPreview();
+    // Camera AND microphone in ONE getUserMedia (an iPhone then asks one question, not two);
+    // if that fails, each device on its own, so a blocked camera never costs the mic too
+    // (RoomLogic.acquireTracks, tested).
+    var got = await RoomLogic.acquireTracks({ video: camOn && !previewVideo, audio: micOn && !previewAudio }, {
+      both: LK.createLocalTracks ? function () { return LK.createLocalTracks({ video: camOptions(), audio: micOptions() }); } : null,
+      video: function () { return LK.createLocalVideoTrack(camOptions()); },
+      audio: function () { return LK.createLocalAudioTrack(micOptions()); }
+    });
+    if (got.video) previewVideo = got.video;
+    if (got.audio) previewAudio = got.audio;
+    var errs = got.errs;
+    if (errs.video) { camOn = false; syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off'); }
+    if (errs.audio) { micOn = false; syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off'); }
+    paintPreview(!!errs.video);
+    showMediaHelp(errs.video || errs.audio, { video: !!errs.video, audio: !!errs.audio });
+    if (previewVideo || previewAudio) await listDevices(); // labels now available
+  }
+  // paintPreview shows the camera, or the overlay. Set the overlay text in BOTH branches:
+  // after a failure it read "Camera unavailable", and a later switch-off must say "Camera off"
+  // again, not keep the stale failure text.
+  function paintPreview(failed) {
+    var off = $('lk-preview-off'), v = $('lk-preview');
+    off.classList.remove('tap'); off.onclick = null;
+    if (previewVideo) {
+      off.classList.add('hidden');
+      previewVideo.attach(v); // idempotent for an element it is already attached to
+      noAutoplayOnIOS(v);
+      playVideo(v);
+      return;
+    }
+    off.textContent = t(failed ? 'room_camera_unavailable' : 'room_preview_camera_off');
+    off.classList.remove('hidden');
+  }
+  function stopVideoPreview() {
+    if (previewVideo) { previewVideo.detach(); previewVideo.stop(); previewVideo = null; }
+  }
+  function stopAudioPreview() {
+    if (previewAudio) { previewAudio.stop(); previewAudio = null; }
+  }
+  function stopPreview() { stopVideoPreview(); stopAudioPreview(); }
+
+  // ----- Camera / mic problems: say what happened and offer the one button that can fix it -----
+  // Never silent any more: before, every failure ended in a bare "Camera unavailable" (or
+  // nothing at all, in the room) and the person joined with the camera off without knowing why.
+  function problemFor(err) { return RoomLogic.mediaProblem(err, { ios: IOS, inApp: !!IN_APP }); }
+  function paintHelp(box, msgEl, retryBtn, copyBtn, p, onRetry) {
+    if (!p) { box.classList.add('hidden'); return; }
+    msgEl.textContent = t(p.key);
+    retryBtn.classList.toggle('hidden', p.action === 'none');
+    retryBtn.textContent = t(p.action === 'reload' ? 'room_media_reload' : 'room_media_retry');
+    retryBtn.onclick = p.action === 'reload' ? reloadPage : onRetry;
+    if (copyBtn) copyBtn.classList.toggle('hidden', p.action !== 'none');
+    box.classList.remove('hidden');
+  }
+  // showMediaHelp — the box under the prejoin preview.
+  function showMediaHelp(err, failed) {
+    paintHelp($('lk-media-help'), $('lk-media-help-msg'), $('lk-media-retry'), $('lk-copy-link'), problemFor(err), function () {
+      // "Try again" runs inside the tap, which is what lets the browser ask again.
+      if (failed.video) { camOn = true; syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off'); }
+      if (failed.audio) { micOn = true; syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off'); }
+      startPreview();
+    });
+  }
+  // reloadPage — after "No permitir", Safari does not ask again on the same page; a reload does.
+  // The typed name survives it.
+  function reloadPage() {
+    try { var n = ($('lk-name').value || '').trim(); if (n) localStorage.setItem('calnode_name', n); } catch (e) {}
+    location.reload();
+  }
+  // copyLink — for an in-app browser that cannot use the camera: copy this page's address so
+  // the person can paste it into Safari / Chrome.
+  function copyLink(btn) {
+    var url = location.href;
+    var done = function () { btn.textContent = t('room_link_copied'); };
+    var fallback = function () {
+      var ta = document.createElement('textarea');
+      ta.value = url; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove();
+      if (ok) done();
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).then(done, fallback); return; }
+    } catch (e) {}
+    fallback();
+  }
+
+  // ----- Video playback (iPhone) -----
+  // Every <video> is muted + playsinline as ATTRIBUTES (not only properties) before any track
+  // is attached: iOS only plays video inline, without a tap, when both are on the element.
+  function prepVideo(v) {
+    v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.setAttribute('muted', '');
+    v.playsInline = true; v.muted = true; // sound always comes from the separate <audio> elements
+  }
+  // No autoplay attribute on iOS: the SDK leaves it off on Safari on purpose (in Low Power Mode
+  // Safari answers it with a play overlay over a black box), but it does set it in Chrome or
+  // Firefox for iPhone, which are WebKit too. playVideo() starts the video instead.
+  function noAutoplayOnIOS(v) {
+    if (IOS) { v.autoplay = false; v.removeAttribute('autoplay'); }
+  }
+  // playVideo — play() a video that has a stream but is paused, on the next tick (after the
+  // SDK's own Safari srcObject re-assignment). If the browser refuses (NotAllowedError: Low
+  // Power Mode, or a browser that wants a tap first), the tap-to-play prompt appears instead of
+  // a black box with sound.
+  var blockedVideos = []; // our <video> elements the browser refused to start
+  function playVideo(v) {
+    if (!v) return;
+    setTimeout(function () {
+      if (!v.srcObject || !v.paused || typeof v.play !== 'function') return;
+      var p; try { p = v.play(); } catch (e) { return; }
+      if (p && typeof p.then === 'function') {
+        p.then(function () { onPlayed(v); }, function (e) { if (e && e.name === 'NotAllowedError') onPlayBlocked(v); });
+      }
+    }, 0);
+  }
+  function onPlayBlocked(v) {
+    if (blockedVideos.indexOf(v) < 0) blockedVideos.push(v);
+    if (v === $('lk-preview')) {
+      var off = $('lk-preview-off');
+      off.textContent = t('room_preview_tap_to_play');
+      off.classList.add('tap'); off.classList.remove('hidden');
+      off.onclick = unlockPlayback;
+    }
+    paintPlayGate();
+  }
+  function onPlayed(v) {
+    blockedVideos = blockedVideos.filter(function (b) { return b !== v; });
+    if (v === $('lk-preview') && previewVideo) {
+      var off = $('lk-preview-off');
+      off.classList.add('hidden'); off.classList.remove('tap'); off.onclick = null;
+    }
+    paintPlayGate();
+  }
+  function allVideos() {
+    var list = [$('lk-preview')];
+    Object.keys(tiles).forEach(function (id) { list.push(tiles[id].video); });
+    return list;
+  }
+  function kickVideos() { allVideos().forEach(playVideo); }
+  function needsUnlock() {
+    if (room && (room.canPlaybackVideo === false || room.canPlaybackAudio === false)) return true;
+    return blockedVideos.length > 0;
+  }
+  // unlockPlayback — runs INSIDE a tap (the gate button, the preview overlay, or any tap on the
+  // page while something is blocked). The play() calls must be its first, synchronous work: a
+  // browser only honours them while it still counts as the user's gesture. room.startVideo()
+  // only covers remote videos, so our own tile and the preview are played here too.
+  function unlockPlayback() {
+    if (room) {
+      try { var sv = room.startVideo(); if (sv && sv.catch) sv.catch(function () {}); } catch (e) {}
+      try { var sa = room.startAudio(); if (sa && sa.catch) sa.catch(function () {}); } catch (e) {}
+    }
+    allVideos().forEach(function (v) {
+      if (!v || !v.srcObject || !v.paused || typeof v.play !== 'function') return;
+      try { var p = v.play(); if (p && p.then) p.then(function () { onPlayed(v); }, function () {}); } catch (e) {}
+    });
+  }
+  function onAnyTap() { if (needsUnlock()) unlockPlayback(); }
+  // paintPlayGate — the big in-room "Toca aquí para ver y escuchar a los demás" button.
+  function paintPlayGate() {
+    blockedVideos = blockedVideos.filter(function (v) { return v.srcObject && v.paused && v.isConnected !== false; });
+    var show = !!room && RoomLogic.playGate({
+      canVideo: room ? room.canPlaybackVideo : true,
+      canAudio: room ? room.canPlaybackAudio : true,
+      localBlocked: blockedVideos.length > 0
+    });
+    $('lk-play-gate').classList.toggle('hidden', !show);
   }
   // Two whole-sentence keys, not label + ' on'/' off': word order and gender differ by language
   // ("Cámara activada", "Micrófono desactivado").
@@ -114,10 +289,18 @@
     syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off');
     syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off');
     $('lk-pre-cam').onclick = function () { camOn = !camOn; syncToggle($('lk-pre-cam'), camOn, 'room_toggle_camera_on', 'room_toggle_camera_off'); startPreview(); };
-    $('lk-pre-mic').onclick = function () { micOn = !micOn; syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off'); };
-    $('lk-cam').onchange = startPreview;
+    $('lk-pre-mic').onclick = function () { micOn = !micOn; syncToggle($('lk-pre-mic'), micOn, 'room_toggle_mic_on', 'room_toggle_mic_off'); startPreview(); };
+    $('lk-cam').onchange = function () { camPicked = true; stopVideoPreview(); startPreview(); };
+    $('lk-mic').onchange = function () { micPicked = true; stopAudioPreview(); startPreview(); };
     $('lk-join').onclick = join;
+    $('lk-copy-link').onclick = function () { copyLink($('lk-copy-link')); };
     try { $('lk-name').value = localStorage.getItem('calnode_name') || ''; } catch (e) {}
+    // Any tap while a video is blocked starts it: older guests tap the black square anyway.
+    // click/touchend (capture) are the events iOS counts as a user gesture for play().
+    document.addEventListener('click', onAnyTap, true);
+    document.addEventListener('touchend', onAnyTap, { capture: true, passive: true });
+    // Back from another app or the lock screen: iOS pauses our videos meanwhile.
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) kickVideos(); });
     startPreview();
   }
 
@@ -134,6 +317,10 @@
   var recordingAvailable = false, recording = false; // instance can record / is recording now
   var consentDecided = false, consentAnnounced = false; // recording-consent (notice + consent-or-leave)
   var canScreenShare = false, allowShare = false; // me / attendees-in-general (host opts in)
+  var paintControls = null; // setupControls' repaint of the mic/cam/screen buttons (null until in the room)
+  var publishing = null; // the running publishLocal() right after joining; null once it settled
+  // Every iPhone browser lacks getDisplayMedia: the screen-share button is not offered there.
+  var SCREEN_SUPPORTED = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
 
   // applyRoomMeta reflects shared room state (recording + screen-share permission) to everyone:
   // the recording banner + button, and whether non-hosts may see the screen-share button.
@@ -244,12 +431,13 @@
     if (layoutMode === 'grid' || !ids.length) {
       grid.classList.remove('hidden'); stage.classList.add('hidden'); strip.classList.add('hidden');
       ids.forEach(function (id) { grid.appendChild(tiles[id].el); });
-      return;
+    } else {
+      grid.classList.add('hidden'); stage.classList.remove('hidden'); strip.classList.remove('hidden');
+      var focus = (pinnedId && tiles[pinnedId]) ? pinnedId
+        : (activeSpeakerId && tiles[activeSpeakerId]) ? activeSpeakerId : ids[0];
+      ids.forEach(function (id) { (id === focus ? stage : strip).appendChild(tiles[id].el); });
     }
-    grid.classList.add('hidden'); stage.classList.remove('hidden'); strip.classList.remove('hidden');
-    var focus = (pinnedId && tiles[pinnedId]) ? pinnedId
-      : (activeSpeakerId && tiles[activeSpeakerId]) ? activeSpeakerId : ids[0];
-    ids.forEach(function (id) { (id === focus ? stage : strip).appendChild(tiles[id].el); });
+    kickVideos(); // WebKit may pause a video whose container was hidden or moved: start it again
   }
 
   // togglePin: click a tile → spotlight it; click the spotlighted tile again → back to grid.
@@ -316,7 +504,7 @@
     return {
       isHost: isHost, hostMeta: meta === 'host', hostCapable: hostCapable,
       recordingAvailable: recordingAvailable, recording: recording,
-      consentDecided: consentDecided, allowShare: allowShare
+      consentDecided: consentDecided, allowShare: allowShare, screenSupported: SCREEN_SUPPORTED
     };
   }
   function amHost() { return RoomLogic.amHost(snapshot()); }
@@ -361,7 +549,7 @@
     var el = document.createElement('div');
     el.className = 'tile' + (isLocal ? ' local' : '');
     var video = document.createElement('video');
-    video.autoplay = true; video.playsInline = true; if (isLocal) video.muted = true;
+    prepVideo(video); // muted + playsinline attributes; no autoplay attribute (see noAutoplayOnIOS)
     var camoff = document.createElement('div');
     camoff.className = 'camoff';
     camoff.innerHTML = '<div class="avatar">' + initial(name) + '</div>';
@@ -383,11 +571,25 @@
     if (t) { t.el.remove(); delete tiles[identity]; }
     if (pinnedId === identity) { pinnedId = null; }
     relayout();
+    paintPlayGate(); // a blocked video that just left must not keep the gate up
   }
+  // setCamOff lays the avatar overlay over the video, or lifts it. The <video> itself is never
+  // hidden: WebKit pauses a display:none MediaStream video and can keep it black when it is
+  // shown again (the "audio but no video on iPhone" symptom). Shown again = played again.
   function setCamOff(identity, off) {
     var t = tiles[identity]; if (!t) return;
     t.camoff.classList.toggle('hidden', !off);
-    t.video.classList.toggle('hidden', off);
+    if (!off) playVideo(t.video);
+  }
+  // setTileNote — a short line over the tile (today: "video paused, weak connection").
+  function setTileNote(identity, text) {
+    var tile = tiles[identity]; if (!tile) return;
+    if (!tile.note) {
+      tile.note = document.createElement('div'); tile.note.className = 'note hidden';
+      tile.el.appendChild(tile.note);
+    }
+    tile.note.textContent = text;
+    tile.note.classList.toggle('hidden', !text);
   }
   function setMicOff(identity, off) {
     var t = tiles[identity]; if (!t) return;
@@ -400,9 +602,13 @@
 
   function attachVideo(identity, track) {
     var t = tiles[identity]; if (!t) return;
-    track.attach(t.video); t.hasVideo = true; setCamOff(identity, false);
+    track.attach(t.video); t.hasVideo = true;
+    noAutoplayOnIOS(t.video);
     // A screen share must not be mirrored (the .local tile mirrors the selfie camera).
     t.el.classList.toggle('screen', track.source === LK.Track.Source.ScreenShare);
+    // A camera that is already off when we arrive shows the avatar, not a frozen frame.
+    setCamOff(identity, !!track.isMuted);
+    playVideo(t.video);
   }
   function detachVideo(identity, track) {
     var t = tiles[identity]; if (!t) return;
@@ -424,10 +630,25 @@
 
   function handleTrack(track, pub, participant) {
     if (track.kind === 'video') {
+      // Never drop a video because its tile is not there yet: make the tile now.
+      if (!tiles[participant.identity]) {
+        tileFor(participant.identity, participant.name || participant.identity, !!participant.isLocal);
+        relayout();
+      }
       attachVideo(participant.identity, track);
     } else if (track.kind === 'audio' && !participant.isLocal) {
+      // One <audio> per voice: wireParticipant re-handles tracks already subscribed, and a
+      // second element would play the same voice twice (an echo).
+      if (track.attachedElements && track.attachedElements.length) return;
       var a = document.createElement('audio');
-      a.autoplay = true; track.attach(a); document.body.appendChild(a);
+      a.autoplay = true; a.setAttribute('playsinline', '');
+      track.attach(a); document.body.appendChild(a);
+    }
+  }
+  function dropTrack(track, pub, participant) {
+    if (track.kind === 'video') { detachVideo(participant.identity, track); paintPlayGate(); }
+    else if (track.kind === 'audio') {
+      try { track.detach().forEach(function (el) { el.remove(); }); } catch (e) {}
     }
   }
 
@@ -453,7 +674,7 @@
     } catch (e) {
       stopPreview(); fail(t(RoomLogic.tokenErrorKey(status))); return;
     }
-    stopPreview();
+    // The preview tracks are NOT stopped here: publishLocal() publishes them as they are.
     accessToken = (data && data.token) || '';
     isHost = !!(data && data.role === 'host');
     hostCapable = isHost; // sticky: the owner can reclaim host even after stepping down
@@ -461,13 +682,33 @@
     canScreenShare = !!(data && data.can_screenshare); // default off
     allowShare = !!(data && data.allow_share);
 
+    // Codec: the SDK default (VP8 + simulcast) is what iPhones decode and encode reliably; it
+    // is left alone on purpose (AV1 renders black on iOS Safari, VP9 needs Safari 16+).
+    // No room-wide videoCaptureDefaults: the SDK merges them into EVERY camera request, so a
+    // facingMode 'user' there would sit next to the deviceId of a camera the person picked and
+    // WebKit could open the front camera instead. captureOptions() already asks for the front
+    // camera whenever nothing was picked.
     room = new LK.Room({ adaptiveStream: true, dynacast: true });
     var RE = LK.RoomEvent;
     room
       .on(RE.TrackSubscribed, handleTrack)
-      .on(RE.TrackUnsubscribed, function (track, pub, p) { if (track.kind === 'video') detachVideo(p.identity, track); })
+      .on(RE.TrackUnsubscribed, dropTrack)
       .on(RE.TrackMuted, function (pub, p) { if (pub.kind === 'video') setCamOff(p.identity, true); if (pub.kind === 'audio') setMicOff(p.identity, true); })
-      .on(RE.TrackUnmuted, function (pub, p) { if (pub.kind === 'video') setCamOff(p.identity, false); if (pub.kind === 'audio') setMicOff(p.identity, false); })
+      .on(RE.TrackUnmuted, function (pub, p) {
+        // Lift the avatar only over a video that is really attached, never over an empty box.
+        if (pub.kind === 'video' && tiles[p.identity] && tiles[p.identity].hasVideo) setCamOff(p.identity, false);
+        if (pub.kind === 'audio') setMicOff(p.identity, false);
+      })
+      // The browser blocked remote video (iPhone Low Power Mode) or sound until a tap.
+      .on(RE.VideoPlaybackStatusChanged, paintPlayGate)
+      .on(RE.AudioPlaybackStatusChanged, paintPlayGate)
+      // The server paused someone's video for a weak connection (sound keeps going): say so,
+      // instead of a frozen picture that looks like a broken camera.
+      .on(RE.TrackStreamStateChanged, function (pub, state, p) {
+        if (!p || pub.kind !== 'video') return;
+        setTileNote(p.identity, state === 'paused' ? t('room_video_paused') : '');
+        if (state === 'active' && tiles[p.identity]) playVideo(tiles[p.identity].video);
+      })
       .on(RE.LocalTrackPublished, function (pub) { if (pub.track && pub.track.kind === 'video') attachVideo(room.localParticipant.identity, pub.track); })
       .on(RE.LocalTrackUnpublished, function (pub) { if (pub.source === LK.Track.Source.ScreenShare) reattachLocalCamera(); })
       .on(RE.ParticipantConnected, wireParticipant)
@@ -496,22 +737,76 @@
     try {
       await room.connect(data.url, data.token);
     } catch (e) {
-      fail(t('room_error_connect')); return;
+      stopPreview(); fail(t('room_error_connect')); return;
     }
     showOnly('lk-room');
     tileFor(room.localParticipant.identity, name, true);
     setMicOff(room.localParticipant.identity, !micOn);
     setHostBadge(room.localParticipant.identity, amHost());
 
-    var camOpts = $('lk-cam').value ? { deviceId: $('lk-cam').value } : undefined;
-    var micOpts = $('lk-mic').value ? { deviceId: $('lk-mic').value } : undefined;
-    try { await room.localParticipant.setMicrophoneEnabled(micOn, micOpts); } catch (e) {}
-    try { await room.localParticipant.setCameraEnabled(camOn, camOpts); } catch (e) {}
-
-    // Existing participants already in the room.
+    // The people already here get their tiles and the buttons work BEFORE we publish our own
+    // camera and mic. It used to be the other way round: a slow or stuck publish (an iPhone
+    // permission question, a camera that would not start) left the person hearing everyone -
+    // audio needs no tile - but seeing no one, with dead buttons.
+    // While the publish runs, the mic/cam buttons show the prejoin choice and a tap waits for
+    // the publish to settle (see `publishing`), so it can never open a second camera or mic.
     room.remoteParticipants.forEach(wireParticipant);
     relayout();
+    publishing = publishLocal();
     setupControls();
+    paintPlayGate();
+    try { await publishing; } finally {
+      publishing = null;
+      if (paintControls) paintControls();
+    }
+  }
+
+  // publishLocal publishes the prejoin camera and mic tracks as they are (no second
+  // getUserMedia), or asks for a device afresh when there is no preview track for it. A
+  // failure shows what happened and how to fix it, never an empty catch.
+  async function publishLocal() {
+    if (previewBusy) { try { await previewBusy; } catch (e) {} }
+    var v = previewVideo, a = previewAudio;
+    previewVideo = null; previewAudio = null; // the room owns them now
+    if (v) { try { v.detach(); } catch (e) {} }
+    var jobs = [];
+    if (camOn) jobs.push(publishOne('video', v)); else if (v) v.stop();
+    if (micOn) jobs.push(publishOne('audio', a)); else if (a) a.stop();
+    await Promise.all(jobs); // publishOne never rejects: a failure becomes the in-room notice
+  }
+  async function publishOne(kind, track) {
+    if (!room) return;
+    var lp = room.localParticipant;
+    // iOS can end a capture while the page is in the background: an ended track would publish
+    // a black picture, so it is replaced by a fresh one.
+    if (track && track.mediaStreamTrack && track.mediaStreamTrack.readyState === 'ended') { try { track.stop(); } catch (e) {} track = null; }
+    if (track) {
+      try { await lp.publishTrack(track); return; } catch (e) { try { track.stop(); } catch (x) {} }
+    }
+    try {
+      if (kind === 'video') await lp.setCameraEnabled(true, camOptions());
+      else await lp.setMicrophoneEnabled(true, micOptions());
+    } catch (e) {
+      showNotice(e, kind);
+    }
+  }
+
+  // ----- In-room camera / mic notice -----
+  var noticeKind = 'video';
+  function showNotice(err, kind) {
+    noticeKind = kind || 'video';
+    paintHelp($('lk-notice'), $('lk-notice-msg'), $('lk-notice-retry'), $('lk-notice-copy'), problemFor(err), retryDevice);
+  }
+  function hideNotice() { $('lk-notice').classList.add('hidden'); }
+  // retryDevice — "Try again" in the room: asks for the device inside the tap.
+  async function retryDevice() {
+    hideNotice();
+    var lp = room && room.localParticipant; if (!lp) return;
+    try {
+      if (noticeKind === 'audio') await lp.setMicrophoneEnabled(true, micOptions());
+      else await lp.setCameraEnabled(true, camOptions());
+    } catch (e) { showNotice(e, noticeKind); }
+    if (paintControls) paintControls();
   }
 
   function reattachLocalCamera() {
@@ -524,20 +819,61 @@
   function setupControls() {
     var lp = room.localParticipant;
     var micBtn = $('lk-mic-btn'), camBtn = $('lk-cam-btn'), screenBtn = $('lk-screen');
+    // What each button shows: the prejoin choice while our tracks are still being published,
+    // then what the SDK really has (RoomLogic.controlOn, tested).
+    var micShown = function () { return RoomLogic.controlOn(!!publishing, micOn, lp.isMicrophoneEnabled); };
+    var camShown = function () { return RoomLogic.controlOn(!!publishing, camOn, lp.isCameraEnabled); };
     var paint = function () {
-      micBtn.innerHTML = lp.isMicrophoneEnabled ? ICON.mic : ICON.micOff;
-      micBtn.classList.toggle('off', !lp.isMicrophoneEnabled);
-      camBtn.innerHTML = lp.isCameraEnabled ? ICON.cam : ICON.camOff;
-      camBtn.classList.toggle('off', !lp.isCameraEnabled);
+      var mic = micShown(), cam = camShown();
+      micBtn.innerHTML = mic ? ICON.mic : ICON.micOff;
+      micBtn.classList.toggle('off', !mic);
+      camBtn.innerHTML = cam ? ICON.cam : ICON.camOff;
+      camBtn.classList.toggle('off', !cam);
       screenBtn.innerHTML = ICON.screen;
       screenBtn.classList.toggle('active', lp.isScreenShareEnabled);
-      setCamOff(lp.identity, !lp.isCameraEnabled);
-      setMicOff(lp.identity, !lp.isMicrophoneEnabled);
+      setCamOff(lp.identity, !lp.isCameraEnabled); // the avatar lifts only over a real picture
+      setMicOff(lp.identity, !mic);
     };
-    micBtn.onclick = async function () { await lp.setMicrophoneEnabled(!lp.isMicrophoneEnabled); paint(); };
-    camBtn.onclick = async function () { await lp.setCameraEnabled(!lp.isCameraEnabled); paint(); };
+    paintControls = paint;
+    // toggler — one mic/cam button. The target is the OPPOSITE of what the button showed when
+    // tapped. A tap while the join publish is still running waits for it, then only changes
+    // the device if it is not already where the person wanted it: switching on during the
+    // publish would open a SECOND camera/mic (the SDK guards duplicates only on its own
+    // setCameraEnabled path, not on publishTrack). A second tap while one is in flight is
+    // ignored for the same reason. A failed switch-on says why (no silent catch).
+    function toggler(kind) {
+      var busy = false;
+      return async function () {
+        if (busy) return;
+        busy = true;
+        var audio = kind === 'audio';
+        var target = !(audio ? micShown() : camShown());
+        try {
+          if (publishing) { try { await publishing; } catch (e) {} }
+          var now = audio ? lp.isMicrophoneEnabled : lp.isCameraEnabled;
+          if (now !== target) {
+            if (audio) await lp.setMicrophoneEnabled(target, target ? micOptions() : undefined);
+            else await lp.setCameraEnabled(target, target ? camOptions() : undefined);
+          }
+          if (target) hideNotice();
+        } catch (e) {
+          showNotice(e, kind);
+        } finally {
+          busy = false;
+          paint();
+        }
+      };
+    }
+    micBtn.onclick = toggler('audio');
+    camBtn.onclick = toggler('video');
+    $('lk-play-gate').onclick = unlockPlayback;
+    $('lk-notice-close').onclick = hideNotice;
+    $('lk-notice-copy').onclick = function () { copyLink($('lk-notice-copy')); };
+    // Hidden where the browser cannot share a screen (applyHostUi / SCREEN_SUPPORTED: every
+    // iPhone browser). What is left to catch here is the person closing the browser's own
+    // screen picker (NotAllowedError), which is a choice, not a failure to explain.
     screenBtn.onclick = async function () {
-      try { await lp.setScreenShareEnabled(!lp.isScreenShareEnabled); } catch (e) {}
+      try { await lp.setScreenShareEnabled(!lp.isScreenShareEnabled); } catch (e) { /* picker closed */ }
       paint();
     };
     $('lk-layout-btn').onclick = toggleLayout;

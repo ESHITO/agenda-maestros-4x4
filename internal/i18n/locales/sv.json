@@ -238,5 +238,20 @@
   "room_error_token": "Det gick inte att få åtkomst till mötet.",
   "room_error_connect": "Det gick inte att ansluta till mötesservern.",
   "room_error_library": "Det gick inte att läsa in videomodulen.",
-  "room_error_not_configured": "Videomöten är inte tillgängliga på den här webbplatsen."
+  "room_error_not_configured": "Videomöten är inte tillgängliga på den här webbplatsen.",
+  "room_preview_tap_to_play": "Tryck här för att se din kamera",
+  "room_media_denied_ios": "Din iPhone tillät inte kameran eller mikrofonen. Tryck på symbolen ”aA” (eller menyn) bredvid webbadressen, välj ”Webbplatsinställningar”, ställ in Kamera och Mikrofon på ”Tillåt” och tryck sedan på ”Ladda om sidan”.",
+  "room_media_denied": "Webbläsaren tillät inte kameran eller mikrofonen. Tryck på hänglåset bredvid webbadressen, tillåt Kamera och Mikrofon och tryck sedan på ”Ladda om sidan”.",
+  "room_media_busy": "En annan app använder kameran eller mikrofonen (till exempel WhatsApp eller FaceTime). Stäng den och tryck på ”Försök igen”.",
+  "room_media_not_found": "Ingen kamera eller mikrofon hittades på den här enheten. Kontrollera dem och tryck på ”Försök igen”.",
+  "room_media_unsupported": "Den här webbläsaren kan inte använda kameran. Öppna länken i Safari (iPhone) eller Chrome (Android).",
+  "room_media_inapp": "Du öppnade mötet i en annan app, som inte låter oss använda kameran. Öppna länken i Safari (iPhone) eller Chrome (Android): tryck på menyn ··· och välj ”Öppna i webbläsare”, eller kopiera länken och klistra in den där.",
+  "room_media_failed": "Det gick inte att starta kameran eller mikrofonen. Tryck på ”Försök igen”.",
+  "room_media_retry": "Försök igen",
+  "room_media_reload": "Ladda om sidan",
+  "room_link_copied": "Länken har kopierats. Klistra in den i Safari eller Chrome.",
+  "room_video_paused": "Videon är pausad: svag anslutning",
+  "room_play_gate": "Tryck här för att se och höra de andra",
+  "room_copy_link": "Kopiera länken",
+  "room_notice_close": "Uppfattat"
 }

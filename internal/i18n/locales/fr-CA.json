@@ -238,5 +238,20 @@
   "room_error_token": "Impossible d'obtenir l'accès à la réunion.",
   "room_error_connect": "Impossible de se connecter au serveur de la réunion.",
   "room_error_library": "Le module vidéo n'a pas pu être chargé.",
-  "room_error_not_configured": "Les visioconférences ne sont pas disponibles sur ce site."
+  "room_error_not_configured": "Les visioconférences ne sont pas disponibles sur ce site.",
+  "room_preview_tap_to_play": "Appuyez ici pour voir votre caméra",
+  "room_media_denied_ios": "Votre iPhone n'a pas autorisé la caméra ou le micro. Appuyez sur l'icône « aA » (ou le menu) à côté de l'adresse web, choisissez « Réglages du site web », mettez Caméra et Micro sur « Autoriser », puis appuyez sur « Recharger la page ».",
+  "room_media_denied": "Le navigateur n'a pas autorisé la caméra ou le micro. Appuyez sur le cadenas à côté de l'adresse web, autorisez Caméra et Micro, puis appuyez sur « Recharger la page ».",
+  "room_media_busy": "Une autre application utilise la caméra ou le micro (par exemple WhatsApp ou FaceTime). Fermez-la et appuyez sur « Réessayer ».",
+  "room_media_not_found": "Aucune caméra ni aucun micro n'a été trouvé sur cet appareil. Vérifiez-les et appuyez sur « Réessayer ».",
+  "room_media_unsupported": "Ce navigateur ne peut pas utiliser la caméra. Ouvrez le lien dans Safari (iPhone) ou Chrome (Android).",
+  "room_media_inapp": "Vous avez ouvert la réunion dans une autre application, qui ne nous laisse pas utiliser la caméra. Ouvrez le lien dans Safari (iPhone) ou Chrome (Android) : appuyez sur le menu ··· et choisissez « Ouvrir dans le navigateur », ou copiez le lien et collez-le là.",
+  "room_media_failed": "Impossible d'allumer la caméra ou le micro. Appuyez sur « Réessayer ».",
+  "room_media_retry": "Réessayer",
+  "room_media_reload": "Recharger la page",
+  "room_link_copied": "Lien copié. Collez-le dans Safari ou Chrome.",
+  "room_video_paused": "Vidéo en pause : connexion faible",
+  "room_play_gate": "Appuyez ici pour voir et entendre les autres",
+  "room_copy_link": "Copier le lien",
+  "room_notice_close": "Compris"
 }

@@ -246,5 +246,20 @@
   "room_error_token": "Could not get a meeting token.",
   "room_error_connect": "Could not connect to the meeting server.",
   "room_error_library": "Video library failed to load.",
-  "room_error_not_configured": "Video meetings aren't available on this site."
+  "room_error_not_configured": "Video meetings aren't available on this site.",
+  "room_preview_tap_to_play": "Tap here to see your camera",
+  "room_media_denied_ios": "Your iPhone did not allow the camera or microphone. Tap the \"aA\" (or menu) icon next to the web address, choose \"Website Settings\", set Camera and Microphone to \"Allow\", then tap \"Reload page\".",
+  "room_media_denied": "The browser did not allow the camera or microphone. Tap the lock icon next to the web address, allow Camera and Microphone, then tap \"Reload page\".",
+  "room_media_busy": "Another app is using the camera or microphone (for example WhatsApp or FaceTime). Close it and tap \"Try again\".",
+  "room_media_not_found": "No camera or microphone was found on this device. Check it and tap \"Try again\".",
+  "room_media_unsupported": "This browser cannot use the camera. Open the link in Safari (iPhone) or Chrome (Android).",
+  "room_media_inapp": "You opened the meeting inside another app, and it does not let us use the camera. Open the link in Safari (iPhone) or Chrome (Android): tap the ··· menu and choose \"Open in browser\", or copy the link and paste it there.",
+  "room_media_failed": "The camera or microphone could not be turned on. Tap \"Try again\".",
+  "room_media_retry": "Try again",
+  "room_media_reload": "Reload page",
+  "room_link_copied": "Link copied. Paste it in Safari or Chrome.",
+  "room_video_paused": "Video paused: weak connection",
+  "room_play_gate": "Tap here to see and hear the others",
+  "room_copy_link": "Copy link",
+  "room_notice_close": "Got it"
 }

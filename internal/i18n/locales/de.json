@@ -238,5 +238,20 @@
   "room_error_token": "Die Zugangsdaten für das Meeting konnten nicht abgerufen werden.",
   "room_error_connect": "Es konnte keine Verbindung zum Meeting-Server hergestellt werden.",
   "room_error_library": "Das Videomodul konnte nicht geladen werden.",
-  "room_error_not_configured": "Videokonferenzen sind auf dieser Website nicht verfügbar."
+  "room_error_not_configured": "Videokonferenzen sind auf dieser Website nicht verfügbar.",
+  "room_preview_tap_to_play": "Tippen Sie hier, um Ihre Kamera zu sehen",
+  "room_media_denied_ios": "Ihr iPhone hat Kamera oder Mikrofon nicht erlaubt. Tippen Sie auf das Symbol „aA“ (oder das Menü) neben der Webadresse, wählen Sie „Website-Einstellungen“, stellen Sie Kamera und Mikrofon auf „Erlauben“ und tippen Sie dann auf „Seite neu laden“.",
+  "room_media_denied": "Der Browser hat Kamera oder Mikrofon nicht erlaubt. Tippen Sie auf das Schloss neben der Webadresse, erlauben Sie Kamera und Mikrofon und tippen Sie dann auf „Seite neu laden“.",
+  "room_media_busy": "Eine andere App verwendet die Kamera oder das Mikrofon (zum Beispiel WhatsApp oder FaceTime). Schließen Sie sie und tippen Sie auf „Erneut versuchen“.",
+  "room_media_not_found": "Auf diesem Gerät wurde keine Kamera und kein Mikrofon gefunden. Prüfen Sie sie und tippen Sie auf „Erneut versuchen“.",
+  "room_media_unsupported": "Dieser Browser kann die Kamera nicht verwenden. Öffnen Sie den Link in Safari (iPhone) oder Chrome (Android).",
+  "room_media_inapp": "Sie haben das Meeting in einer anderen App geöffnet, die uns die Kamera nicht nutzen lässt. Öffnen Sie den Link in Safari (iPhone) oder Chrome (Android): Tippen Sie auf das Menü ··· und wählen Sie „Im Browser öffnen“, oder kopieren Sie den Link und fügen Sie ihn dort ein.",
+  "room_media_failed": "Kamera oder Mikrofon konnten nicht eingeschaltet werden. Tippen Sie auf „Erneut versuchen“.",
+  "room_media_retry": "Erneut versuchen",
+  "room_media_reload": "Seite neu laden",
+  "room_link_copied": "Link kopiert. Fügen Sie ihn in Safari oder Chrome ein.",
+  "room_video_paused": "Video pausiert: schwache Verbindung",
+  "room_play_gate": "Hier tippen, um die anderen zu sehen und zu hören",
+  "room_copy_link": "Link kopieren",
+  "room_notice_close": "Verstanden"
 }

@@ -246,5 +246,20 @@
   "room_error_token": "No se pudo obtener el acceso a la reunión.",
   "room_error_connect": "No se pudo conectar con el servidor de la reunión.",
   "room_error_library": "No se pudo cargar el módulo de video.",
-  "room_error_not_configured": "Las videollamadas no están disponibles en este sitio."
+  "room_error_not_configured": "Las videollamadas no están disponibles en este sitio.",
+  "room_preview_tap_to_play": "Toca aquí para ver tu cámara",
+  "room_media_denied_ios": "Tu iPhone no dio permiso para usar la cámara o el micrófono. Toca el ícono «aA» (o el de menú) junto a la dirección de la página, elige «Configuración del sitio web» y pon Cámara y Micrófono en «Permitir». Después toca «Recargar la página».",
+  "room_media_denied": "El navegador no dio permiso para usar la cámara o el micrófono. Toca el candado junto a la dirección de la página, permite Cámara y Micrófono y después toca «Recargar la página».",
+  "room_media_busy": "Otra aplicación está usando la cámara o el micrófono (por ejemplo WhatsApp o FaceTime). Ciérrala y toca «Reintentar».",
+  "room_media_not_found": "No encontramos la cámara o el micrófono de este equipo. Revísalos y toca «Reintentar».",
+  "room_media_unsupported": "Este navegador no puede usar la cámara. Abre el enlace en Safari (iPhone) o en Chrome (Android).",
+  "room_media_inapp": "Abriste la reunión dentro de otra aplicación y no nos deja usar la cámara. Abre el enlace en Safari (iPhone) o en Chrome (Android): toca el menú ··· y elige «Abrir en el navegador», o copia el enlace y pégalo allí.",
+  "room_media_failed": "No se pudo encender la cámara o el micrófono. Toca «Reintentar».",
+  "room_media_retry": "Reintentar",
+  "room_media_reload": "Recargar la página",
+  "room_link_copied": "Enlace copiado. Pégalo en Safari o en Chrome.",
+  "room_video_paused": "Video en pausa: la conexión está débil",
+  "room_play_gate": "Toca aquí para ver y escuchar a los demás",
+  "room_copy_link": "Copiar el enlace",
+  "room_notice_close": "Entendido"
 }

@@ -238,5 +238,20 @@
   "room_error_token": "Impossibile ottenere l'accesso alla riunione.",
   "room_error_connect": "Impossibile connettersi al server della riunione.",
   "room_error_library": "Impossibile caricare il modulo video.",
-  "room_error_not_configured": "Le videoconferenze non sono disponibili su questo sito."
+  "room_error_not_configured": "Le videoconferenze non sono disponibili su questo sito.",
+  "room_preview_tap_to_play": "Tocchi qui per vedere la sua videocamera",
+  "room_media_denied_ios": "Il suo iPhone non ha consentito la videocamera o il microfono. Tocchi l'icona «aA» (o il menu) accanto all'indirizzo web, scelga «Impostazioni sito web», imposti Videocamera e Microfono su «Consenti», poi tocchi «Ricarica la pagina».",
+  "room_media_denied": "Il browser non ha consentito la videocamera o il microfono. Tocchi il lucchetto accanto all'indirizzo web, consenta Videocamera e Microfono, poi tocchi «Ricarica la pagina».",
+  "room_media_busy": "Un'altra app sta usando la videocamera o il microfono (ad esempio WhatsApp o FaceTime). La chiuda e tocchi «Riprova».",
+  "room_media_not_found": "Su questo dispositivo non è stata trovata nessuna videocamera né microfono. Li controlli e tocchi «Riprova».",
+  "room_media_unsupported": "Questo browser non può usare la videocamera. Apra il link in Safari (iPhone) o Chrome (Android).",
+  "room_media_inapp": "Ha aperto la riunione dentro un'altra app, che non ci permette di usare la videocamera. Apra il link in Safari (iPhone) o Chrome (Android): tocchi il menu ··· e scelga «Apri nel browser», oppure copi il link e lo incolli lì.",
+  "room_media_failed": "Non è stato possibile accendere la videocamera o il microfono. Tocchi «Riprova».",
+  "room_media_retry": "Riprova",
+  "room_media_reload": "Ricarica la pagina",
+  "room_link_copied": "Link copiato. Lo incolli in Safari o Chrome.",
+  "room_video_paused": "Video in pausa: connessione debole",
+  "room_play_gate": "Tocchi qui per vedere e sentire gli altri",
+  "room_copy_link": "Copia il link",
+  "room_notice_close": "Ho capito"
 }

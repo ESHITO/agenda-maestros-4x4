@@ -238,5 +238,20 @@
   "room_error_token": "Não foi possível obter acesso à reunião.",
   "room_error_connect": "Não foi possível ligar ao servidor da reunião.",
   "room_error_library": "Não foi possível carregar o módulo de vídeo.",
-  "room_error_not_configured": "As videoconferências não estão disponíveis neste site."
+  "room_error_not_configured": "As videoconferências não estão disponíveis neste site.",
+  "room_preview_tap_to_play": "Toque aqui para ver a sua câmara",
+  "room_media_denied_ios": "O seu iPhone não permitiu a câmara ou o microfone. Toque no ícone «aA» (ou no menu) ao lado do endereço da página, escolha «Definições do site», coloque Câmara e Microfone em «Permitir» e, depois, toque em «Recarregar a página».",
+  "room_media_denied": "O navegador não permitiu a câmara ou o microfone. Toque no cadeado ao lado do endereço da página, permita Câmara e Microfone e, depois, toque em «Recarregar a página».",
+  "room_media_busy": "Outra aplicação está a usar a câmara ou o microfone (por exemplo, WhatsApp ou FaceTime). Feche-a e toque em «Tentar novamente».",
+  "room_media_not_found": "Não foi encontrada nenhuma câmara nem microfone neste dispositivo. Verifique-os e toque em «Tentar novamente».",
+  "room_media_unsupported": "Este navegador não consegue usar a câmara. Abra a ligação no Safari (iPhone) ou no Chrome (Android).",
+  "room_media_inapp": "Abriu a reunião dentro de outra aplicação, que não nos deixa usar a câmara. Abra a ligação no Safari (iPhone) ou no Chrome (Android): toque no menu ··· e escolha «Abrir no navegador», ou copie a ligação e cole-a lá.",
+  "room_media_failed": "Não foi possível ligar a câmara ou o microfone. Toque em «Tentar novamente».",
+  "room_media_retry": "Tentar novamente",
+  "room_media_reload": "Recarregar a página",
+  "room_link_copied": "Ligação copiada. Cole-a no Safari ou no Chrome.",
+  "room_video_paused": "Vídeo em pausa: ligação fraca",
+  "room_play_gate": "Toque aqui para ver e ouvir os outros",
+  "room_copy_link": "Copiar a ligação",
+  "room_notice_close": "Entendi"
 }

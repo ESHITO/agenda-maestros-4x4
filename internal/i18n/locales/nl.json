@@ -238,5 +238,20 @@
   "room_error_token": "Kan geen toegang tot de vergadering krijgen.",
   "room_error_connect": "Kan geen verbinding maken met de vergaderserver.",
   "room_error_library": "De videomodule kon niet worden geladen.",
-  "room_error_not_configured": "Videovergaderingen zijn niet beschikbaar op deze site."
+  "room_error_not_configured": "Videovergaderingen zijn niet beschikbaar op deze site.",
+  "room_preview_tap_to_play": "Tik hier om je camera te zien",
+  "room_media_denied_ios": "Je iPhone heeft de camera of microfoon niet toegestaan. Tik op het symbool 'aA' (of het menu) naast het webadres, kies 'Website-instellingen', zet Camera en Microfoon op 'Sta toe' en tik daarna op 'Pagina opnieuw laden'.",
+  "room_media_denied": "De browser heeft de camera of microfoon niet toegestaan. Tik op het slotje naast het webadres, sta Camera en Microfoon toe en tik daarna op 'Pagina opnieuw laden'.",
+  "room_media_busy": "Een andere app gebruikt de camera of microfoon (bijvoorbeeld WhatsApp of FaceTime). Sluit die app en tik op 'Opnieuw proberen'.",
+  "room_media_not_found": "Er is geen camera of microfoon gevonden op dit apparaat. Controleer ze en tik op 'Opnieuw proberen'.",
+  "room_media_unsupported": "Deze browser kan de camera niet gebruiken. Open de link in Safari (iPhone) of Chrome (Android).",
+  "room_media_inapp": "Je hebt de vergadering in een andere app geopend, en die laat ons de camera niet gebruiken. Open de link in Safari (iPhone) of Chrome (Android): tik op het menu ··· en kies 'Openen in browser', of kopieer de link en plak hem daar.",
+  "room_media_failed": "De camera of microfoon kon niet worden ingeschakeld. Tik op 'Opnieuw proberen'.",
+  "room_media_retry": "Opnieuw proberen",
+  "room_media_reload": "Pagina opnieuw laden",
+  "room_link_copied": "Link gekopieerd. Plak hem in Safari of Chrome.",
+  "room_video_paused": "Video gepauzeerd: zwakke verbinding",
+  "room_play_gate": "Tik hier om de anderen te zien en te horen",
+  "room_copy_link": "Link kopiëren",
+  "room_notice_close": "Begrepen"
 }

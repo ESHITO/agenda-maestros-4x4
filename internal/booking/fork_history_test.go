@@ -205,7 +205,7 @@ func TestReschedule_recordsHistoryRow(t *testing.T) {
 		t.Fatalf("Reschedule 2: %v", err)
 	}
 	rows, err := database.Query(`SELECT previous_start_at, new_start_at, COALESCE(actor, '') FROM fork_booking_reschedules
-		WHERE booking_id = ? ORDER BY rescheduled_at, id`, b.ID)
+		WHERE booking_id = ? ORDER BY julianday(rescheduled_at), rowid`, b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

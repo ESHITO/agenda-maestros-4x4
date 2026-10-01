@@ -74,7 +74,9 @@ type RescheduleSummary struct {
 }
 
 // RescheduleSummaries returns the history of the given bookings (absent = never moved).
-// One query, bounded by the page.
+// One query, bounded by the page. "Most recent" compares julianday(), not the text:
+// RFC3339Nano drops trailing zeros (".12Z" sorts after ".123Z"), and two moves in the same
+// millisecond fall back to insertion order (rowid), never to the random id.
 func RescheduleSummaries(ctx context.Context, db *sql.DB, bookingIDs []string) (map[string]RescheduleSummary, error) {
 	out := make(map[string]RescheduleSummary)
 	if len(bookingIDs) == 0 {
@@ -85,7 +87,7 @@ func RescheduleSummaries(ctx context.Context, db *sql.DB, bookingIDs []string) (
 		SELECT r.booking_id, COUNT(*),
 		       (SELECT r2.previous_start_at FROM fork_booking_reschedules r2
 		        WHERE r2.booking_id = r.booking_id
-		        ORDER BY r2.rescheduled_at DESC, r2.id DESC LIMIT 1)
+		        ORDER BY julianday(r2.rescheduled_at) DESC, r2.rowid DESC LIMIT 1)
 		FROM fork_booking_reschedules r
 		WHERE r.booking_id IN (SELECT value FROM json_each(?))
 		GROUP BY r.booking_id`, string(idsJSON))

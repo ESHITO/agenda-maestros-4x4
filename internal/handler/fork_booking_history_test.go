@@ -190,7 +190,7 @@ func TestListBookings_historyTab(t *testing.T) {
 // historyActors returns the actors of a booking's history rows, oldest first.
 func historyActors(t *testing.T, db *sql.DB, bookingID string) []string {
 	t.Helper()
-	rows, err := db.Query(`SELECT COALESCE(actor, '') FROM fork_booking_reschedules WHERE booking_id = ? ORDER BY rescheduled_at, id`, bookingID)
+	rows, err := db.Query(`SELECT COALESCE(actor, '') FROM fork_booking_reschedules WHERE booking_id = ? ORDER BY julianday(rescheduled_at), rowid`, bookingID)
 	if err != nil {
 		t.Fatal(err)
 	}

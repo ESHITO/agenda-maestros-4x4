@@ -28,7 +28,9 @@
     return {
       host: host,
       recordVisible: host && !!s.recordingAvailable, // host + instance can record
-      screenVisible: host || !!s.allowShare,         // host always; attendees only when allowed
+      // host always; attendees only when allowed. Never where the browser cannot share a screen
+      // at all (every iPhone browser has no getDisplayMedia): the button did nothing there.
+      screenVisible: (host || !!s.allowShare) && s.screenSupported !== false,
       gearVisible: !!s.hostCapable || host,          // host now, OR owner who can reclaim
       hostActions: host,                             // share toggle + make-host (active host only)
       reclaimVisible: !!s.hostCapable && !host,      // stepped-down owner
@@ -91,7 +93,19 @@
     room_error_token: 'Could not get a meeting token.',
     room_error_connect: 'Could not connect to the meeting server.',
     room_error_library: 'Video library failed to load.',
-    room_error_not_configured: 'Video meetings aren\'t available on this site.'
+    room_error_not_configured: 'Video meetings aren\'t available on this site.',
+    room_preview_tap_to_play: 'Tap here to see your camera',
+    room_media_denied_ios: 'Your iPhone did not allow the camera or microphone. Tap the "aA" (or menu) icon next to the web address, choose "Website Settings", set Camera and Microphone to "Allow", then tap "Reload page".',
+    room_media_denied: 'The browser did not allow the camera or microphone. Tap the lock icon next to the web address, allow Camera and Microphone, then tap "Reload page".',
+    room_media_busy: 'Another app is using the camera or microphone (for example WhatsApp or FaceTime). Close it and tap "Try again".',
+    room_media_not_found: 'No camera or microphone was found on this device. Check it and tap "Try again".',
+    room_media_unsupported: 'This browser cannot use the camera. Open the link in Safari (iPhone) or Chrome (Android).',
+    room_media_inapp: 'You opened the meeting inside another app, and it does not let us use the camera. Open the link in Safari (iPhone) or Chrome (Android): tap the ··· menu and choose "Open in browser", or copy the link and paste it there.',
+    room_media_failed: 'The camera or microphone could not be turned on. Tap "Try again".',
+    room_media_retry: 'Try again',
+    room_media_reload: 'Reload page',
+    room_link_copied: 'Link copied. Paste it in Safari or Chrome.',
+    room_video_paused: 'Video paused: weak connection'
   };
 
   // translate — the pure core of the room's t(): the page's table first, then EN, then (only
@@ -116,8 +130,127 @@
     return 'room_error_token';
   }
 
+  // ---- Camera / microphone / playback (iPhone fixes) -----------------------------------------
+  // Pure helpers for the media code in livekit-room.js. They take the user agent and the
+  // error as plain values, so the iPhone and in-app-browser branches are testable in node.
+
+  // isIOS — iPhone/iPad/iPod, including an iPad that reports itself as a Mac ("MacIntel" with
+  // a touch screen). Every browser on iOS is WebKit underneath (Chrome = CriOS, Firefox =
+  // FxiOS, the WhatsApp/Instagram/Facebook in-app views), and the LiveKit SDK 2.7.5 only
+  // applies its Safari video workarounds when the browser NAME is "Safari", so the room keys
+  // its own iOS handling on this instead.
+  function isIOS(ua, platform, maxTouchPoints) {
+    if (/iPhone|iPad|iPod/i.test(ua || '')) return true;
+    return platform === 'MacIntel' && Number(maxTouchPoints) > 1;
+  }
+
+  // inAppBrowser — non-empty when the page is open inside another app's built-in browser
+  // (Facebook, Instagram, Messenger, TikTok, LINE, WeChat, Snapchat, WhatsApp). Those views
+  // often cannot use the camera at all, or refuse the microphone; the room then tells the
+  // person to open the link in Safari / Chrome instead of failing silently.
+  function inAppBrowser(ua) {
+    var s = ua || '';
+    if (/FBAN|FBAV|FB_IAB|FBIOS|FB4A|MESSENGER/i.test(s)) return 'facebook';
+    if (/Instagram/i.test(s)) return 'instagram';
+    if (/musical_ly|BytedanceWebview|TikTok/i.test(s)) return 'tiktok';
+    if (/\bLine\//i.test(s)) return 'line';
+    if (/MicroMessenger/i.test(s)) return 'wechat';
+    if (/Snapchat/i.test(s)) return 'snapchat';
+    if (/WhatsApp/i.test(s)) return 'whatsapp';
+    return '';
+  }
+
+  // mediaProblem — what to tell the person when the camera or microphone could not start,
+  // from the error getUserMedia (through the SDK, which passes it on unchanged) rejected with.
+  // Returns null for no error, else { key, action }: key = the room_* message, action = what
+  // the button under it does — 'again' (ask for the device again, inside the tap), 'reload'
+  // (Safari does not ask twice on one page: after a "No permitir" only a reload shows the
+  // question again) or 'none' (nothing on this page can fix it: open the link elsewhere).
+  // env = { ios, inApp }.
+  function mediaProblem(err, env) {
+    if (!err) return null;
+    var e = env || {};
+    var name = String(err.name || '');
+    var msg = String(err.message || '');
+    var denied = /^(NotAllowedError|PermissionDeniedError|SecurityError)$/.test(name) ||
+      (!name || name === 'Error') && /permission|denied|not allowed/i.test(msg);
+    if (denied) {
+      if (e.inApp) return { key: 'room_media_inapp', action: 'none' };
+      return { key: e.ios ? 'room_media_denied_ios' : 'room_media_denied', action: 'reload' };
+    }
+    if (/^(NotReadableError|TrackStartError|AbortError)$/.test(name)) return { key: 'room_media_busy', action: 'again' };
+    if (/^(NotFoundError|DevicesNotFoundError|OverconstrainedError|ConstraintNotSatisfiedError)$/.test(name)) {
+      return { key: 'room_media_not_found', action: 'again' };
+    }
+    // No navigator.mediaDevices at all (an in-app view, an old browser, a non-HTTPS page):
+    // the SDK then throws a TypeError reading getUserMedia of undefined.
+    if (name === 'TypeError' || name === 'DeviceUnsupportedError' || /mediaDevices|getUserMedia/.test(msg)) {
+      return { key: e.inApp ? 'room_media_inapp' : 'room_media_unsupported', action: 'none' };
+    }
+    return { key: e.inApp ? 'room_media_inapp' : 'room_media_failed', action: e.inApp ? 'none' : 'again' };
+  }
+
+  // captureOptions — the constraints for a camera (or mic) request. A device the person
+  // picked in the list is used as given (a bare, "ideal" deviceId, never {exact}); otherwise
+  // the camera asks for the FRONT one (facingMode 'user'), so an iPhone never opens a back or
+  // virtual multi-lens camera ("Cámara triple posterior") just because it is listed first.
+  function captureOptions(kind, picked, deviceId) {
+    if (picked && deviceId) return { deviceId: deviceId };
+    return kind === 'video' ? { facingMode: 'user' } : {};
+  }
+
+  // playGate — whether the big "Toca aquí para ver y escuchar a los demás" button shows:
+  // the browser blocked remote video (iPhone Low Power Mode) or audio, or one of our own
+  // video elements refused to play. It goes away once a tap starts everything.
+  function playGate(s) {
+    return s.canVideo === false || s.canAudio === false || !!s.localBlocked;
+  }
+
+  // acquireTracks — the prejoin camera + mic. want = { video, audio }; make = { both, video,
+  // audio }, each a function returning a promise (the SDK's createLocalTracks /
+  // createLocalVideoTrack / createLocalAudioTrack, already bound to their options). Resolves to
+  // { video, audio, errs: { video, audio } } and never rejects.
+  // Both devices go in ONE request first, so an iPhone asks one question ("allow camera and
+  // microphone") instead of two. When that request fails - for ANY reason, a refusal included -
+  // each device is asked for on its own: browsers reject the combined request when either
+  // device is blocked, and a person who blocked only the camera must still join with the mic
+  // (and the other way round). A device whose permission is really denied fails again at once,
+  // with no second question, so the per-device retry costs nothing.
+  function acquireTracks(want, make) {
+    var out = { video: null, audio: null, errs: { video: null, audio: null } };
+    var w = want || {}, m = make || {};
+    var first = (w.video && w.audio && typeof m.both === 'function')
+      ? Promise.resolve().then(m.both).then(function (tracks) {
+        (tracks || []).forEach(function (tr) {
+          if (!tr) return;
+          if (tr.kind === 'video' && !out.video) out.video = tr;
+          else if (tr.kind === 'audio' && !out.audio) out.audio = tr;
+        });
+      }, function () { /* retried per device below */ })
+      : Promise.resolve();
+    function one(kind) {
+      if (!w[kind] || out[kind]) return Promise.resolve();
+      return Promise.resolve().then(m[kind]).then(function (tr) { out[kind] = tr || null; }, function (e) { out.errs[kind] = e; });
+    }
+    // In sequence, not in parallel: two getUserMedia calls at once race on iOS.
+    return first.then(function () { return one('video'); }).then(function () { return one('audio'); })
+      .then(function () { return out; });
+  }
+
+  // controlOn — what the in-room mic / camera button shows. While our prejoin tracks are still
+  // being published the SDK reports the device as off, and a button drawn "off" invites a tap
+  // that would open a SECOND camera or mic next to the one being published (on an iPhone that
+  // second capture ends or blacks out the first). So until the publish settles the button shows
+  // what the person chose in the prejoin; afterwards, what the SDK really has.
+  function controlOn(publishing, intended, actual) {
+    return publishing ? !!intended : !!actual;
+  }
+
   return {
     amHost: amHost, nextIsHost: nextIsHost, hostUi: hostUi,
-    fmt: fmt, EN: EN, translate: translate, tokenErrorKey: tokenErrorKey
+    fmt: fmt, EN: EN, translate: translate, tokenErrorKey: tokenErrorKey,
+    isIOS: isIOS, inAppBrowser: inAppBrowser, mediaProblem: mediaProblem,
+    captureOptions: captureOptions, playGate: playGate,
+    acquireTracks: acquireTracks, controlOn: controlOn
   };
 });
