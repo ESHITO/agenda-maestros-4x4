@@ -37,6 +37,8 @@ func TestMigrateWithForkSchema_freshAndRepeated(t *testing.T) {
 			{"table", "fork_livekit_mints"},
 			{"table", "fork_livekit_sessions"},
 			{"table", "fork_livekit_host_links"},
+			{"table", "fork_booking_reschedules"},
+			{"index", "idx_fork_booking_reschedules_booking"},
 		} {
 			var n int
 			if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, obj.typ, obj.name).Scan(&n); err != nil || n != 1 {

@@ -531,6 +531,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID string, newStart, ne
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("booking: reschedule commit: %w", err)
 	}
+	s.recordReschedule(ctx, bookingID, b.StartAt, newStart) // fork: history, best effort (fork_reschedules.go)
 
 	b.StartAt = newStart.UTC()
 	b.EndAt = newEnd.UTC()

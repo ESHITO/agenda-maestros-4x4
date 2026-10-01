@@ -463,7 +463,7 @@ func (h *Handler) mcpRescheduleBooking(ctx context.Context, _ *mcp.CallToolReque
 	}
 
 	previousStart, previousEnd := b.StartAt, b.EndAt
-	updated, err := h.bookingSvc.Reschedule(ctx, b.ID, newStart, newEnd)
+	updated, err := h.bookingSvc.Reschedule(booking.WithRescheduleActor(ctx, mcpRescheduleActor(ctx)), b.ID, newStart, newEnd) // fork: actor of the history row
 	if err != nil {
 		switch {
 		case errors.Is(err, booking.ErrDoubleBooked):

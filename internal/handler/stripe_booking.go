@@ -134,8 +134,9 @@ func (h *Handler) releaseUnpaidHold(ctx context.Context, bookingID string) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	res, err := h.db.ExecContext(ctx,
-		`UPDATE bookings SET status = 'cancelled', cancellation_reason = 'payment not completed'
-		 WHERE id = ? AND status = 'confirmed' AND payment_status = 'pending'`, bookingID)
+		`UPDATE bookings SET status = 'cancelled', cancellation_reason = 'payment not completed', updated_at = ?
+		 WHERE id = ? AND status = 'confirmed' AND payment_status = 'pending'`,
+		time.Now().UTC().Format(time.RFC3339Nano), bookingID) // fork: updated_at = when it was cancelled (Pasadas' order, booking/fork_list.go)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "stripe: release unpaid hold", "error", err, "booking_id", bookingID)
 		return

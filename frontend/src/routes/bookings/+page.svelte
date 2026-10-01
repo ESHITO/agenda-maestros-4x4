@@ -16,7 +16,18 @@
 	import { currentUser } from '$lib/stores';
 	import { prefs, fmtDateTime, fmtTime, fmtShortWhen, displayZone, dayKeyInZone } from '$lib/prefs';
 	import { countdown } from '$lib/countdown';
-	import { fmtCardWhen, noticeDots, NOTICE_KIND_LABELS, NOTICE_STATUS_LABELS, type DotTone } from '$lib/booking-card';
+	import {
+		fmtCardWhen,
+		noticeDots,
+		bookingChips,
+		historyFilterParams,
+		HISTORY_FILTER_LABELS,
+		NOTICE_KIND_LABELS,
+		NOTICE_STATUS_LABELS,
+		type ChipKind,
+		type DotTone,
+		type HistoryFilter
+	} from '$lib/booking-card';
 	import { initials } from '$lib/nav';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -24,6 +35,7 @@
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
+	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import * as Select from '$lib/components/ui/select';
 	import { DatePicker } from '$lib/components/ui/date-picker';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
@@ -68,14 +80,17 @@
 	let fEventType = $state('');
 	let fHost = $state('');
 	let fTeam = $state('');
-	let fStatus = $state('');
+	// Fork: the history's own filter (Pasadas only): Todas / Concluidas / Canceladas /
+	// Reprogramadas. Próximas holds confirmed sessions only, so it has none.
+	let fHistory = $state<HistoryFilter>('');
 	// Fork: 'mentoria' | 'soporte', derived server-side from the booking's type.
 	let fArea = $state('');
 
 	const PAGE_SIZE = 25;
 	let offset = $state(0);
-	let total = $state(0);
 	let counts = $state({ upcoming: 0, past: 0 });
+	// The tab in view pages by its own count (the server counts it with every filter).
+	const total = $derived(timeFilter === 'past' ? counts.past : counts.upcoming);
 
 	// Options for the filter selects, fetched once. label = what the option reads (each
 	// template says it covers everyone of its área: the server expands its slug to the
@@ -84,9 +99,10 @@
 	let members = $state<{ id: string; name: string }[]>([]);
 	let teams = $state<{ id: string; name: string }[]>([]);
 
-	const hasFilters = $derived(!!(fEventType || fHost || fTeam || fStatus || fArea));
+	const historyFilter = $derived(timeFilter === 'past' ? fHistory : '');
+	const hasFilters = $derived(!!(fEventType || fHost || fTeam || historyFilter || fArea));
 	// Fork: on a phone the selects fold behind "Filtros"; the badge says how many are set.
-	const activeFilterCount = $derived([fEventType, fHost, fTeam, fStatus, fArea].filter(Boolean).length);
+	const activeFilterCount = $derived([fEventType, fHost, fTeam, historyFilter, fArea].filter(Boolean).length);
 	let filtersOpen = $state(false);
 	const pageStart = $derived(total === 0 ? 0 : offset + 1);
 	const pageEnd = $derived(Math.min(offset + items.length, total));
@@ -137,15 +153,19 @@
 	function query(): string {
 		const p = new URLSearchParams();
 		if (scope === 'all' && canSeeAll) p.set('scope', 'all');
-		p.set('when', timeFilter);
-		// Past reads most-recent-first, upcoming soonest-first. Server-side now: sorting
-		// a page in the browser would only ever sort that page.
+		// Fork: Pasadas is the history (ended + cancelled at any date, when=history), most
+		// recent first by when each entered it; Próximas the live confirmed ones, soonest
+		// first. Server-side: sorting a page in the browser would only ever sort that page.
+		p.set('when', timeFilter === 'past' ? 'history' : 'upcoming');
 		p.set('order', timeFilter === 'past' ? 'desc' : 'asc');
+		// Fork: the tab labels by the tabs' definitions on both tabs (without it when=upcoming
+		// keeps upstream's counts, which API-key callers rely on).
+		p.set('tabs', '1');
 		if (fEventType) p.set('event_type', fEventType);
 		if (fHost) p.set('host', fHost);
 		if (fTeam) p.set('team', fTeam);
 		if (fArea) p.set('area', fArea);
-		if (fStatus) p.set('status', fStatus);
+		for (const [k, v] of Object.entries(historyFilterParams(historyFilter))) p.set(k, v);
 		p.set('limit', String(PAGE_SIZE));
 		p.set('offset', String(offset));
 		return p.toString();
@@ -166,7 +186,6 @@
 			}>(`/v1/bookings?${query()}`);
 			if (seq !== loadSeq) return;
 			items = res.items ?? [];
-			total = res.total ?? 0;
 			counts = res.counts ?? { upcoming: 0, past: 0 };
 			error = '';
 
@@ -207,11 +226,13 @@
 	async function setTimeFilter(t: 'upcoming' | 'past') {
 		if (timeFilter === t) return;
 		timeFilter = t;
+		if (t === 'upcoming') fHistory = ''; // the history's filter does not exist there
 		await reload();
 	}
 
 	function clearFilters() {
-		fEventType = fHost = fTeam = fStatus = fArea = '';
+		fEventType = fHost = fTeam = fArea = '';
+		fHistory = '';
 		reload();
 	}
 
@@ -572,7 +593,14 @@
 		return sym[c] ? sym[c] + amt : amt + ' ' + c;
 	}
 	const payLabel: Record<string, string> = { paid: 'Pagado', refunded: 'Reembolsado', pending: 'Pago pendiente' };
-	const statusLabel: Record<string, string> = { confirmed: 'Confirmada', cancelled: 'Cancelada', rescheduled: 'Reprogramada' };
+	// Fork: the chips beside the client's name (bookingChips in $lib/booking-card).
+	const CHIP_CLS: Record<ChipKind, string> = {
+		confirmed: 'bg-green-100 text-green-800 dark:bg-green-950/60 dark:text-green-300',
+		cancelled: 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300',
+		concluded: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+		rescheduled: 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+	};
+	const HISTORY_FILTERS: HistoryFilter[] = ['', 'concluded', 'cancelled', 'rescheduled'];
 
 	function todayISO() {
 		return new Date().toISOString().slice(0, 10);
@@ -699,17 +727,19 @@
 				{/if}
 			{/if}
 
-			<Select.Root type="single" bind:value={fStatus} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar por estado">
-					{fStatus ? (statusLabel[fStatus] ?? fStatus) : 'Cualquier estado'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="Cualquier estado">Cualquier estado</Select.Item>
-					<Select.Item value="confirmed" label="Confirmada">Confirmada</Select.Item>
-					<Select.Item value="rescheduled" label="Reprogramada">Reprogramada</Select.Item>
-					<Select.Item value="cancelled" label="Cancelada">Cancelada</Select.Item>
-				</Select.Content>
-			</Select.Root>
+			<!-- Fork: only on Pasadas (Próximas holds confirmed sessions only). -->
+			{#if timeFilter === 'past'}
+				<Select.Root type="single" bind:value={fHistory} onValueChange={reload}>
+					<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar el historial">
+						{HISTORY_FILTER_LABELS[fHistory] ?? 'Todas'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each HISTORY_FILTERS as hf (hf)}
+							<Select.Item value={hf} label={HISTORY_FILTER_LABELS[hf]}>{HISTORY_FILTER_LABELS[hf]}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			{/if}
 
 			{#if hasFilters}
 				<Button variant="ghost" size="sm" onclick={clearFilters}>Limpiar</Button>
@@ -742,6 +772,7 @@
 				{@const cd = hostCountdown(b)}
 				{@const dots = noticeDots(b.whatsapp)}
 				{@const isMine = !!$currentUser && b.host_id === $currentUser.id}
+				{@const chips = bookingChips(b, now)}
 				<li class="transition-colors {open ? 'bg-muted/10' : 'hover:bg-muted/20'}">
 					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 					<!-- The whole card is a tap target for phones; keyboard and screen-reader
@@ -750,16 +781,27 @@
 						class="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-3.5 sm:px-5 sm:py-4"
 						onclick={(e) => onCardClick(e, b.id)}
 					>
-						<div class="min-w-0 flex-1 basis-[calc(100%-3rem)] space-y-0.5 sm:basis-0">
+						<div class="flex min-w-0 flex-1 basis-[calc(100%-3rem)] items-start gap-3 sm:basis-0">
+						<!-- Fork: a generic profile picture, the same on every card - never the
+						     client's real photo (owner, 30 Sep 2026). -->
+						<Avatar.Root class="mt-0.5 size-10 shrink-0" aria-hidden="true">
+							<Avatar.Fallback class="bg-muted text-muted-foreground">
+								<UserRoundIcon class="size-5" />
+							</Avatar.Fallback>
+						</Avatar.Root>
+						<div class="min-w-0 flex-1 space-y-0.5">
 							<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
 								<p class="min-w-0 break-words font-semibold leading-snug {b.status === 'cancelled' ? 'text-muted-foreground' : ''}">
 									{b.attendees?.[0]?.name || 'Sin nombre'}
 								</p>
-								{#if b.status === 'cancelled'}
-									<Badge variant="destructive" class="h-5 border-transparent bg-destructive/10 px-1.5 text-[11px] text-destructive">{statusLabel[b.status]}</Badge>
-								{:else if b.status !== 'confirmed'}
-									<Badge variant="secondary" class="h-5 px-1.5 text-[11px]">{statusLabel[b.status] ?? b.status}</Badge>
-								{/if}
+								{#each chips as c (c.kind)}
+									<Badge
+										variant="outline"
+										class="h-5 border-transparent px-1.5 text-[11px] {CHIP_CLS[c.kind]}"
+										title={c.title}
+										aria-label={c.title}
+									>{c.label}</Badge>
+								{/each}
 							</div>
 							<p class="text-sm leading-snug text-muted-foreground">
 								<span class="font-medium text-foreground/90 tabular-nums">{fmtCardWhen(b.start_at, $prefs, new Date(now))}</span>
@@ -774,9 +816,10 @@
 								</p>
 							{/if}
 						</div>
+						</div>
 
 						{#if cd || dots}
-							<div class="order-3 flex w-full items-center gap-3 sm:order-2 sm:w-auto">
+							<div class="order-3 flex w-full items-center gap-3 pl-[52px] sm:order-2 sm:w-auto sm:pl-0">
 								{#if cd}
 									<span class="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-medium tabular-nums {COUNTDOWN_CLS[cd.tone]}">
 										{#if cd.tone === 'live'}
@@ -825,7 +868,14 @@
 								<dt class="text-muted-foreground">Atiende</dt>
 								<dd class="break-words">{b.host_name || '—'}</dd>
 								<dt class="text-muted-foreground">Estado</dt>
-								<dd>{statusLabel[b.status] ?? b.status}</dd>
+								<dd>{chips[0]?.label ?? b.status}</dd>
+								{#if b.rescheduled && b.rescheduled.count > 0}
+									<dt class="text-muted-foreground">Reprogramación</dt>
+									<dd class="break-words">
+										{#if b.rescheduled.last_previous_start_at}Reprogramada desde {fmt(b.rescheduled.last_previous_start_at)}{:else}Reprogramada{/if}
+										{#if b.rescheduled.count > 1}<span class="text-muted-foreground"> · {b.rescheduled.count} veces</span>{/if}
+									</dd>
+								{/if}
 								{#if attendanceChip(b)}
 									{@const chip = attendanceChip(b)!}
 									<dt class="text-muted-foreground">Asistencia</dt>

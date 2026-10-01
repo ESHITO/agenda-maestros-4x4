@@ -147,7 +147,8 @@ func TestEnsureTeamSchema_idempotent(t *testing.T) {
 		}
 	}
 	for _, table := range []string{"fork_event_type_links", "fork_question_links", "fork_member_areas",
-		"fork_member_transition", "fork_invite_roles", "fork_livekit_mints", "fork_livekit_sessions", "fork_livekit_host_links"} {
+		"fork_member_transition", "fork_invite_roles", "fork_livekit_mints", "fork_livekit_sessions", "fork_livekit_host_links",
+		"fork_booking_reschedules"} {
 		var n int
 		if err := e.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
 			t.Errorf("table %s: count %d, err %v", table, n, err)

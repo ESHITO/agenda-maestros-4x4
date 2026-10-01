@@ -26,6 +26,10 @@ import (
 // ?event_type= to f.EventTypeID. Returns errNoMatches when the filters can match nothing,
 // or an error (a 400) for a bad ?area=.
 func (h *Handler) forkBookingListFilter(ctx context.Context, q url.Values, f *booking.ListFilter) error {
+	// ?rescheduled= (the history's "Reprogramadas", fork_booking_history.go).
+	if err := forkRescheduledFilter(q, f); err != nil {
+		return err
+	}
 	var set []string
 	constrained := false
 	if f.EventTypeID != "" {

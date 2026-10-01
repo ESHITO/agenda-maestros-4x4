@@ -335,6 +335,24 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   "Cancelar reunión" (future confirmed only,
   `ConfirmDialog` with an optional reason sent as typed - it used to send the English "cancelled
   by admin"). `ConfirmDialog` takes an optional `children` snippet for that field.
+  **Tabs and history** (owner, 30 Sep 2026; `handler/fork_booking_history.go`, `booking/fork_list.go`):
+  Próximas = `when=upcoming` (confirmed, not ended, in progress included); Pasadas = `when=history` =
+  ended OR cancelled at any date, ordered by when it entered the history (cancelled: `updated_at`, no
+  `cancelled_at` column - so EVERY cancel path must stamp `updated_at`, the Stripe unpaid-hold releases
+  in `stripe_booking.go` and `worker.Poll` included; concluded: `end_at`), most recent first. On Pasadas only, a filter Todas /
+  Concluidas (`status=confirmed`) / Canceladas (`status=cancelled`) / Reprogramadas (`rescheduled=1`).
+  With `when=history`, or `when=upcoming&tabs=1` (the panel sends `tabs=1` on both tabs), the counts are
+  `TabCounts` (the listed tab with every filter, the other without the history sub-filters) and the panel
+  pages by its tab's count; `when=upcoming` without `tabs=1` (API-key integrations), `when=past`, no
+  `when` and MCP keep upstream's `Counts` and `total`. On mobile the countdown/WhatsApp row is indented
+  `pl-[52px]` to line up with the text beside the avatar. Each card: a generic avatar (never a photo) and `bookingChips`
+  (`lib/booking-card.ts`): Confirmada green / Concluida / Cancelada + "Reprogramada" (title "N vez/veces").
+  **Reschedule history**: `fork_booking_reschedules` (EnsureTeamSchema), one row per move written by
+  `booking.Service.Reschedule` after the commit (every path: panel, `/manage`, MCP; actor via
+  `booking.WithRescheduleActor`), best effort; `BackfillRescheduleHistory` (StartTeamBoot, idempotent)
+  rebuilds older moves from `booking.rescheduled` deliveries (~30 days kept). List items gain
+  `rescheduled: {count, last_previous_start_at}` (bookingListItem only, never GET /v1/bookings/{id});
+  the details say "Reprogramada desde {fecha}".
 - **Admin shell** (`routes/+layout.svelte`, owner: "two scrollbars on the PC; adapt it to the phone"):
   **the document is the only scroller** - `html, body { min-height: 100% }` (never `height`), no
   `overflow-y-auto` around `main`. Below `md`: sticky top bar (section name + avatar) and a fixed

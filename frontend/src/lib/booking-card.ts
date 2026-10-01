@@ -3,7 +3,7 @@
 // four tiny WhatsApp dots - and everything else waits behind "Ver detalles". The pure parts
 // of that short card live here so they are tested: the dots summary and the compact date.
 
-import type { WhatsAppNotice } from './api';
+import type { Booking, WhatsAppNotice } from './api';
 import { displayZone, dayKeyInZone, type UserPrefs } from './prefs';
 
 export const NOTICE_KIND_LABELS: Record<WhatsAppNotice['kind'], string> = {
@@ -105,4 +105,53 @@ export function fmtCardWhen(iso: string, p: UserPrefs, now: Date = new Date()): 
 		if (key.slice(0, 4) !== today.slice(0, 4)) day += ` ${key.slice(0, 4)}`;
 	}
 	return `${day} · ${time}`;
+}
+
+/**
+ * The chips beside the client's name (owner, 30 Sep 2026: "al costado de su nombre diga
+ * confirmado (color verde)", and the history tagged as cancelled, concluded or rescheduled).
+ * One state chip - Cancelada, Concluida (a confirmed session whose end has passed) or
+ * Confirmada - plus "Reprogramada" when the booking was ever moved, whatever its state.
+ */
+export type ChipKind = 'confirmed' | 'cancelled' | 'concluded' | 'rescheduled';
+export type BookingChip = { kind: ChipKind; label: string; title?: string };
+
+export function bookingChips(
+	b: Pick<Booking, 'status' | 'end_at' | 'rescheduled'>,
+	now: Date | number = Date.now()
+): BookingChip[] {
+	const t = typeof now === 'number' ? now : now.getTime();
+	const chips: BookingChip[] = [];
+	if (b.status === 'cancelled') chips.push({ kind: 'cancelled', label: 'Cancelada' });
+	else if (new Date(b.end_at).getTime() < t) chips.push({ kind: 'concluded', label: 'Concluida' });
+	else chips.push({ kind: 'confirmed', label: 'Confirmada' });
+	const n = b.rescheduled?.count ?? 0;
+	if (n > 0) {
+		chips.push({ kind: 'rescheduled', label: 'Reprogramada', title: `Reprogramada ${n} ${n === 1 ? 'vez' : 'veces'}` });
+	}
+	return chips;
+}
+
+/** The "Pasadas" filter: '' = Todas. Each maps to the server's history sub-filter. */
+export type HistoryFilter = '' | 'concluded' | 'cancelled' | 'rescheduled';
+
+export const HISTORY_FILTER_LABELS: Record<HistoryFilter, string> = {
+	'': 'Todas',
+	concluded: 'Concluidas',
+	cancelled: 'Canceladas',
+	rescheduled: 'Reprogramadas'
+};
+
+/** The query parameters of a history filter (when=history is set by the caller). */
+export function historyFilterParams(f: HistoryFilter): Record<string, string> {
+	switch (f) {
+		case 'concluded':
+			return { status: 'confirmed' };
+		case 'cancelled':
+			return { status: 'cancelled' };
+		case 'rescheduled':
+			return { rescheduled: '1' };
+		default:
+			return {};
+	}
 }

@@ -162,8 +162,9 @@ func (w *Worker) Poll(ctx context.Context) {
 	// normally does this promptly; this catches missed/late deliveries.
 	holdCutoff := time.Now().UTC().Add(-45 * time.Minute).Format(time.RFC3339)
 	if _, err := w.db.ExecContext(ctx,
-		`UPDATE bookings SET status = 'cancelled', cancellation_reason = 'payment not completed'
-		 WHERE status = 'confirmed' AND payment_status = 'pending' AND created_at < ?`, holdCutoff); err != nil {
+		`UPDATE bookings SET status = 'cancelled', cancellation_reason = 'payment not completed', updated_at = ?
+		 WHERE status = 'confirmed' AND payment_status = 'pending' AND created_at < ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), holdCutoff); err != nil { // fork: updated_at = when it was cancelled (Pasadas' order)
 		w.logger.Error("worker: release expired payment holds", "error", err)
 	}
 

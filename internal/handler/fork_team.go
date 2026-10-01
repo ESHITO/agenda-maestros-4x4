@@ -1041,7 +1041,7 @@ func (h *Handler) RetireSupportTier(ctx context.Context) (int, error) {
 }
 
 // StartTeamBoot runs the boot pass of the team feature in the background: the is_support
-// repair, then a full ReconcileTeam. HTTP server only (server.New) - never from
+// repair, then a full ReconcileTeam, then the reschedule history's backfill. HTTP server only (server.New) - never from
 // BuildHandler, which the `calnode mcp` process also runs.
 func (h *Handler) StartTeamBoot(ctx context.Context) {
 	go func() {
@@ -1056,5 +1056,7 @@ func (h *Handler) StartTeamBoot(ctx context.Context) {
 			h.logger.ErrorContext(bctx, "team boot reconcile failed", "error", err)
 		}
 		h.InvalidateTeamAvailability() // the pass may have changed who is on the team calendar
+		// The reschedule history of moves made before it existed (fork_booking_history.go).
+		h.backfillRescheduleHistory(bctx)
 	}()
 }

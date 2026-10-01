@@ -86,6 +86,8 @@ type bookingListItem struct {
 	Area string `json:"area"`
 	// Attendance is what the video room saw (fork_attendance.go); absent if it could not be read.
 	Attendance *attendanceJSON `json:"attendance,omitempty"`
+	// Rescheduled is the booking's reschedule history (fork_booking_history.go); absent = never moved.
+	Rescheduled *rescheduledJSON `json:"rescheduled,omitempty"`
 }
 
 // noticeRow is one row of the aggregated state query.
@@ -141,6 +143,9 @@ func (h *Handler) withWhatsAppNotices(ctx context.Context, bookings []booking.Bo
 	}
 	if err := h.fillBookingAttendance(ctx, bookings, string(idsJSON), idx, out, time.Now().UTC()); err != nil {
 		h.logger.ErrorContext(ctx, "list bookings: attendance", "error", err)
+	}
+	if err := h.fillBookingReschedules(ctx, ids, idx, out); err != nil {
+		h.logger.ErrorContext(ctx, "list bookings: reschedules", "error", err)
 	}
 	rows, err := h.noticeRows(ctx, string(idsJSON))
 	if err != nil {

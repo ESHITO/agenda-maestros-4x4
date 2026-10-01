@@ -282,7 +282,7 @@ func (h *Handler) RescheduleByToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.bookingSvc.Reschedule(r.Context(), b.ID, newStart, newEnd)
+	updated, err := h.bookingSvc.Reschedule(booking.WithRescheduleActor(r.Context(), "client"), b.ID, newStart, newEnd) // fork: actor of the history row
 	if errors.Is(err, booking.ErrDoubleBooked) {
 		h.writeError(w, http.StatusConflict, "that time slot is no longer available")
 		return

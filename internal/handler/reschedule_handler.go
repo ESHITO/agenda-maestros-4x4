@@ -95,7 +95,7 @@ func (h *Handler) RescheduleBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.bookingSvc.Reschedule(r.Context(), id, newStart, newEnd)
+	updated, err := h.bookingSvc.Reschedule(booking.WithRescheduleActor(r.Context(), "panel:"+user.ID), id, newStart, newEnd) // fork: actor of the history row
 	if errors.Is(err, booking.ErrDoubleBooked) {
 		h.writeError(w, http.StatusConflict, "that time slot is no longer available")
 		return

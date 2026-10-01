@@ -187,6 +187,8 @@ export type Booking = {
 	area?: Area;
 	/** Fork, GET /v1/bookings only: who entered the video room. */
 	attendance?: Attendance;
+	/** Fork, GET /v1/bookings only: the reschedule history (absent = never moved). */
+	rescheduled?: { count: number; last_previous_start_at?: string };
 };
 
 /** Fork: attendance of a LiveKit booking, computed per list page. */

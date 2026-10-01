@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppNotice } from './api';
 import type { UserPrefs } from './prefs';
-import { fmtCardWhen, noticeDots, noticeTone } from './booking-card';
+import { bookingChips, fmtCardWhen, historyFilterParams, noticeDots, noticeTone } from './booking-card';
 
 const four = (s: WhatsAppNotice['status'][]): WhatsAppNotice[] =>
 	(['created', 'morning', '1h', '5m'] as const).map((kind, i) => ({ kind, status: s[i] }));
@@ -79,5 +79,43 @@ describe('fmtCardWhen', () => {
 
 	it('an unreadable date is empty', () => {
 		expect(fmtCardWhen('nope', lima, now)).toBe('');
+	});
+});
+
+describe('bookingChips', () => {
+	const now = new Date('2026-09-30T15:00:00Z');
+	const future = { end_at: '2026-09-30T16:00:00Z' };
+	const ended = { end_at: '2026-09-30T14:59:00Z' };
+
+	it('a live confirmed session reads Confirmada (in progress too)', () => {
+		expect(bookingChips({ status: 'confirmed', ...future }, now)).toEqual([{ kind: 'confirmed', label: 'Confirmada' }]);
+		expect(bookingChips({ status: 'confirmed', end_at: '2026-09-30T15:00:00Z' }, now)[0].kind).toBe('confirmed');
+	});
+
+	it('a confirmed session that ended reads Concluida', () => {
+		expect(bookingChips({ status: 'confirmed', ...ended }, now)).toEqual([{ kind: 'concluded', label: 'Concluida' }]);
+	});
+
+	it('cancelled wins whatever the date', () => {
+		expect(bookingChips({ status: 'cancelled', ...future }, now)[0]).toEqual({ kind: 'cancelled', label: 'Cancelada' });
+		expect(bookingChips({ status: 'cancelled', ...ended }, now)[0].kind).toBe('cancelled');
+	});
+
+	it('Reprogramada is added to the state chip, with how many times', () => {
+		expect(bookingChips({ status: 'confirmed', ...ended, rescheduled: { count: 1 } }, now)).toEqual([
+			{ kind: 'concluded', label: 'Concluida' },
+			{ kind: 'rescheduled', label: 'Reprogramada', title: 'Reprogramada 1 vez' }
+		]);
+		expect(bookingChips({ status: 'cancelled', ...future, rescheduled: { count: 3 } }, now.getTime())[1].title).toBe('Reprogramada 3 veces');
+		expect(bookingChips({ status: 'confirmed', ...future, rescheduled: { count: 0 } }, now)).toHaveLength(1);
+	});
+});
+
+describe('historyFilterParams', () => {
+	it('maps each Pasadas filter to the server sub-filter', () => {
+		expect(historyFilterParams('')).toEqual({});
+		expect(historyFilterParams('concluded')).toEqual({ status: 'confirmed' });
+		expect(historyFilterParams('cancelled')).toEqual({ status: 'cancelled' });
+		expect(historyFilterParams('rescheduled')).toEqual({ rescheduled: '1' });
 	});
 });

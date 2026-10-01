@@ -1416,8 +1416,8 @@ func (h *Handler) parseBookingListFilter(ctx context.Context, q url.Values, user
 		f.Status = s
 	}
 	if w := q.Get("when"); w != "" {
-		if w != "upcoming" && w != "past" {
-			return f, fmt.Errorf("when must be upcoming or past")
+		if w != "upcoming" && w != "past" && w != booking.WhenHistory { // fork: + history (booking/fork_list.go)
+			return f, fmt.Errorf("when must be upcoming, past or history")
 		}
 		f.When = w
 	}
@@ -1506,7 +1506,7 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	// match set and the tab labels describe the whole of it. Runs after List has
 	// drained its rows - querying inside an open cursor deadlocks the single
 	// connection pool.
-	counts, err := h.bookingSvc.Counts(r.Context(), f)
+	counts, err := h.bookingListCounts(r.Context(), f) // fork: the tabs' own counts (fork_booking_history.go)
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "list bookings: counts", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "internal error")

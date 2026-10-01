@@ -87,7 +87,8 @@ describe('Reservas: short cards on a phone', () => {
 		await page.getByRole('button', { name: /Pasadas/ }).click();
 		await vi.waitFor(() => {
 			const last = new URLSearchParams(gets.filter((g) => g.startsWith('/v1/bookings?')).at(-1)!.split('?')[1]);
-			expect(last.get('when')).toBe('past');
+			// Pasadas is the history: ended + cancelled at any date (when=history).
+			expect(last.get('when')).toBe('history');
 			expect(last.get('order')).toBe('desc');
 		});
 	});
@@ -104,8 +105,10 @@ describe('Reservas: short cards on a phone', () => {
 		expect(document.body.textContent).not.toContain('con Mentor Uno');
 		expect(document.body.textContent).not.toContain('a@ejemplo.com');
 		expect(page.getByRole('button', { name: 'Cancelar reunión' }).elements()).toHaveLength(0);
-		// A confirmed card carries no "Confirmada" chip.
-		expect(document.body.textContent).not.toContain('Confirmada');
+		// Owner, 30 Sep 2026: beside the name, "Confirmada" in green.
+		const chip = page.getByText('Confirmada').first();
+		await expect.element(chip).toBeVisible();
+		expect(chip.element().className).toContain('bg-green-100');
 	});
 
 	test('the countdown is only for the person who attends', async () => {
@@ -170,5 +173,94 @@ describe('Reservas: short cards on a phone', () => {
 		// Hidden from md, so it is no longer reachable by role: ask the DOM.
 		const btnEl = document.querySelector('[aria-controls="booking-filters"]')!;
 		await vi.waitFor(() => expect(getComputedStyle(btnEl).display).toBe('none'));
+	});
+});
+
+describe('Reservas: generic picture, state chips and the history', () => {
+	test('every card has the same generic picture, never a photo', async () => {
+		await page.viewport(375, 812);
+		render(Page);
+		await expect.element(page.getByText('Cliente a')).toBeVisible();
+		const avatars = [...document.querySelectorAll('ul > li [data-slot="avatar"].size-10')];
+		expect(avatars).toHaveLength(2);
+		for (const a of avatars) {
+			expect(a.querySelector('img')).toBeNull();
+			expect(a.querySelector('svg')).not.toBeNull();
+			const r = a.getBoundingClientRect();
+			expect(Math.round(r.width)).toBe(40);
+			expect(Math.round(r.height)).toBe(40);
+		}
+	});
+
+	test('Pasadas: concluded, cancelled and rescheduled chips, and "Reprogramada desde"', async () => {
+		await page.viewport(375, 812);
+		const past = new Date(Date.now() - 3 * 3600_000);
+		listResponse = {
+			items: [
+				booking('c', {
+					start_at: past.toISOString(),
+					end_at: new Date(past.getTime() + 3600_000).toISOString(),
+					rescheduled: { count: 2, last_previous_start_at: '2026-09-01T15:00:00Z' }
+				}),
+				booking('x', { status: 'cancelled' })
+			],
+			total: 2,
+			counts: { upcoming: 0, past: 2 }
+		};
+		render(Page);
+		await expect.element(page.getByText('Cliente c')).toBeVisible();
+		const cards = [...document.querySelectorAll('ul > li')].map((li) => li.textContent ?? '');
+		const c = cards.find((t) => t.includes('Cliente c'))!;
+		const x = cards.find((t) => t.includes('Cliente x'))!;
+		expect(c).toContain('Concluida');
+		expect(c).toContain('Reprogramada');
+		expect(c).not.toContain('Confirmada');
+		expect(x).toContain('Cancelada');
+		const moved = page.getByText('Reprogramada', { exact: true }).first();
+		expect(moved.element().getAttribute('title')).toBe('Reprogramada 2 veces');
+
+		await userEvent.click(page.getByText('Cliente c'));
+		await expect.element(page.getByText(/^Reprogramada desde /)).toBeVisible();
+		expect(document.body.textContent).toContain('2 veces');
+	});
+
+	test('the history filter lives on Pasadas only and asks the server', async () => {
+		await page.viewport(1280, 900);
+		render(Page);
+		await expect.element(page.getByText('Cliente a')).toBeVisible();
+		expect(document.querySelector('[aria-label="Filtrar el historial"]')).toBeNull();
+
+		await page.getByRole('button', { name: /Pasadas/ }).click();
+		const trigger = () => document.querySelector<HTMLElement>('[aria-label="Filtrar el historial"]')!;
+		await vi.waitFor(() => expect(trigger()).not.toBeNull());
+		expect(trigger().textContent?.trim()).toBe('Todas');
+		await userEvent.click(trigger());
+		for (const label of ['Todas', 'Concluidas', 'Canceladas', 'Reprogramadas']) {
+			await expect.element(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+		}
+		await page.getByRole('option', { name: 'Canceladas', exact: true }).click();
+		await vi.waitFor(() => {
+			const last = new URLSearchParams(gets.filter((g) => g.startsWith('/v1/bookings?')).at(-1)!.split('?')[1]);
+			expect(last.get('when')).toBe('history');
+			expect(last.get('status')).toBe('cancelled');
+		});
+
+		await userEvent.click(trigger());
+		await page.getByRole('option', { name: 'Reprogramadas', exact: true }).click();
+		await vi.waitFor(() => {
+			const last = new URLSearchParams(gets.filter((g) => g.startsWith('/v1/bookings?')).at(-1)!.split('?')[1]);
+			expect(last.get('rescheduled')).toBe('1');
+			expect(last.get('status')).toBeNull();
+		});
+
+		// Back on Próximas the filter is gone and nothing of it is sent.
+		await page.getByRole('button', { name: /Próximas/ }).click();
+		await vi.waitFor(() => {
+			const last = new URLSearchParams(gets.filter((g) => g.startsWith('/v1/bookings?')).at(-1)!.split('?')[1]);
+			expect(last.get('when')).toBe('upcoming');
+			expect(last.get('rescheduled')).toBeNull();
+			expect(last.get('status')).toBeNull();
+		});
+		expect(document.querySelector('[aria-label="Filtrar el historial"]')).toBeNull();
 	});
 });

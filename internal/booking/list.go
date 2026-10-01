@@ -28,6 +28,11 @@ type ListFilter struct {
 	// Fork: EventTypeIDs limits the listing to these event types (the team's área and
 	// template-family filters, fork_list.go). nil = no limit; empty non-nil = nothing.
 	EventTypeIDs []string
+	// Fork: Rescheduled keeps only bookings moved at least once (fork_list.go).
+	Rescheduled bool
+	// Fork: Tabs asks for the panel's tab counts (TabCounts) on when=upcoming; without it
+	// when=upcoming keeps upstream's counts for API-key callers (fork_booking_history.go).
+	Tabs bool
 
 	// Status matches exactly when set. When empty, cancelled bookings are excluded:
 	// that is the default every existing caller depends on, and it is why passing an
@@ -39,6 +44,7 @@ type ListFilter struct {
 
 	// When is "upcoming" or "past", keyed on end_at rather than start_at so a meeting
 	// that has begun but not finished still counts as upcoming. Needs Now set.
+	// Fork: or WhenHistory ("history"), ended OR cancelled (fork_list.go).
 	When string
 	Now  time.Time
 
@@ -103,7 +109,7 @@ func (f ListFilter) where(includeWhen bool) (string, []any) {
 	if f.Status != "" {
 		conds = append(conds, "bookings.status = ?")
 		args = append(args, f.Status)
-	} else {
+	} else if !f.history(includeWhen) { // fork: the history includes the cancelled ones
 		conds = append(conds, "bookings.status != 'cancelled'")
 	}
 	if f.ViewerID != "" {
@@ -135,10 +141,13 @@ func (f ListFilter) where(includeWhen bool) (string, []any) {
 		switch f.When {
 		case "past":
 			conds = append(conds, "bookings.end_at < ?")
+			args = append(args, sqlTime(f.Now))
+		case WhenHistory: // fork: fork_list.go
+			conds, args = f.historyConds(conds, args)
 		default: // "upcoming"
 			conds = append(conds, "bookings.end_at >= ?")
+			args = append(args, sqlTime(f.Now))
 		}
-		args = append(args, sqlTime(f.Now))
 	}
 	return "WHERE " + strings.Join(conds, "\n\t\t  AND "), args
 }
@@ -154,9 +163,13 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Booking, error) {
 	// start_at is not unique, so a second key keeps paging stable across requests -
 	// without it two bookings at the same time can swap places between pages and one
 	// of them is never shown.
+	orderSQL := `start_at ` + order + `, id ` + order
+	if fo := f.forkOrderBy(); fo != "" { // fork: the history's own order (fork_list.go)
+		orderSQL = fo
+	}
 	q := `SELECT ` + bookingColumns + ` FROM bookings
 		` + whereSQL + `
-		ORDER BY start_at ` + order + `, id ` + order //#nosec G202 -- whereSQL is assembled from literal fragments only; every value is bound via args
+		ORDER BY ` + orderSQL //#nosec G202 -- whereSQL and orderSQL are assembled from literal fragments only; every value is bound via args
 
 	if f.Limit > 0 {
 		q += "\n\t\tLIMIT ? OFFSET ?"

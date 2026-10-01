@@ -71,6 +71,9 @@ var forkTeamLinkSchema = []string{
 //   - fork_livekit_mints / fork_livekit_sessions / fork_livekit_host_links: attendance of
 //     the built-in video room (who got a room token, the LiveKit webhook's sessions, and
 //     the hash of the host link a booking's current host holds).
+//   - fork_booking_reschedules: one row per move of a booking (booking.Service.Reschedule
+//     writes it after the commit; booking.BackfillRescheduleHistory rebuilds older ones from
+//     the booking.rescheduled deliveries). Times RFC3339 UTC; actor optional.
 var forkTeamSchema = []string{
 	`CREATE TABLE IF NOT EXISTS fork_member_areas (
 		user_id    TEXT PRIMARY KEY,
@@ -117,6 +120,16 @@ var forkTeamSchema = []string{
 		token_hash TEXT NOT NULL,
 		created_at TEXT NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS fork_booking_reschedules (
+		id                TEXT PRIMARY KEY,
+		booking_id        TEXT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+		previous_start_at TEXT NOT NULL,
+		new_start_at      TEXT NOT NULL,
+		rescheduled_at    TEXT NOT NULL,
+		actor             TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_fork_booking_reschedules_booking
+		ON fork_booking_reschedules (booking_id)`,
 	// attendance_since: bookings that started before the attendance records existed read
 	// "not_applicable", never a false "nadie entró". Set once, on the first boot that has it.
 	`INSERT OR IGNORE INTO fork_settings (key, value)
