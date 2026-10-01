@@ -15,9 +15,15 @@
 	} from '$lib/api';
 	import { currentUser } from '$lib/stores';
 	import { prefs, fmtDateTime, fmtTime, fmtShortWhen, displayZone, dayKeyInZone } from '$lib/prefs';
-	import { Button, buttonVariants } from '$lib/components/ui/button';
+	import { countdown } from '$lib/countdown';
+	import { fmtCardWhen, noticeDots, NOTICE_KIND_LABELS, NOTICE_STATUS_LABELS, type DotTone } from '$lib/booking-card';
+	import { initials } from '$lib/nav';
+	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Avatar from '$lib/components/ui/avatar';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
+	import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
 	import * as Select from '$lib/components/ui/select';
 	import { DatePicker } from '$lib/components/ui/date-picker';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
@@ -79,6 +85,9 @@
 	let teams = $state<{ id: string; name: string }[]>([]);
 
 	const hasFilters = $derived(!!(fEventType || fHost || fTeam || fStatus || fArea));
+	// Fork: on a phone the selects fold behind "Filtros"; the badge says how many are set.
+	const activeFilterCount = $derived([fEventType, fHost, fTeam, fStatus, fArea].filter(Boolean).length);
+	let filtersOpen = $state(false);
 	const pageStart = $derived(total === 0 ? 0 : offset + 1);
 	const pageEnd = $derived(Math.min(offset + items.length, total));
 	const eventTypeName = $derived(
@@ -116,6 +125,10 @@
 	}
 
 	async function toggleExpand(id: string) {
+		// "Reprogramar" and its way out live in the details: closing them (or opening another
+		// card's) also closes a half-done reschedule, which would otherwise stay open with no
+		// visible "Cancelar" and keep the page's auto-refresh paused.
+		if (reschedulingId && reschedulingId !== (expandedId === id ? null : id)) reschedulingId = null;
 		if (expandedId === id) { expandedId = null; return; }
 		expandedId = id;
 		if (answersCache[id] === undefined && !answersLoading[id]) await loadAnswers(id);
@@ -280,14 +293,46 @@
 		// Owner report (30 Sep 2026): nothing changed without a reload. Coming back to the
 		// tab, and every minute while it is visible, the page being viewed is asked again in
 		// place (same filters and page, no "Cargando…") - unless a dialog is open.
-		return onResume(
+		const stopReload = onResume(
 			() => {
 				if (loading || refreshing || confirmOpen || passOpen || reschedulingId) return;
 				return load();
 			},
 			{ minIntervalMs: 5_000, everyMs: 60_000 }
 		);
+		// The countdowns' clock: every 30 s while the tab is visible, and at once when it
+		// becomes visible again (a hidden tab does not tick). Only `now` changes, so the
+		// pills update in place.
+		const stopClock = onResume(() => { now = Date.now(); }, { minIntervalMs: 0, everyMs: 30_000 });
+		return () => { stopReload(); stopClock(); };
 	});
+
+	// ── Fork: the countdown, only for the person who attends (owner, 30 Sep 2026) ──
+	let now = $state(Date.now());
+	function hostCountdown(b: Booking) {
+		if (b.status !== 'confirmed' || !$currentUser || b.host_id !== $currentUser.id) return null;
+		return countdown(b.start_at, b.end_at, now);
+	}
+	const COUNTDOWN_CLS = {
+		live: 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300',
+		soon: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300',
+		later: 'border-border bg-muted/40 text-foreground/80'
+	};
+	const DOT_CLS: Record<DotTone, string> = {
+		ok: 'bg-green-500',
+		wait: 'bg-amber-400',
+		bad: 'bg-red-500',
+		off: 'bg-muted-foreground/30'
+	};
+
+	// The whole short card opens and closes its details, except a tap on a real control
+	// inside it (the "Ver detalles" button handles itself).
+	function onCardClick(e: MouseEvent, id: string) {
+		if ((e.target as HTMLElement | null)?.closest('button, a, input, textarea, select')) return;
+		// Selecting text with the mouse is not a tap.
+		if (window.getSelection()?.toString()) return;
+		toggleExpand(id);
+	}
 
 	let confirmOpen = $state(false);
 	let pendingCancelId = $state<string | null>(null);
@@ -325,21 +370,16 @@
 	}
 
 	// ── Fork: the four WhatsApp notices of each booking (GET /v1/bookings "whatsapp") ──
-	const NOTICE_LABELS: Record<WhatsAppNotice['kind'], string> = {
-		created: 'Confirmación',
-		morning: 'Mañana',
-		'1h': '1 hora',
-		'5m': '5 min'
-	};
+	const NOTICE_LABELS = NOTICE_KIND_LABELS;
 	const NOTICE_STATES: Record<WhatsAppNotice['status'], { label: string; cls: string }> = {
-		sent: { label: 'Enviado', cls: 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300' },
-		pending: { label: 'Pendiente', cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300' },
-		sending: { label: 'Enviando…', cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300' },
-		failed: { label: 'Falló', cls: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300' },
-		cancelled: { label: 'Cancelado', cls: 'border-border bg-muted/50 text-muted-foreground line-through decoration-1' },
-		missed: { label: 'No salió', cls: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300' },
-		unknown: { label: 'Sin registro', cls: 'border-dashed border-border bg-background text-muted-foreground' },
-		not_applicable: { label: 'No aplica', cls: 'border-dashed border-border bg-background text-muted-foreground' }
+		sent: { label: NOTICE_STATUS_LABELS.sent, cls: 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300' },
+		pending: { label: NOTICE_STATUS_LABELS.pending, cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300' },
+		sending: { label: NOTICE_STATUS_LABELS.sending, cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300' },
+		failed: { label: NOTICE_STATUS_LABELS.failed, cls: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300' },
+		cancelled: { label: NOTICE_STATUS_LABELS.cancelled, cls: 'border-border bg-muted/50 text-muted-foreground line-through decoration-1' },
+		missed: { label: NOTICE_STATUS_LABELS.missed, cls: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300' },
+		unknown: { label: NOTICE_STATUS_LABELS.unknown, cls: 'border-dashed border-border bg-background text-muted-foreground' },
+		not_applicable: { label: NOTICE_STATUS_LABELS.not_applicable, cls: 'border-dashed border-border bg-background text-muted-foreground' }
 	};
 
 	// Short "when" for a notice, in the profile's zone like every other time on this page:
@@ -585,9 +625,30 @@
 			<button type="button" class="rounded px-3 py-1 transition-colors {timeFilter === 'past' ? 'bg-muted font-medium' : 'text-muted-foreground hover:text-foreground'}" onclick={() => setTimeFilter('past')}>Pasadas ({counts.past})</button>
 		</div>
 
-		<div class="grid w-full grid-cols-1 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+		<!-- Fork: on a phone the selects wait behind this button (they took half the screen);
+		     from md they sit inline as before. -->
+		<Button
+			variant="outline"
+			size="sm"
+			class="ml-auto h-8 md:hidden"
+			aria-expanded={filtersOpen}
+			aria-controls="booking-filters"
+			onclick={() => (filtersOpen = !filtersOpen)}
+		>
+			<SlidersHorizontalIcon aria-hidden="true" />
+			Filtros
+			{#if activeFilterCount > 0}
+				<span class="ml-0.5 inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-5 text-primary-foreground tabular-nums" aria-hidden="true">{activeFilterCount}</span>
+				<span class="sr-only">{activeFilterCount} {activeFilterCount === 1 ? 'filtro activo' : 'filtros activos'}</span>
+			{/if}
+		</Button>
+
+		<div
+			id="booking-filters"
+			class="{filtersOpen ? 'grid' : 'hidden'} w-full grid-cols-1 gap-2 md:ml-auto md:flex md:w-auto md:flex-wrap md:items-center"
+		>
 			<Select.Root type="single" bind:value={fEventType} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por tipo de atención">
+				<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar por tipo de atención">
 					{fEventType ? eventTypeName(fEventType) : 'Todos los tipos de atención'}
 				</Select.Trigger>
 				<Select.Content>
@@ -601,7 +662,7 @@
 			{#if canSeeAll && scope === 'all'}
 				<!-- Fork: área from the booking's type (Mentoría = the template and every copy). -->
 				<Select.Root type="single" bind:value={fArea} onValueChange={reload}>
-					<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por área">
+					<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar por área">
 						{fArea === 'mentoria' || fArea === 'soporte' ? AREA_LABELS[fArea] : 'Todas las áreas'}
 					</Select.Trigger>
 					<Select.Content>
@@ -612,7 +673,7 @@
 				</Select.Root>
 
 				<Select.Root type="single" bind:value={fHost} onValueChange={reload}>
-					<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por anfitrión">
+					<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar por anfitrión">
 						{members.find((m) => m.id === fHost)?.name ?? 'Todos los anfitriones'}
 					</Select.Trigger>
 					<Select.Content>
@@ -625,7 +686,7 @@
 
 				{#if teams.length > 0}
 					<Select.Root type="single" bind:value={fTeam} onValueChange={reload}>
-						<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por equipo">
+						<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar por equipo">
 							{teams.find((tm) => tm.id === fTeam)?.name ?? 'Todos los equipos'}
 						</Select.Trigger>
 						<Select.Content>
@@ -639,7 +700,7 @@
 			{/if}
 
 			<Select.Root type="single" bind:value={fStatus} onValueChange={reload}>
-				<Select.Trigger class="h-9 w-full sm:w-auto" aria-label="Filtrar por estado">
+				<Select.Trigger class="h-9 w-full md:w-auto" aria-label="Filtrar por estado">
 					{fStatus ? (statusLabel[fStatus] ?? fStatus) : 'Cualquier estado'}
 				</Select.Trigger>
 				<Select.Content>
@@ -668,46 +729,103 @@
 			{/if}
 		</div>
 	{:else}
-	<!-- Fork: one card per booking instead of a table row, so it stacks on a phone (375 px)
-	     without overflowing. The client's NAME leads; then when, what and who attends, the
-	     four WhatsApp notices, and the actions. -->
-	<div class="overflow-hidden rounded-lg border bg-card">
-		<Tooltip.Provider>
+	<!-- Fork (owner, 30 Sep 2026: "se ve muy cargado en el celular"): each booking is a short
+	     card - the client, when, the type, a countdown for the person who attends and four
+	     tiny WhatsApp dots. Everything else (e-mail, the full notices, answers, attendance,
+	     link, actions) is behind "Ver detalles". The order is the server's: upcoming soonest
+	     first, past most recent first (query() sends order=asc|desc, applied in SQL so every
+	     page keeps it). -->
+	<div class="overflow-hidden rounded-xl border bg-card">
 		<ul class="divide-y">
 			{#each items as b (b.id)}
-				<li class="transition-colors hover:bg-muted/20">
-					<div class="space-y-3 p-4">
-					<div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-6">
-						<div class="min-w-0 flex-1 space-y-2">
+				{@const open = expandedId === b.id}
+				{@const cd = hostCountdown(b)}
+				{@const dots = noticeDots(b.whatsapp)}
+				{@const isMine = !!$currentUser && b.host_id === $currentUser.id}
+				<li class="transition-colors {open ? 'bg-muted/10' : 'hover:bg-muted/20'}">
+					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+					<!-- The whole card is a tap target for phones; keyboard and screen-reader
+					     users get the same toggle as the real "Ver detalles" button below. -->
+					<div
+						class="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-3.5 sm:px-5 sm:py-4"
+						onclick={(e) => onCardClick(e, b.id)}
+					>
+						<div class="min-w-0 flex-1 basis-[calc(100%-3rem)] space-y-0.5 sm:basis-0">
 							<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-								<p class="min-w-0 break-words text-base font-semibold leading-snug">
+								<p class="min-w-0 break-words font-semibold leading-snug {b.status === 'cancelled' ? 'text-muted-foreground' : ''}">
 									{b.attendees?.[0]?.name || 'Sin nombre'}
 								</p>
-								{#if b.status === 'confirmed'}
-									<Badge class="bg-green-50 text-green-700 border-green-200">{statusLabel[b.status] ?? b.status}</Badge>
-								{:else if b.status === 'cancelled'}
-									<Badge variant="destructive" class="bg-destructive/10 text-destructive border-transparent">{statusLabel[b.status] ?? b.status}</Badge>
-								{:else}
-									<Badge variant="secondary">{statusLabel[b.status] ?? b.status}</Badge>
-								{/if}
-								{#if b.payment_status === 'paid'}
-									<Badge class="border-emerald-200 bg-emerald-50 text-emerald-700">{fmtMoney(b.amount_paid_cents, b.amount_paid_currency)}</Badge>
-								{:else if b.payment_status === 'refunded'}
-									<Badge variant="secondary" class="text-muted-foreground">reembolsado</Badge>
-								{:else if b.payment_status === 'pending'}
-									<Badge class="border-amber-200 bg-amber-50 text-amber-700">no pagado</Badge>
+								{#if b.status === 'cancelled'}
+									<Badge variant="destructive" class="h-5 border-transparent bg-destructive/10 px-1.5 text-[11px] text-destructive">{statusLabel[b.status]}</Badge>
+								{:else if b.status !== 'confirmed'}
+									<Badge variant="secondary" class="h-5 px-1.5 text-[11px]">{statusLabel[b.status] ?? b.status}</Badge>
 								{/if}
 							</div>
-							{#if b.attendees?.[0]?.email}
-								<p class="-mt-1 break-all text-xs text-muted-foreground">{b.attendees[0].email}</p>
+							<p class="text-sm leading-snug text-muted-foreground">
+								<span class="font-medium text-foreground/90 tabular-nums">{fmtCardWhen(b.start_at, $prefs, new Date(now))}</span>
+								<span class="mx-1" aria-hidden="true">·</span><span class="sr-only">, </span>{b.event_type_name || eventTypeName(b.event_type_slug)}
+							</p>
+							{#if scope === 'all' && b.host_name}
+								<p class="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground">
+									<Avatar.Root class="size-5" aria-hidden="true">
+										<Avatar.Fallback class="text-[9px] font-semibold">{initials(b.host_name)}</Avatar.Fallback>
+									</Avatar.Root>
+									<span class="min-w-0 truncate">{isMine ? 'Contigo' : `con ${b.host_name}`}</span>
+								</p>
 							{/if}
-							<dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-sm">
+						</div>
+
+						{#if cd || dots}
+							<div class="order-3 flex w-full items-center gap-3 sm:order-2 sm:w-auto">
+								{#if cd}
+									<span class="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-medium tabular-nums {COUNTDOWN_CLS[cd.tone]}">
+										{#if cd.tone === 'live'}
+											<span class="size-1.5 rounded-full bg-green-500 motion-safe:animate-pulse" aria-hidden="true"></span>
+										{:else}
+											<CalendarClockIcon class="size-3.5 opacity-70" aria-hidden="true" />
+										{/if}
+										{cd.text}
+									</span>
+								{/if}
+								{#if dots}
+									<span class="inline-flex items-center gap-1 {cd ? 'ml-auto sm:ml-0' : ''}" role="img" aria-label={dots.label} title={dots.label}>
+										{#each dots.dots as d (d.kind)}
+											<span class="size-1.5 rounded-full {DOT_CLS[d.tone]}"></span>
+										{/each}
+									</span>
+								{/if}
+							</div>
+						{/if}
+
+						<Button
+							variant="ghost"
+							size="sm"
+							class="order-2 h-9 w-9 shrink-0 px-0 text-muted-foreground hover:text-foreground sm:order-3 sm:w-auto sm:px-2.5"
+							aria-expanded={open}
+							aria-controls="booking-details-{b.id}"
+							aria-label={open ? 'Ocultar detalles' : 'Ver detalles'}
+							onclick={() => toggleExpand(b.id)}
+						>
+							<span class="hidden sm:inline">{open ? 'Ocultar' : 'Ver detalles'}</span>
+							<ChevronDownIcon class="size-4 transition-transform duration-150 {open ? 'rotate-180' : ''}" aria-hidden="true" />
+						</Button>
+					</div>
+
+					{#if open}
+						<div id="booking-details-{b.id}" class="space-y-5 border-t px-4 pb-4 pt-4 sm:px-5">
+							<dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+								{#if b.attendees?.[0]?.email}
+									<dt class="text-muted-foreground">Correo</dt>
+									<dd class="break-all">{b.attendees[0].email}</dd>
+								{/if}
 								<dt class="text-muted-foreground">Fecha</dt>
 								<dd class="font-medium">{fmt(b.start_at)}</dd>
 								<dt class="text-muted-foreground">Tipo</dt>
 								<dd class="break-words">{b.event_type_name || eventTypeName(b.event_type_slug)}</dd>
 								<dt class="text-muted-foreground">Atiende</dt>
 								<dd class="break-words">{b.host_name || '—'}</dd>
+								<dt class="text-muted-foreground">Estado</dt>
+								<dd>{statusLabel[b.status] ?? b.status}</dd>
 								{#if attendanceChip(b)}
 									{@const chip = attendanceChip(b)!}
 									<dt class="text-muted-foreground">Asistencia</dt>
@@ -719,156 +837,132 @@
 									<dt class="text-muted-foreground">Motivo</dt>
 									<dd class="break-words text-muted-foreground">{b.cancellation_reason}</dd>
 								{/if}
-							</dl>
-						</div>
-
-						<div class="flex shrink-0 flex-wrap items-center gap-1 md:justify-end">
-							<Tooltip.Root>
-								<Tooltip.Trigger
-									class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-									onclick={() => toggleExpand(b.id)}
-									aria-expanded={expandedId === b.id}
-									aria-label={expandedId === b.id ? 'Ocultar respuestas' : 'Ver respuestas'}
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg" width="16" height="16"
-										viewBox="0 0 24 24" fill="none" stroke="currentColor"
-										stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-										style="transition:transform .15s;transform:rotate({expandedId === b.id ? 180 : 0}deg)"
-									><polyline points="6 9 12 15 18 9"/></svg>
-								</Tooltip.Trigger>
-								<Tooltip.Content>{expandedId === b.id ? 'Ocultar respuestas' : 'Ver respuestas'}</Tooltip.Content>
-							</Tooltip.Root>
-
-							{#if b.status === 'confirmed'}
-								{#if reschedulingId === b.id}
-									<Button variant="outline" size="sm" onclick={cancelReschedule}>
-										Cancelar reprogramación
-									</Button>
-								{:else}
-									<!-- Fork: only the person who attends moves their own upcoming session. -->
-									{#if reschedulable(b)}
-										<Tooltip.Root>
-											<Tooltip.Trigger
-												class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-												onclick={() => startReschedule(b)}
-												aria-label="Reprogramar"
-											>
-												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-											</Tooltip.Trigger>
-											<Tooltip.Content>Reprogramar</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-									{#if passable(b)}
-										<Button variant="outline" size="sm" onclick={() => openPass(b)}>
-											Pasar a otra persona
-										</Button>
-									{/if}
-									{#if cancellable(b)}
-										<Button
-											variant="outline"
-											size="sm"
-											class="text-destructive hover:bg-destructive/10 hover:text-destructive"
-											onclick={() => requestCancel(b)}
-										>
-											Cancelar reunión
-										</Button>
-									{/if}
-								{/if}
-							{/if}
-						</div>
-					</div>
-					{#if b.whatsapp && b.whatsapp.length > 0}
-						<!-- Full card width, and four columns only once the card itself is wide
-						     (@container): the viewport says nothing about the room left beside the
-						     desktop sidebar, which squeezed four columns to "C…" at 768-1024 px. -->
-						<div class="@container">
-							<p class="mb-1 text-xs font-medium text-muted-foreground">Avisos de WhatsApp</p>
-							<ul class="grid grid-cols-2 gap-1.5 @2xl:grid-cols-4" aria-label="Avisos de WhatsApp">
-								{#each b.whatsapp as n, i (n.kind)}
-									{@const st = NOTICE_STATES[n.status] ?? NOTICE_STATES.not_applicable}
-									{@const detail = noticeDetail(n)}
-									<li
-										class="flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs {st.cls}"
-										title={noticeText(n, i)}
-										aria-label={noticeText(n, i)}
-									>
-										<span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-background/80 text-[11px] font-semibold text-foreground no-underline" aria-hidden="true">{i + 1}</span>
-										<span class="min-w-0 leading-tight" aria-hidden="true">
-											<span class="block truncate font-medium">{NOTICE_LABELS[n.kind] ?? n.kind}</span>
-											<span class="block truncate">{st.label}</span>
-											{#if detail}<span class="block truncate tabular-nums">{detail}</span>{/if}
-										</span>
-									</li>
-								{/each}
-							</ul>
-						</div>
-					{/if}
-					</div>
-
-					{#if expandedId === b.id}
-						<div class="border-t bg-muted/20 px-4 py-3">
-							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Detalles</p>
-							<dl class="mb-3 space-y-1.5 text-sm">
-								<div class="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
-									<dt class="shrink-0 font-medium text-foreground sm:w-48">Reservado el</dt>
-									<dd class="text-muted-foreground">{fmt(b.created_at)}</dd>
-								</div>
 								{#if b.payment_status}
-									<div class="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
-										<dt class="shrink-0 font-medium text-foreground sm:w-48">Pago</dt>
-										<dd class="text-muted-foreground">
-											{payLabel[b.payment_status] ?? b.payment_status}{#if b.amount_paid_cents} · {fmtMoney(b.amount_paid_cents, b.amount_paid_currency)}{/if}
-										</dd>
-									</div>
+									<dt class="text-muted-foreground">Pago</dt>
+									<dd>
+										{#if b.payment_status === 'paid'}
+											<Badge class="border-emerald-200 bg-emerald-50 text-emerald-700">{fmtMoney(b.amount_paid_cents, b.amount_paid_currency) || payLabel.paid}</Badge>
+										{:else if b.payment_status === 'refunded'}
+											<Badge variant="secondary" class="text-muted-foreground">reembolsado{#if b.amount_paid_cents} · {fmtMoney(b.amount_paid_cents, b.amount_paid_currency)}{/if}</Badge>
+										{:else if b.payment_status === 'pending'}
+											<Badge class="border-amber-200 bg-amber-50 text-amber-700">no pagado{#if b.amount_paid_cents} · {fmtMoney(b.amount_paid_cents, b.amount_paid_currency)}{/if}</Badge>
+										{:else}
+											{payLabel[b.payment_status] ?? b.payment_status}
+										{/if}
+									</dd>
 								{/if}
 								{#if b.location_value}
-									<div class="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
-										<dt class="shrink-0 font-medium text-foreground sm:w-48">Ubicación</dt>
-										<dd class="break-all text-muted-foreground">
-											{#if /^https?:/.test(b.location_value)}
-												<a href={b.location_value} target="_blank" rel="noopener noreferrer" class="text-primary underline">{b.location_value}</a>
-											{:else}{b.location_value}{/if}
-										</dd>
-									</div>
+									<dt class="text-muted-foreground">Ubicación</dt>
+									<dd class="break-all">
+										{#if /^https?:/.test(b.location_value)}
+											<a href={b.location_value} target="_blank" rel="noopener noreferrer" class="text-primary underline">{b.location_value}</a>
+										{:else}{b.location_value}{/if}
+									</dd>
 								{/if}
+								<dt class="text-muted-foreground">Reservado el</dt>
+								<dd class="text-muted-foreground">{fmt(b.created_at)}</dd>
 							</dl>
-							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Respuestas del formulario</p>
-							{#if answersLoading[b.id]}
-								<p class="text-sm text-muted-foreground">Cargando…</p>
-							{:else if answersFailed[b.id]}
-								<div class="flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">
-									<p class="text-sm text-destructive">No se pudieron cargar las respuestas.</p>
-									<Button variant="outline" size="sm" onclick={() => loadAnswers(b.id)}>Reintentar</Button>
+
+							{#if b.whatsapp && b.whatsapp.length > 0}
+								<!-- Full width, and four columns only once the details themselves are
+								     wide (@container): the viewport says nothing about the room left
+								     beside the desktop sidebar, which squeezed four columns to "C…". -->
+								<div class="@container">
+									<p class="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Avisos de WhatsApp</p>
+									<ul class="grid grid-cols-2 gap-1.5 @2xl:grid-cols-4" aria-label="Avisos de WhatsApp">
+										{#each b.whatsapp as n, i (n.kind)}
+											{@const st = NOTICE_STATES[n.status] ?? NOTICE_STATES.not_applicable}
+											{@const detail = noticeDetail(n)}
+											<li
+												class="flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs {st.cls}"
+												title={noticeText(n, i)}
+												aria-label={noticeText(n, i)}
+											>
+												<span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-background/80 text-[11px] font-semibold text-foreground no-underline" aria-hidden="true">{i + 1}</span>
+												<span class="min-w-0 leading-tight" aria-hidden="true">
+													<span class="block truncate font-medium">{NOTICE_LABELS[n.kind] ?? n.kind}</span>
+													<span class="block truncate">{st.label}</span>
+													{#if detail}<span class="block truncate tabular-nums">{detail}</span>{/if}
+												</span>
+											</li>
+										{/each}
+									</ul>
 								</div>
-							{:else if !answersCache[b.id] || answersCache[b.id].length === 0}
-								<p class="text-sm text-muted-foreground">No hay respuestas de formulario para esta reserva.</p>
-							{:else}
-								<dl class="space-y-2">
-									{#each answersCache[b.id] as a}
-										<div class="flex flex-col gap-0.5 text-sm sm:flex-row sm:gap-4">
-											<dt class="shrink-0 font-medium text-foreground sm:w-48">{a.label}</dt>
-											<dd class="break-words text-muted-foreground {a.type !== 'checkbox' ? 'whitespace-pre-wrap' : ''}">
-												{#if a.type === 'checkbox'}
-													<!-- Liberal comparison on purpose. Checkbox answers are canonicalised to
-													     "yes"/"no" on the way in now, but rows created before that landed hold
-													     whatever the surface sent - the embed widget sent "Yes". A strict
-													     === 'yes' renders those as "No", i.e. the opposite of what the guest
-													     ticked, which matters when the question is a consent checkbox. -->
-													{['yes', 'true', '1', 'on', 'checked'].includes(String(a.value).trim().toLowerCase()) ? 'Sí' : 'No'}
-												{:else}
-													{a.value || '—'}
-												{/if}
-											</dd>
-										</div>
-									{/each}
-								</dl>
+							{/if}
+
+							<div>
+								<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Respuestas del formulario</p>
+								{#if answersLoading[b.id]}
+									<p class="text-sm text-muted-foreground">Cargando…</p>
+								{:else if answersFailed[b.id]}
+									<div class="flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">
+										<p class="text-sm text-destructive">No se pudieron cargar las respuestas.</p>
+										<Button variant="outline" size="sm" onclick={() => loadAnswers(b.id)}>Reintentar</Button>
+									</div>
+								{:else if !answersCache[b.id] || answersCache[b.id].length === 0}
+									<p class="text-sm text-muted-foreground">No hay respuestas de formulario para esta reserva.</p>
+								{:else}
+									<dl class="space-y-2">
+										{#each answersCache[b.id] as a}
+											<div class="flex flex-col gap-0.5 text-sm sm:flex-row sm:gap-4">
+												<dt class="shrink-0 font-medium text-foreground sm:w-48">{a.label}</dt>
+												<dd class="break-words text-muted-foreground {a.type !== 'checkbox' ? 'whitespace-pre-wrap' : ''}">
+													{#if a.type === 'checkbox'}
+														<!-- Liberal comparison on purpose. Checkbox answers are canonicalised to
+														     "yes"/"no" on the way in now, but rows created before that landed hold
+														     whatever the surface sent - the embed widget sent "Yes". A strict
+														     === 'yes' renders those as "No", i.e. the opposite of what the guest
+														     ticked, which matters when the question is a consent checkbox. -->
+														{['yes', 'true', '1', 'on', 'checked'].includes(String(a.value).trim().toLowerCase()) ? 'Sí' : 'No'}
+													{:else}
+														{a.value || '—'}
+													{/if}
+												</dd>
+											</div>
+										{/each}
+									</dl>
+								{/if}
+							</div>
+
+							<!-- The actions, with their existing rules: only the person who attends
+							     moves their own upcoming session; pass and cancel only a confirmed one
+							     that has not started. -->
+							{#if b.status === 'confirmed' && (reschedulingId === b.id || reschedulable(b) || passable(b) || cancellable(b))}
+								<div class="flex flex-wrap gap-2 border-t pt-4">
+									{#if reschedulingId === b.id}
+										<Button variant="outline" size="sm" onclick={cancelReschedule}>
+											Cancelar reprogramación
+										</Button>
+									{:else}
+										{#if reschedulable(b)}
+											<Button variant="outline" size="sm" onclick={() => startReschedule(b)}>
+												<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+												Reprogramar
+											</Button>
+										{/if}
+										{#if passable(b)}
+											<Button variant="outline" size="sm" onclick={() => openPass(b)}>
+												Pasar a otra persona
+											</Button>
+										{/if}
+										{#if cancellable(b)}
+											<Button
+												variant="outline"
+												size="sm"
+												class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+												onclick={() => requestCancel(b)}
+											>
+												Cancelar reunión
+											</Button>
+										{/if}
+									{/if}
+								</div>
 							{/if}
 						</div>
 					{/if}
 
 					{#if reschedulingId === b.id}
-						<div class="border-t bg-muted/30 px-4 py-4">
+						<div class="border-t bg-muted/30 px-4 py-4 sm:px-5">
 							<p class="mb-3 text-sm font-medium">Reprogramar — {b.attendees?.[0]?.name ?? 'asistente'}</p>
 
 							<div class="flex flex-wrap items-end gap-3">
@@ -923,7 +1017,6 @@
 				</li>
 			{/each}
 		</ul>
-		</Tooltip.Provider>
 	</div>
 	{#if total > PAGE_SIZE}
 		<div class="mt-4 flex items-center justify-between gap-4">

@@ -325,8 +325,13 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   `noticeRecordRetention` mirrors that purge, change both together).
   Same page and visibility as the list; fixed queries per page (names, one UNION ALL over
   deliveries + jobs, the active webhooks); best effort - a failure drops `whatsapp`, never the
-  list. The panel shows cards (stack at 375 px; the notices span the card and take 4 columns only
-  from a 42rem-wide card, a `@container` query, since the viewport ignores the desktop sidebar) and
+  list. The panel shows SHORT cards (owner, 30 Sep 2026: "muy cargado en el celular"): client, compact
+  when (`fmtCardWhen` in `lib/booking-card.ts`), type, "con {host}" in the team view, 4 WhatsApp dots
+  (`noticeDots`) and, for the HOST only, a live countdown (`lib/countdown.ts`: floors every unit, ticks
+  every 30 s while visible); everything else behind "Ver detalles" (the whole card is tappable). Order
+  is the server's `order=asc|desc`, never a page sort. Filters fold behind "Filtros" below md. In the
+  details the notices take 4 columns only from a 42rem-wide box, a `@container` query, since the
+  viewport ignores the desktop sidebar; and
   "Cancelar reunión" (future confirmed only,
   `ConfirmDialog` with an optional reason sent as typed - it used to send the English "cancelled
   by admin"). `ConfirmDialog` takes an optional `children` snippet for that field.
