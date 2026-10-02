@@ -42,6 +42,11 @@ const (
 	reminderKindMorning = "morning"
 	reminderKind1h      = "1h"
 	reminderKind5m      = "5m"
+	// reminderKindHost5m is the HOST's "faltan 5 minutos" (webhook/fork_host.go). Same job
+	// type, so cancel, reschedule and reassign handle it with the client's reminders (they
+	// delete and re-plan by type + booking_id, whatever the kind). It is never one of the
+	// bookings list's four notices (noticeKinds).
+	reminderKindHost5m = "host_5m"
 )
 
 // webhookReminderEvents maps a job's kind to the webhook event it fires.
@@ -49,6 +54,7 @@ var webhookReminderEvents = map[string]string{
 	reminderKindMorning: webhook.EventReminderMorning,
 	reminderKind1h:      webhook.EventReminder1h,
 	reminderKind5m:      webhook.EventReminder5m,
+	reminderKindHost5m:  webhook.EventHostReminder5m,
 }
 
 // webhookReminderJob is the job payload. Field order is fixed by the struct, so the same
@@ -168,9 +174,22 @@ func (h *Handler) planForBooking(ctx context.Context, bookingID string, start ti
 }
 
 // planForBookingWith is planForBooking with the morning setting already loaded (the
-// backfill loads it once for every booking).
+// backfill loads it once for every booking). The client's reminders, then the host's.
 func (h *Handler) planForBookingWith(ctx context.Context, bookingID string, start time.Time, ms morningSetting) []plannedWebhookReminder {
-	return planWebhookReminders(start, h.morningReminderZone(ctx, bookingID, ms), ms.hour, ms.minute, time.Now())
+	now := time.Now()
+	plan := planWebhookReminders(start, h.morningReminderZone(ctx, bookingID, ms), ms.hour, ms.minute, now)
+	return append(plan, planHostReminders(start, now)...)
+}
+
+// planHostReminders is the host's part of the plan (pure): the "faltan 5 minutos" notice at
+// start - 5 min, while that is still ahead. Planned whether or not the host has a WhatsApp
+// number today: the number is read when the job RUNS (webhook hostNotice), so someone who
+// adds theirs later still gets the notice for the sessions they already have.
+func planHostReminders(start, now time.Time) []plannedWebhookReminder {
+	if t := start.Add(-5 * time.Minute); t.After(now) {
+		return []plannedWebhookReminder{{Kind: reminderKindHost5m, RunAt: t.UTC()}}
+	}
+	return nil
 }
 
 // reminderJobPayload is the exact jobs.payload for one reminder (see webhookReminderJob).
@@ -428,6 +447,10 @@ func reminderSuperseded(kind string, start, now time.Time) bool {
 		next = start.Add(-time.Hour)
 	case reminderKind1h:
 		next = start.Add(-5 * time.Minute)
+	case reminderKindHost5m:
+		// The host's "faltan 5 minutos / entra ahora" stops being true once the session
+		// has started: a worker back from downtime never sends it late.
+		next = start
 	}
 	return !now.Before(next)
 }
@@ -494,7 +517,12 @@ func (h *Handler) JobWebhookReminder(ctx context.Context, payload string) error 
 		AmountPaidCents:    b.AmountPaidCents,
 		AmountPaidCurrency: b.AmountPaidCurrency,
 	}
-	wp.ManageURL = h.webhookManageURL(ctx, event, b.HostID, b.ID, "")
+	// A host notice never carries the client's manage link, so it never mints one (the
+	// webhook package empties it as well). b.HostID is read NOW: after "Pasar a otra
+	// persona" the notice goes to the new host.
+	if !webhook.IsHostEvent(event) {
+		wp.ManageURL = h.webhookManageURL(ctx, event, b.HostID, b.ID, "")
+	}
 	if err := h.webhookSvc.Enqueue(ctx, event, wp); err != nil {
 		return fmt.Errorf("webhook reminder: enqueue %s: %w", event, err)
 	}

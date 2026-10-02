@@ -162,6 +162,9 @@ func (h *Handler) ReassignBooking(w http.ResponseWriter, r *http.Request) {
 		if err := h.replaceWebhookReminders(ctx, bCopy.ID, bCopy.StartAt); err != nil {
 			h.logger.Error("reassign: replace webhook reminders", "error", err, "booking_id", bCopy.ID)
 		}
+		if newHostID != oldHostID { // fork: the NEW host's WhatsApp, before the calendar can use up ctx (fork_host_notices.go)
+			h.enqueueHostNotice(ctx, webhook.EventHostCreated, &bCopy)
+		}
 
 		// Move the Google Calendar event: remove from the old host, recreate on
 		// the new host, and persist the new event ID (clearing it if recreation

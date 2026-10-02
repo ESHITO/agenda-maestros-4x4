@@ -69,6 +69,13 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		BookingAccent     string `json:"booking_accent"`
 		AccentCustom      bool   `json:"accent_custom"`
 		CanEditAppearance bool   `json:"can_edit_appearance"`
+		// Fork: the WhatsApp number for the host notices (fork_member_whatsapp.go). The
+		// number and its country only for whoever may change it (the same matrix) or the
+		// person themselves; has_whatsapp for every admin, so Miembros can say "Sin WhatsApp".
+		WhatsAppPhone   string `json:"whatsapp_phone,omitempty"`
+		WhatsAppCountry string `json:"whatsapp_country,omitempty"`
+		HasWhatsApp     bool   `json:"has_whatsapp"`
+		CanEditWhatsApp bool   `json:"can_edit_whatsapp"`
 	}
 	out := []userRow{}
 	byID := map[string]*userRow{}
@@ -112,11 +119,20 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	areas, links := h.teamPeople(r.Context()) // fork: áreas and personal links (cursor closed above)
 	hasHours := h.teamHoursChecker(r.Context())
 	accents := h.memberAccents(r.Context()) // fork: fork_member_appearance.go
+	phones := h.memberPhones(r.Context())   // fork: fork_member_whatsapp.go
 	for i := range out {
 		out[i].Area, out[i].PersonalLink = areas[out[i].ID], links[out[i].ID]
 		out[i].HasAvailability = hasHours(out[i].ID, out[i].Area)
 		out[i].BookingAccent, out[i].AccentCustom = accents[out[i].ID], accentIsCustom(accents[out[i].ID])
-		out[i].CanEditAppearance = !out[i].Archived && canEditAppearance(admin, out[i].ID, out[i].IsAdmin, out[i].IsOwner)
+		mayEdit := canEditAppearance(admin, out[i].ID, out[i].IsAdmin, out[i].IsOwner)
+		out[i].CanEditAppearance = !out[i].Archived && mayEdit
+		phone := phones[out[i].ID]
+		out[i].HasWhatsApp = phone != ""
+		out[i].CanEditWhatsApp = !out[i].Archived && mayEdit
+		if phone != "" && (mayEdit || out[i].ID == admin.ID) {
+			out[i].WhatsAppPhone = phone
+			out[i].WhatsAppCountry = phoneTable.CountryFor(phone, out[i].Timezone)
+		}
 	}
 
 	// Attach each member's teams (the Members↔Teams cross-reference).

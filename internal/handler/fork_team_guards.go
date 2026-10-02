@@ -234,10 +234,29 @@ func (h *Handler) TeamReconcileAfterCaller(next http.HandlerFunc) http.HandlerFu
 	}
 }
 
+// hostEventsMixMessage is the 400 for a webhook whose events mix host notices with others.
+const hostEventsMixMessage = "Los avisos al anfitrión van en su propio webhook (uno por mensaje): FunnelChat no puede mandar a dos personas desde el mismo flujo."
+
+// mixesHostEvents reports whether events holds a host notice (booking.host_*) next to any
+// other event.
+func mixesHostEvents(events []string) bool {
+	host, other := false, false
+	for _, e := range events {
+		if webhook.IsHostEvent(e) {
+			host = true
+		} else {
+			other = true
+		}
+	}
+	return host && other
+}
+
 // TeamWebhookGuard wraps POST /v1/webhooks and PATCH /v1/webhooks/{id}, on CHANGE only
 // (a PATCH re-sends what is stored):
-//   - only the owner may select the whatsapp_message field: a member's webhook would send
-//     the client a second copy of the owner's message (403);
+//   - only the owner may select the whatsapp_message or host_whatsapp_message field: a
+//     member's webhook would send a second copy of the owner's message (403);
+//   - the events sent may not mix a host notice (booking.host_*) with any other event (400;
+//     a PATCH without "events" keeps what is stored, which could not mix either);
 //   - a filter may not newly list a copy of either template (the template already
 //     includes every copy) or a holder (400).
 func (h *Handler) TeamWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
@@ -249,6 +268,7 @@ func (h *Handler) TeamWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		var req struct {
+			Events       *[]string `json:"events"`
 			Fields       *[]string `json:"fields"`
 			EventTypeIDs *[]string `json:"event_type_ids"`
 		}
@@ -286,9 +306,18 @@ func (h *Handler) TeamWebhookGuard(next http.HandlerFunc) http.HandlerFunc {
 				rows.Close() // #nosec G104 -- drained
 			}
 		}
-		if !user.IsOwner && req.Fields != nil &&
-			slices.Contains(*req.Fields, webhook.FieldWhatsAppMessage) && !slices.Contains(storedFields, webhook.FieldWhatsAppMessage) {
-			h.writeError(w, http.StatusForbidden, "Los mensajes de WhatsApp los envía el propietario.")
+		if !user.IsOwner && req.Fields != nil {
+			for _, f := range []string{webhook.FieldWhatsAppMessage, webhook.FieldHostWhatsAppMessage} {
+				if slices.Contains(*req.Fields, f) && !slices.Contains(storedFields, f) {
+					h.writeError(w, http.StatusForbidden, "Los mensajes de WhatsApp los envía el propietario.")
+					return
+				}
+			}
+		}
+		// Host notices (webhook/fork_host.go) go in a webhook of their own: a FunnelChat flow
+		// has ONE recipient, so mixing them with the client's events is always a mistake.
+		if req.Events != nil && mixesHostEvents(*req.Events) {
+			h.writeError(w, http.StatusBadRequest, hostEventsMixMessage)
 			return
 		}
 		if req.EventTypeIDs != nil {

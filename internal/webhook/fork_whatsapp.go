@@ -33,13 +33,41 @@ const (
 	WhatsAppReminder5m      = "reminder_5m"
 	WhatsAppCancelled       = "cancelled"
 	WhatsAppRescheduled     = "rescheduled"
+
+	// Host moments (fork_host.go): the notices to the person who attends the booking.
+	WhatsAppHostCreated    = "host_created"
+	WhatsAppHostReminder5m = "host_reminder_5m"
 )
 
-// WhatsAppMoments lists every moment, in the order the panel shows them.
-var WhatsAppMoments = []string{
+// WhatsAppClientMoments are the moments whose text goes to the CLIENT (whatsapp_message).
+var WhatsAppClientMoments = []string{
 	WhatsAppCreated, WhatsAppReminderMorning, WhatsAppReminder1h, WhatsAppReminder5m,
 	WhatsAppCancelled, WhatsAppRescheduled,
 }
+
+// WhatsAppHostMoments are the moments whose text goes to the HOST (host_whatsapp_message).
+var WhatsAppHostMoments = []string{WhatsAppHostCreated, WhatsAppHostReminder5m}
+
+// WhatsAppMoments lists every moment, in the order the panel shows them: the client's six,
+// then the host's two. GET/PUT/preview, the inherited texts and the validation walk it.
+var WhatsAppMoments = append(append([]string{}, WhatsAppClientMoments...), WhatsAppHostMoments...)
+
+// IsHostMoment reports whether m is one of WhatsAppHostMoments.
+func IsHostMoment(m string) bool {
+	return m == WhatsAppHostCreated || m == WhatsAppHostReminder5m
+}
+
+// hostWhatsAppMomentByEvent maps the host notices to their moment. Separate from
+// whatsAppMomentByEvent on purpose: WhatsAppMomentForEvent (the client's text, and with it
+// the manage-link minting of WhatsAppNeedsManageURL) never answers for a host event.
+var hostWhatsAppMomentByEvent = map[string]string{
+	EventHostCreated:    WhatsAppHostCreated,
+	EventHostReminder5m: WhatsAppHostReminder5m,
+}
+
+// HostWhatsAppMomentForEvent is the host moment whose text a delivery of event carries, or
+// "" for every event that is not a host notice.
+func HostWhatsAppMomentForEvent(event string) string { return hostWhatsAppMomentByEvent[event] }
 
 var whatsAppMomentByEvent = map[string]string{
 	"booking.created":     WhatsAppCreated,
@@ -99,6 +127,32 @@ var defaultWhatsAppMessages = map[string]string{
 		"📅 Ahora es el {dia}, a las {hora}, con {mentor}.\n" +
 		"Para entrar a la sesión: {enlace}\n" +
 		"Si necesitas cancelar o cambiar la fecha: {cancelar}",
+
+	// Host moments (fork_host.go), after the owner's own wording (2 Oct 2026). The owner
+	// writes the literal headers ("*Nueva Mentoría agendada*" on Mentoría privada) in each
+	// template's WhatsApp tab; copies inherit them. Neither says "hoy" nor "mañana", and
+	// {fecha_mentor} is already in the host's own zone, so both stay true anywhere.
+	WhatsAppHostCreated: "*Nueva sesión agendada: {tipo}*\n" +
+		"\n" +
+		"*Nombre:* {cliente}\n" +
+		"\n" +
+		"*Correo electrónico:* {correo}\n" +
+		"\n" +
+		"*Número:* {telefono}\n" +
+		"\n" +
+		"*Tema a tratar* \"{tema}\"\n" +
+		"\n" +
+		"*FECHA Y HORA:*\n" +
+		"{fecha_mentor}\n" +
+		"Hora de {pais_mentor}",
+	WhatsAppHostReminder5m: "*FALTAN 5 MINUTOS:* Ya casi inicia tu sesión de {tipo}\n" +
+		"\n" +
+		"*ENTRA AHORA:* {enlace_mentor}\n" +
+		"\n" +
+		"*Nombre:* {nombre_corto}\n" +
+		"*Correo:* {correo}\n" +
+		"\n" +
+		"\"{tema}\"",
 }
 
 // DefaultWhatsAppMessage is the built-in text for moment ("" for an unknown moment).
@@ -133,7 +187,8 @@ var forkWhatsAppSchema = []string{
 }
 
 // WhatsAppValues are the values the markers resolve to. Every value is attendee-facing
-// text, already in the client's zone and language.
+// text, already in the client's zone and language - except in a HOST text, where {fecha},
+// {dia} and {hora} are in the host's zone like {fecha_mentor} (HostDateValues).
 type WhatsAppValues struct {
 	Nombre   string // {nombre}: the client's name
 	Mentor   string // {mentor}: who attends (the booking's primary host)
@@ -145,11 +200,37 @@ type WhatsAppValues struct {
 	Enlace   string // {enlace}: location_value, the ATTENDEE's join link (a /e short link in a delivery)
 	Cancelar string // {cancelar}: manage_url, the cancel/reschedule link (a /c short link in a delivery)
 	Motivo   string // {motivo}: the cancellation reason (cancelled only)
+
+	// Host moments only (fork_host.go; RenderWhatsAppMoment empties them in a client text).
+	Cliente      string // {cliente}: "María Pérez (Perú 🇵🇪)", or just the name when the country is unknown
+	PaisCliente  string // {pais_cliente}: "Perú 🇵🇪" (from the client's phone, else their zone)
+	NombreCorto  string // {nombre_corto}: first given name + first surname (ShortName)
+	Correo       string // {correo}: the client's e-mail
+	Telefono     string // {telefono}: the client's number, E.164 (WhatsApp makes it tappable)
+	FechaMentor  string // {fecha_mentor}: "viernes 2 de octubre, 3:30 p. m." in the HOST's zone
+	PaisMentor   string // {pais_mentor}: whose time that is, "Perú 🇵🇪"; never empty
+	EnlaceMentor string // {enlace_mentor}: the HOST's way into the session (a /h short link)
 }
 
 // lookup resolves a lower-cased marker name. known=false leaves the marker as written.
 func (v WhatsAppValues) lookup(name string) (value string, known bool) {
 	switch name {
+	case "cliente":
+		return v.Cliente, true
+	case "pais_cliente", "país_cliente":
+		return v.PaisCliente, true
+	case "nombre_corto":
+		return v.NombreCorto, true
+	case "correo":
+		return v.Correo, true
+	case "telefono", "teléfono":
+		return v.Telefono, true
+	case "fecha_mentor":
+		return v.FechaMentor, true
+	case "pais_mentor", "país_mentor":
+		return v.PaisMentor, true
+	case "enlace_mentor":
+		return v.EnlaceMentor, true
 	case "nombre":
 		return v.Nombre, true
 	case "mentor":
@@ -235,6 +316,48 @@ func RenderWhatsApp(tmpl string, v WhatsAppValues) string {
 		tidy = tidy[:len(tidy)-1]
 	}
 	return strings.Join(tidy, "\n")
+}
+
+// RenderWhatsAppMoment is RenderWhatsApp (unchanged) with the moment's audience enforced on
+// the VALUES, so no text can cross over whatever it says:
+//
+//   - a host moment never resolves {enlace}, {cancelar} or {motivo} - the client's links;
+//   - a client moment never resolves any host value ({cliente}, {pais_cliente},
+//     {nombre_corto}, {correo}, {telefono}, {fecha_mentor}, {pais_mentor}, {enlace_mentor}).
+//
+// Those markers are known, so RenderWhatsApp's rule drops their whole line: a client text
+// that writes {enlace_mentor} loses that line and never carries the host's link.
+// Every delivery and the editor's preview render through here.
+func RenderWhatsAppMoment(moment, tmpl string, v WhatsAppValues) string {
+	if IsHostMoment(moment) {
+		v.Enlace, v.Cancelar, v.Motivo = "", "", ""
+	} else {
+		v.Cliente, v.PaisCliente, v.NombreCorto, v.Correo, v.Telefono = "", "", "", "", ""
+		v.FechaMentor, v.PaisMentor, v.EnlaceMentor = "", "", ""
+	}
+	return RenderWhatsApp(tmpl, v)
+}
+
+// WhatsAppMarkerMisuse returns why tmpl cannot be saved as the text of moment (Spanish, for
+// a 400), or "": a client text may not use {enlace_mentor} (the host's link), and a host
+// text may not use the client's {enlace}, {cancelar} or {motivo}. RenderWhatsAppMoment
+// would drop those lines anyway; this says so when the owner saves, instead of a line that
+// silently disappears. The handler asks it only for texts that CHANGE.
+func WhatsAppMarkerMisuse(moment, tmpl string) string {
+	if IsHostMoment(moment) {
+		// Word for word in frontend/src/lib/host-notices.ts markerMisuse.
+		if UsesMarker(tmpl, "enlace") || UsesMarker(tmpl, "cancelar") {
+			return "En los avisos al anfitrión usa {enlace_mentor}; {enlace} y {cancelar} son del cliente."
+		}
+		if UsesMarker(tmpl, "motivo") {
+			return "{motivo} es solo del mensaje de cancelación al cliente."
+		}
+		return ""
+	}
+	if UsesMarker(tmpl, "enlace_mentor") {
+		return "{enlace_mentor} solo sirve en los avisos al anfitrión."
+	}
+	return ""
 }
 
 // UsesMarker reports whether tmpl contains the marker name ("cancelar" matches
@@ -355,7 +478,19 @@ func (s *Service) enrichWhatsApp(ctx context.Context, event string, bd *enriched
 	if UsesMarker(tmpl, "cancelar") {
 		v.Cancelar = s.whatsAppShortLink(ctx, bd.core.ID, ShortLinkManage, v.Cancelar)
 	}
-	bd.whatsappMessage = RenderWhatsApp(tmpl, v)
+	bd.whatsappMessage = RenderWhatsAppMoment(moment, tmpl, v)
+}
+
+// enrichForkMessage is Enqueue's single fork hook after enrich: the text of a host notice
+// (enrichHostWhatsApp) or of a client moment (enrichWhatsApp), then applyAudience, which
+// decides whom the payload may address. hc is what hostNotice found (zero on client events).
+func (s *Service) enrichForkMessage(ctx context.Context, event string, bd *enrichedBooking, matching []matchedWebhook, hc hostContext) {
+	if IsHostEvent(event) {
+		s.enrichHostWhatsApp(ctx, event, bd, matching, hc)
+	} else {
+		s.enrichWhatsApp(ctx, event, bd, matching)
+	}
+	applyAudience(event, bd, hc)
 }
 
 // WhatsAppNeedsManageURL reports whether the whatsapp_message of event for this booking

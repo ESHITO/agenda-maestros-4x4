@@ -1349,6 +1349,7 @@ func (h *Handler) dispatchBookingConfirmation(b *booking.Booking, in bookingConf
 		}); err != nil {
 			h.logger.Error("enqueue booking.created webhook", "error", err, "booking_id", b.ID)
 		}
+		h.enqueueHostNotice(tctx, webhook.EventHostCreated, b) // fork: WhatsApp to the host (fork_host_notices.go)
 	}
 	if err := h.enqueueBookingReminders(tctx, b.EventTypeID, b.ID, b.StartAt); err != nil {
 		h.logger.Error("enqueue reminders", "error", err, "booking_id", b.ID)

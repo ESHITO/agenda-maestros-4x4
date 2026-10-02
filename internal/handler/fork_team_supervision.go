@@ -603,8 +603,13 @@ func (h *Handler) freshTeamHostLink(ctx context.Context, tx *sql.Tx, b *booking.
 
 // teamHostLinkCurrent reports whether a role=host room token of room is the booking's
 // CURRENT host link: true when the booking has no stored hash (upstream rule), else only
-// when the hash matches. A lookup error counts as not current (the signed-in current host
-// is still recognised by the callers' own session check).
+// when the hash matches - or when the token is one GET /h/{code} (or a host notice's long
+// fallback link) minted for the person who is STILL the booking's host
+// (fork_livekit_host_tokens, fork_host_notices.go): after "Pasar a otra persona" such a
+// token degrades to an attendee one, exactly like the e-mailed link. It stays the single
+// point of control for LiveKitToken, hostRoomOrOwner and the attendance. A lookup error
+// counts as not current (the signed-in current host is still recognised by the callers'
+// own session check).
 func (h *Handler) teamHostLinkCurrent(ctx context.Context, room, token string) bool {
 	var stored string
 	bookingID, err := h.bookingForRoom(ctx, room)
@@ -619,7 +624,18 @@ func (h *Handler) teamHostLinkCurrent(ctx context.Context, room, token string) b
 		h.logger.ErrorContext(ctx, "livekit: host link lookup", "error", err)
 		return false
 	}
-	return stored == teamRoomTokenHash(token)
+	hash := teamRoomTokenHash(token)
+	if stored == hash {
+		return true
+	}
+	var one int
+	err = h.db.QueryRowContext(ctx, `
+		SELECT 1 FROM fork_livekit_host_tokens t JOIN bookings b ON b.id = t.booking_id
+		WHERE t.token_hash = ? AND t.booking_id = ? AND t.user_id = b.host_id`, hash, bookingID).Scan(&one)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		h.logger.ErrorContext(ctx, "livekit: host token lookup", "error", err)
+	}
+	return err == nil
 }
 
 // teamHostLinkRole is LiveKitToken's hook right after the room token is verified: a

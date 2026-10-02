@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -159,10 +160,13 @@ func TestWhatsAppMomentForEvent(t *testing.T) {
 	}
 }
 
-// The field is appended to AllFields and never part of the default payload.
+// The field is appended to AllFields (only the host-notice fields come after it,
+// fork_host.go) and never part of the default payload.
 func TestWhatsAppMessageField(t *testing.T) {
-	if webhook.AllFields[len(webhook.AllFields)-1] != webhook.FieldWhatsAppMessage {
-		t.Errorf("whatsapp_message is not the last of AllFields: %v", webhook.AllFields)
+	n := len(webhook.AllFields)
+	if webhook.AllFields[n-4] != webhook.FieldWhatsAppMessage ||
+		!slices.Equal(webhook.AllFields[n-3:], []string{webhook.FieldHostPhone, webhook.FieldHostWhatsApp, webhook.FieldHostWhatsAppMessage}) {
+		t.Errorf("whatsapp_message then the three host fields must close AllFields: %v", webhook.AllFields)
 	}
 	if got := webhook.ValidFields([]string{webhook.FieldWhatsAppMessage}); len(got) != 1 {
 		t.Errorf("ValidFields dropped whatsapp_message")

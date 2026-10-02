@@ -57,6 +57,11 @@ import (
 const (
 	ShortLinkRoom   = "room"
 	ShortLinkManage = "manage"
+	// ShortLinkHost is the HOST's way into the room ({enlace_mentor} of a host notice,
+	// fork_host.go): GET /h/{code}. It lives in its own table, fork_host_short_links,
+	// because short_links' CHECK (kind IN ('room','manage')) cannot change without a
+	// table rebuild - and because a host code belongs to one person (user_id).
+	ShortLinkHost = "host"
 )
 
 // ShortCodeAlphabet: lower case, no look-alikes (no 0/o, 1/l/i), so a code read aloud or
@@ -134,10 +139,13 @@ func ValidShortCode(code string) bool {
 	return true
 }
 
-// ShortLinkPath is the route prefix of kind: "/e/" (room) or "/c/" (manage).
+// ShortLinkPath is the route prefix of kind: "/e/" (room), "/c/" (manage) or "/h/" (host).
 func ShortLinkPath(kind string) string {
-	if kind == ShortLinkManage {
+	switch kind {
+	case ShortLinkManage:
 		return "/c/"
+	case ShortLinkHost:
+		return "/h/"
 	}
 	return "/e/"
 }
@@ -167,6 +175,19 @@ var forkShortLinkSchema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_short_links_booking ON short_links (booking_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_short_links_expires ON short_links (expires_at)`,
+	// fork_host_short_links: the /h codes of the host notices (ShortLinkHost). Same keyed
+	// hash and hard cap as short_links; user_id = the host the code was SENT to (no foreign
+	// key to users, like every fork table): it opens the room as host only while that person
+	// is still the booking's host.
+	`CREATE TABLE IF NOT EXISTS fork_host_short_links (
+		code_hash  TEXT PRIMARY KEY,
+		booking_id TEXT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+		user_id    TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_fork_host_short_links_booking ON fork_host_short_links (booking_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_fork_host_short_links_expires ON fork_host_short_links (expires_at)`,
 }
 
 // shortLinkKeyLabel separates the short-link key from every other use of the instance key.
@@ -237,11 +258,64 @@ func DeleteShortLinks(ctx context.Context, db *sql.DB, bookingID, kind string) e
 	return nil
 }
 
+// CreateHostShortLink stores a new /h code for bookingID, sent to the host userID, and
+// returns it - CreateShortLink's loop on fork_host_short_links (only the keyed hash is
+// written).
+func (s *Service) CreateHostShortLink(ctx context.Context, bookingID, userID string, now time.Time) (string, error) {
+	if bookingID == "" || userID == "" {
+		return "", errors.New("webhook: host short link: booking and host are required")
+	}
+	expires := now.UTC().Add(ShortLinkMaxTTL).Format(time.RFC3339)
+	for attempt := 0; attempt < 3; attempt++ {
+		code, err := NewShortCode()
+		if err != nil {
+			return "", err
+		}
+		res, err := s.db.ExecContext(ctx, `
+			INSERT OR IGNORE INTO fork_host_short_links (code_hash, booking_id, user_id, expires_at)
+			VALUES (?, ?, ?, ?)`, s.shortCodeHash(code), bookingID, userID, expires)
+		if err != nil {
+			return "", fmt.Errorf("webhook: host short link: insert: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			return code, nil
+		}
+	}
+	return "", errors.New("webhook: host short link: no free code after 3 draws")
+}
+
+// ResolveHostShortLink returns the booking and the host a /h code was made for, or
+// ErrShortLinkNotFound when there is none or it is past its hard cap. Like
+// ResolveShortLink it checks nothing about the booking: the caller does (still that host,
+// not cancelled, not over, host not archived). The caller has already checked ValidShortCode.
+func (s *Service) ResolveHostShortLink(ctx context.Context, code string, now time.Time) (bookingID, userID string, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT booking_id, user_id FROM fork_host_short_links
+		WHERE code_hash = ? AND expires_at > ?`,
+		s.shortCodeHash(code), now.UTC().Format(time.RFC3339)).Scan(&bookingID, &userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrShortLinkNotFound
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("webhook: host short link: lookup: %w", err)
+	}
+	return bookingID, userID, nil
+}
+
 // PurgeExpiredShortLinks deletes the codes past their hard cap, in one indexed statement.
 // Called on every worker poll, next to the manage-token purge.
+//
+// Fork host notices: then, as separate best-effort statements, the /h codes past their cap
+// and the host room tokens minted from them (fork_livekit_host_tokens, EnsureTeamSchema)
+// older than the same cap - a token's room grant has long expired by then. Every statement
+// runs; the errors are joined.
 func PurgeExpiredShortLinks(ctx context.Context, db *sql.DB, now time.Time) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM short_links WHERE expires_at < ?`, now.UTC().Format(time.RFC3339))
-	return err
+	at := now.UTC().Format(time.RFC3339)
+	_, err := db.ExecContext(ctx, `DELETE FROM short_links WHERE expires_at < ?`, at)
+	_, errHost := db.ExecContext(ctx, `DELETE FROM fork_host_short_links WHERE expires_at < ?`, at)
+	_, errTokens := db.ExecContext(ctx, `DELETE FROM fork_livekit_host_tokens WHERE created_at < ?`,
+		now.UTC().Add(-ShortLinkMaxTTL).Format(time.RFC3339))
+	return errors.Join(err, errHost, errTokens)
 }
 
 // SetShortLinkBaseURL sets where the short links point: base returns the booker-facing

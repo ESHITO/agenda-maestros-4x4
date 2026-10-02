@@ -4,6 +4,7 @@ package handler
 //
 //	GET /e/{code}   302 to the attendee's join link, built at this moment
 //	GET /c/{code}   302 to /manage/{a NEW manage token}
+//	GET /h/{code}   302 to a NEW host room link, for the host the code was sent to (ShortHostLink)
 //
 // The codes are made by the webhook package while it renders whatsapp_message
 // (internal/webhook/fork_short_links.go, which explains the format, why the database
@@ -47,6 +48,81 @@ func (h *Handler) wireWebhookSvc(svc *webhook.Service) {
 	}
 	svc.SetShortLinkBaseURL(h.publicURL)
 	svc.SetLogger(h.logger)
+	// Host notices (webhook/fork_host.go): countries and zones of phone-data.json, and the
+	// long host room link for when a /h code cannot be made (fork_host_notices.go).
+	svc.SetPhoneTable(phoneTable)
+	svc.SetHostRoomLinker(h.hostRoomLink)
+}
+
+// ShortHostLink handles GET /h/{code}: the HOST's "ENTRA AHORA" link of a host notice
+// (webhook/fork_host.go). It resolves only while the code's person is STILL the booking's
+// host (a session passed to someone else closes it), that person is not archived, the
+// booking is not cancelled, LiveKit is on and the join window (end + liveKitJoinGrace) is
+// open - otherwise the same friendly 404 as /e and /c. Then it mints a host room token for
+// the booking's CURRENT end (a reschedule moves the window with no write), records its hash
+// for that host (fork_livekit_host_tokens, which teamHostLinkCurrent accepts) and answers
+// 302 with only Location. Same rate limit, headers and log redaction as /e and /c.
+func (h *Handler) ShortHostLink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+
+	code := strings.ToLower(r.PathValue("code"))
+	if !webhook.ValidShortCode(code) {
+		http.Error(w, "Este enlace no es válido.", http.StatusNotFound)
+		return
+	}
+	ctx := r.Context()
+	if h.webhookSvc == nil {
+		h.logger.WarnContext(ctx, "short link: webhook service unavailable", "kind", webhook.ShortLinkHost)
+		h.renderShortLinkInvalid(w, r)
+		return
+	}
+	now := time.Now()
+	bookingID, userID, err := h.webhookSvc.ResolveHostShortLink(ctx, code, now)
+	if errors.Is(err, webhook.ErrShortLinkNotFound) {
+		h.renderShortLinkInvalid(w, r)
+		return
+	}
+	if err != nil {
+		h.logger.ErrorContext(ctx, "short link: lookup", "error", err, "kind", webhook.ShortLinkHost)
+		http.Error(w, "Error interno. Inténtalo de nuevo en unos minutos.", http.StatusInternalServerError)
+		return
+	}
+	var status, hostID, room, locType, end string
+	var hostArchived bool
+	err = h.db.QueryRowContext(ctx, `
+		SELECT b.status, b.host_id, COALESCE(b.livekit_room, ''), COALESCE(b.location_type, ''), b.end_at,
+		       u.archived_at IS NOT NULL
+		FROM bookings b JOIN users u ON u.id = b.host_id
+		WHERE b.id = ?`, bookingID).Scan(&status, &hostID, &room, &locType, &end, &hostArchived)
+	if errors.Is(err, sql.ErrNoRows) {
+		h.renderShortLinkInvalid(w, r)
+		return
+	}
+	if err != nil {
+		h.logger.ErrorContext(ctx, "short link: load booking", "error", err, "booking_id", bookingID, "kind", webhook.ShortLinkHost)
+		http.Error(w, "Error interno. Inténtalo de nuevo en unos minutos.", http.StatusInternalServerError)
+		return
+	}
+	endAt, perr := time.Parse(time.RFC3339Nano, end)
+	if perr != nil || status == "cancelled" || hostID != userID || hostArchived ||
+		room == "" || (locType != "livekit" && locType != "") || !now.Before(endAt.Add(liveKitJoinGrace)) {
+		h.renderShortLinkInvalid(w, r)
+		return
+	}
+	target, err := h.mintHostRoomLink(ctx, bookingID, userID, room, endAt)
+	if errors.Is(err, errNoHostRoom) {
+		h.renderShortLinkInvalid(w, r) // LiveKit switched off since: the room page would 404
+		return
+	}
+	if err != nil {
+		h.logger.ErrorContext(ctx, "short link: mint host link", "error", err, "booking_id", bookingID)
+		http.Error(w, "Error interno. Inténtalo de nuevo en unos minutos.", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Location", target)
+	w.WriteHeader(http.StatusFound)
 }
 
 // ShortRoomLink handles GET /e/{code}: the "enter the session" link of a WhatsApp text.

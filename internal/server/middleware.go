@@ -60,9 +60,10 @@ func Logging(logger *slog.Logger, next http.Handler) http.Handler {
 // reach the logs: manage tokens (/manage/{token}), room join URLs (/room/...),
 // and invite tokens (/invites/{token}) would otherwise land verbatim in stdout
 // and any log drain. Query strings are never logged here (only Path is).
-// Fork: the WhatsApp short links' codes (/e/{code}, /c/{code}) are credentials too.
+// Fork: the WhatsApp short links' codes (/e/{code}, /c/{code}, the host's /h/{code}) are
+// credentials too.
 func redactTokenPaths(path string) string {
-	for _, prefix := range []string{"/manage/", "/room/", "/invites/", "/e/", "/c/"} {
+	for _, prefix := range []string{"/manage/", "/room/", "/invites/", "/e/", "/c/", "/h/"} {
 		if strings.HasPrefix(path, prefix) {
 			return prefix + "[redacted]"
 		}

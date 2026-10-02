@@ -10,6 +10,9 @@
 	import { Combobox } from '$lib/components/ui/combobox';
 	import * as Avatar from '$lib/components/ui/avatar';
 	import AvatarCropDialog from '$lib/components/AvatarCropDialog.svelte';
+	// Fork: the number the host notices go to (fork_member_whatsapp.go).
+	import WhatsAppNumberField from '$lib/components/WhatsAppNumberField.svelte';
+	import { memberWhatsAppApi, type MemberWhatsApp } from '$lib/whatsapp-phone';
 	import { toast } from 'svelte-sonner';
 	import { saveOnCmdS } from '$lib/save-shortcut';
 	import { createAsyncFlag } from '$lib/async-action.svelte';
@@ -28,6 +31,26 @@
 	let time_format = $state<'12h' | '24h'>('12h');
 	let week_start = $state(1);
 	let date_format = $state<'dmy' | 'mdy' | 'ymd'>('dmy');
+
+	// Fork: «Tu WhatsApp», loaded and saved on its own (a failure costs only this card).
+	let wa = $state<MemberWhatsApp | null>(null);
+	let waError = $state('');
+	async function loadWhatsApp() {
+		waError = '';
+		try {
+			wa = await memberWhatsAppApi.mine();
+		} catch (e: any) {
+			waError = e?.message || 'No se pudo cargar tu WhatsApp.';
+		}
+	}
+	async function saveWhatsApp(phone: string | null) {
+		const res = await memberWhatsAppApi.putMine(phone);
+		wa = res;
+		return res;
+	}
+	onMount(() => {
+		loadWhatsApp();
+	});
 
 	onMount(() => loadingFlag.run(async () => {
 		user = await api.get<User>('/v1/users/me');
@@ -88,6 +111,33 @@
 {#if loadingFlag.active}
 	<p class="py-8 text-sm text-muted-foreground">Cargando…</p>
 {:else}
+	<!-- Fork: outside the profile form (it has its own form and save). -->
+	<section class="mb-4 max-w-lg rounded-lg border bg-card p-4 sm:p-6" aria-labelledby="wa-title">
+		<h2 id="wa-title" class="text-sm font-semibold">Tu WhatsApp</h2>
+		<p class="mt-1 mb-4 text-sm text-muted-foreground">
+			Cuando un cliente agende una sesión contigo te llega un aviso a este WhatsApp con sus datos,
+			y otro 5 minutos antes de empezar con el enlace para entrar.
+		</p>
+		{#if waError}
+			<div class="flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">
+				<p class="text-sm text-destructive">{waError}</p>
+				<Button variant="outline" size="sm" onclick={loadWhatsApp}>Reintentar</Button>
+			</div>
+		{:else if wa}
+			<WhatsAppNumberField
+				id="my-whatsapp"
+				self
+				openWhenEmpty
+				phone={wa.phone}
+				country={wa.country}
+				zone={user?.timezone ?? ''}
+				save={saveWhatsApp}
+			/>
+		{:else}
+			<p class="text-sm text-muted-foreground">Cargando…</p>
+		{/if}
+	</section>
+
 	<form onsubmit={(e) => { e.preventDefault(); save(); }} class="max-w-lg space-y-4">
 		<div class="rounded-lg border bg-card p-6">
 			<h2 class="mb-4 text-sm font-semibold">Perfil</h2>

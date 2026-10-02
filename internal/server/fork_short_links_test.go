@@ -21,6 +21,7 @@ func TestRedactTokenPaths_shortLinks(t *testing.T) {
 	for in, want := range map[string]string{
 		"/e/k3pq9abx":      "/e/[redacted]",
 		"/c/k3pq9abx":      "/c/[redacted]",
+		"/h/k3pq9abx":      "/h/[redacted]", // the host's code (host notices)
 		"/manage/abc":      "/manage/[redacted]",
 		"/embed.js":        "/embed.js",
 		"/book/soporte":    "/book/soporte",

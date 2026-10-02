@@ -23,6 +23,21 @@ const (
 	EventReminder5m      = "booking.reminder_5m"      // start - 5 min
 )
 
+// Host notices (fork, fork_host.go): WhatsApp to the person who ATTENDS the booking now
+// (bookings.host_id: a mentor, a support person or the owner), never to the client. Each is
+// its own event because FunnelChat cannot branch on "event": one webhook, one flow, one
+// recipient (data.host_whatsapp). The payload is the booking.created shape, minus every
+// client destination (applyAudience).
+const (
+	EventHostCreated    = "booking.host_created"     // on creation (every path) and when the session passes to another person
+	EventHostReminder5m = "booking.host_reminder_5m" // start - 5 min, to the CURRENT host
+)
+
+// IsHostEvent reports whether event is one of the host notices.
+func IsHostEvent(event string) bool {
+	return event == EventHostCreated || event == EventHostReminder5m
+}
+
 // fallbackLocaleCode is the start_local* locale when the booking stores none this build
 // ships. The audience is Spanish-speaking (see FORCE_LOCALE in CLAUDE.md).
 const fallbackLocaleCode = "es"
@@ -208,13 +223,18 @@ func NormalizePhone(raw string) (e164, digits string) {
 // nothing reads the stored text back (the notice status in the bookings list uses the
 // delivery's status; the owner previews a text in the editor). While the delivery is in
 // flight the text stays - the stored payload IS what the worker signs and sends.
+//
+// data.host_whatsapp_message (fork_host.go) goes too, for the same reason: its
+// {enlace_mentor} is a /h code (or, as a fallback, the long host room link) - the HOST's
+// key to the room.
 func (s *Service) ScrubManageURL(ctx context.Context, deliveryID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE webhook_deliveries
-		SET payload = json_remove(payload, '$.data.manage_url', '$.data.whatsapp_message')
+		SET payload = json_remove(payload, '$.data.manage_url', '$.data.whatsapp_message', '$.data.host_whatsapp_message')
 		WHERE id = ? AND status IN ('success', 'failed') AND json_valid(payload)
 		  AND (json_extract(payload, '$.data.manage_url') IS NOT NULL
-		       OR json_extract(payload, '$.data.whatsapp_message') IS NOT NULL)`,
+		       OR json_extract(payload, '$.data.whatsapp_message') IS NOT NULL
+		       OR json_extract(payload, '$.data.host_whatsapp_message') IS NOT NULL)`,
 		deliveryID)
 	return err
 }

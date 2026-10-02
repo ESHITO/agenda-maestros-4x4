@@ -74,6 +74,15 @@ var forkTeamLinkSchema = []string{
 //   - fork_booking_reschedules: one row per move of a booking (booking.Service.Reschedule
 //     writes it after the commit; booking.BackfillRescheduleHistory rebuilds older ones from
 //     the booking.rescheduled deliveries). Times RFC3339 UTC; actor optional.
+//   - fork_member_phones: a person's WhatsApp number for the host notices (fork_host.go),
+//     E.164, always normalised on write (handler/fork_member_whatsapp.go). No foreign key to
+//     users: the reconcile deletes the rows of deleted users; an archived person keeps theirs
+//     (hostNotice skips them) in case they are restored.
+//   - fork_livekit_host_tokens: the extra host room tokens minted by GET /h/{code} (or the
+//     long fallback link of a host notice), by hash. teamHostLinkCurrent accepts one only
+//     while its user_id is still the booking's host_id, so "Pasar a otra persona" demotes
+//     it exactly as it demotes the e-mailed host link (fork_livekit_host_links stays the
+//     ONE hash per booking that link has).
 var forkTeamSchema = []string{
 	`CREATE TABLE IF NOT EXISTS fork_member_areas (
 		user_id    TEXT PRIMARY KEY,
@@ -130,6 +139,19 @@ var forkTeamSchema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_fork_booking_reschedules_booking
 		ON fork_booking_reschedules (booking_id)`,
+	`CREATE TABLE IF NOT EXISTS fork_member_phones (
+		user_id    TEXT PRIMARY KEY,
+		phone      TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS fork_livekit_host_tokens (
+		token_hash TEXT PRIMARY KEY,
+		booking_id TEXT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+		user_id    TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_fork_livekit_host_tokens_booking
+		ON fork_livekit_host_tokens (booking_id)`,
 	// attendance_since: bookings that started before the attendance records existed read
 	// "not_applicable", never a false "nadie entró". Set once, on the first boot that has it.
 	`INSERT OR IGNORE INTO fork_settings (key, value)

@@ -33,6 +33,8 @@ var whatsAppMomentLabels = map[string]string{
 	webhook.WhatsAppReminder5m:      "5 minutos antes",
 	webhook.WhatsAppCancelled:       "Cancelación",
 	webhook.WhatsAppRescheduled:     "Reprogramación",
+	webhook.WhatsAppHostCreated:     "Aviso al anfitrión: nueva sesión",
+	webhook.WhatsAppHostReminder5m:  "Aviso al anfitrión: faltan 5 minutos",
 }
 
 // whatsAppMessagesBody is the PUT and preview body. A nil field is "not sent": PUT leaves
@@ -44,6 +46,9 @@ type whatsAppMessagesBody struct {
 	Reminder5m      *string `json:"reminder_5m"`
 	Cancelled       *string `json:"cancelled"`
 	Rescheduled     *string `json:"rescheduled"`
+	// Host notices (webhook/fork_host.go).
+	HostCreated    *string `json:"host_created"`
+	HostReminder5m *string `json:"host_reminder_5m"`
 }
 
 // sent returns the moments present in the body, moment → text.
@@ -56,6 +61,8 @@ func (b whatsAppMessagesBody) sent() map[string]string {
 		webhook.WhatsAppReminder5m:      b.Reminder5m,
 		webhook.WhatsAppCancelled:       b.Cancelled,
 		webhook.WhatsAppRescheduled:     b.Rescheduled,
+		webhook.WhatsAppHostCreated:     b.HostCreated,
+		webhook.WhatsAppHostReminder5m:  b.HostReminder5m,
 	} {
 		if p != nil {
 			out[moment] = *p
@@ -64,8 +71,8 @@ func (b whatsAppMessagesBody) sent() map[string]string {
 	return out
 }
 
-// whatsAppMessagesMaxBody: six texts of MaxWhatsAppMessageLen characters, up to four bytes
-// each, plus JSON escaping.
+// whatsAppMessagesMaxBody: eight texts (the client's six, the host's two) of
+// MaxWhatsAppMessageLen characters, up to four bytes each, plus JSON escaping.
 const whatsAppMessagesMaxBody = 160 << 10
 
 // decodeWhatsAppMessages reads and checks a PUT/preview body; msg != "" is a 400.
@@ -145,6 +152,14 @@ func (h *Handler) PutWhatsAppMessages(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadRequest, bad)
 		return
 	}
+	if bad, err := h.whatsAppMarkerMisuse(r, etID, msgs); err != nil {
+		h.logger.ErrorContext(r.Context(), "whatsapp messages: load for validation", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	} else if bad != "" {
+		h.writeError(w, http.StatusBadRequest, bad)
+		return
+	}
 	if err := h.webhookSvc.SetWhatsAppMessages(r.Context(), etID, msgs); err != nil {
 		if errors.Is(err, webhook.ErrInvalidWhatsAppMessage) {
 			h.writeError(w, http.StatusBadRequest, err.Error())
@@ -157,13 +172,61 @@ func (h *Handler) PutWhatsAppMessages(w http.ResponseWriter, r *http.Request) {
 	h.writeWhatsAppMessages(w, r, etID)
 }
 
+// whatsAppMarkerMisuse refuses a marker outside its audience (webhook.WhatsAppMarkerMisuse:
+// {enlace_mentor} in a client text; {enlace}, {cancelar} or {motivo} in a host text) - only
+// in the texts this PUT CHANGES against what is stored (validate on change, not on
+// mention: the editor sends every box). "" = fine.
+func (h *Handler) whatsAppMarkerMisuse(r *http.Request, etID string, msgs map[string]string) (string, error) {
+	saved, err := h.webhookSvc.WhatsAppMessages(r.Context(), etID)
+	if err != nil {
+		return "", err
+	}
+	for _, moment := range webhook.WhatsAppMoments {
+		text, ok := msgs[moment]
+		if !ok {
+			continue
+		}
+		text = webhook.NormalizeWhatsAppMessage(text)
+		if text == "" || text == webhook.NormalizeWhatsAppMessage(saved[moment]) {
+			continue
+		}
+		if why := webhook.WhatsAppMarkerMisuse(moment, text); why != "" {
+			return "«" + whatsAppMomentLabels[moment] + "»: " + why, nil
+		}
+	}
+	return "", nil
+}
+
 // Sample data for the preview. Plausible, and obviously an example.
 const (
 	sampleWhatsAppName   = "María Pérez"
 	sampleWhatsAppTopic  = "Quiero ordenar mis finanzas y armar un presupuesto"
 	sampleWhatsAppReason = "Me surgió un imprevisto en el trabajo"
 	sampleWhatsAppZone   = "America/Lima"
+	// The client's details a host notice shows.
+	sampleWhatsAppCountry = "PE"
+	sampleWhatsAppEmail   = "maria@ejemplo.com"
+	sampleWhatsAppPhone   = "+51987654321"
+	// sampleShortCodeHost is the preview's /h code (see sampleShortCodeRoom below).
+	sampleShortCodeHost = "ejemplo3"
 )
+
+// sampleHostLink is {enlace_mentor} for the preview, as a delivery would carry it: the /h
+// short link for the built-in video room (the long sample when there is no base URL), the
+// meeting's own link - enlace, already shortened like the client's - for another web
+// meeting, and nothing for a call or an in-person meeting.
+func (h *Handler) sampleHostLink(locType, enlace string) string {
+	if locType == "livekit" {
+		if base := strings.TrimRight(h.publicURL(), "/"); base != "" {
+			return webhook.ShortLinkURL(base, webhook.ShortLinkHost, sampleShortCodeHost)
+		}
+		return enlace
+	}
+	if webhook.IsWebLink(enlace) {
+		return enlace
+	}
+	return ""
+}
 
 // sampleZoomJoinURL has the shape and length of the join_url Zoom returns for a meeting
 // made at booking time (host subdomain, 11-digit id, ?pwd=), so the preview shortens it
@@ -221,7 +284,8 @@ func (h *Handler) sampleWhatsAppLinks(locType, locValue string) (enlace, cancela
 // the given texts (the editor's current, unsaved ones; an empty one = the default, as
 // saving it would make it; an omitted one = the saved text, else the default) rendered
 // with sample data by the same code as a delivery. The
-// sample meeting is tomorrow at 10:00 in the signed-in user's zone (else America/Lima),
+// sample meeting is tomorrow at 10:00 in the zone a host notice to the signed-in user would
+// use (profile zone, else their WhatsApp number's country, else America/Lima),
 // with them as {mentor} (for the team's two templates, a placeholder name: those are sent
 // in the name of whoever attends each copy). {tema} has a sample answer only when the type asks a text
 // question - without one, real messages drop that line too. Answers each moment's text
@@ -258,14 +322,20 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	zone, _ := time.LoadLocation(sampleWhatsAppZone)
-	if tz := strings.TrimSpace(user.IANATZ); tz != "" && tz != "UTC" && tz != "Etc/UTC" {
-		if loc, err := time.LoadLocation(tz); err == nil {
+	// The sample's zone is the one a real host notice to the signed-in user would use
+	// (webhook HostZone: their profile zone, else - while it says UTC - their WhatsApp
+	// number's country), so «Ver ejemplo» agrees with the profile card and the delivery.
+	// America/Lima only when neither tells anything.
+	hostTZ, hostPhone := user.IANATZ, ""
+	if p, err := h.webhookSvc.MemberPhone(r.Context(), user.ID); err == nil {
+		hostPhone = p
+	}
+	zone := h.webhookSvc.HostZone(hostTZ, hostPhone)
+	if zone == nil || zone.String() == "UTC" {
+		zone, hostTZ, hostPhone = time.UTC, sampleWhatsAppZone, ""
+		if loc, err := time.LoadLocation(sampleWhatsAppZone); err == nil {
 			zone = loc
 		}
-	}
-	if zone == nil {
-		zone = time.UTC
 	}
 	tomorrow := time.Now().In(zone).AddDate(0, 0, 1)
 	start := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 10, 0, 0, 0, zone)
@@ -293,6 +363,16 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 	if textQuestions > 0 {
 		base.Tema = sampleWhatsAppTopic
 	}
+	// Host moments (webhook/fork_host.go): the client as the host sees them, and the dates -
+	// {fecha_mentor} and, in a host text, {fecha}/{dia}/{hora} too - by the delivery's own rule
+	// for the signed-in user (they stand for the host), with its country.
+	base.PaisCliente = webhook.CountryLabel(sampleWhatsAppCountry)
+	base.Cliente = webhook.ClientWithCountry(sampleWhatsAppName, base.PaisCliente)
+	base.NombreCorto = webhook.ShortName(sampleWhatsAppName)
+	base.Correo = sampleWhatsAppEmail
+	base.Telefono = sampleWhatsAppPhone
+	hostDates := h.webhookSvc.HostDateValues(start, hostTZ, hostPhone)
+	base.EnlaceMentor = h.sampleHostLink(locType, enlace)
 
 	out := make(map[string]any, len(webhook.WhatsAppMoments)+2)
 	for _, moment := range webhook.WhatsAppMoments {
@@ -306,10 +386,13 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 			tmpl = webhook.DefaultWhatsAppMessage(moment)
 		}
 		v := base
+		if webhook.IsHostMoment(moment) {
+			hostDates.Apply(&v)
+		}
 		if moment == webhook.WhatsAppCancelled {
 			v.Motivo = sampleWhatsAppReason
 		}
-		out[moment] = webhook.RenderWhatsApp(tmpl, v)
+		out[moment] = webhook.RenderWhatsAppMoment(moment, tmpl, v)
 	}
 	out["timezone"] = zone.String()
 	out["has_text_question"] = textQuestions > 0

@@ -410,6 +410,11 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("PUT /v1/users/me/transition", h.RequireAuth(h.TeamReconcileAfterCaller(h.PutMyTransition)))
 	mux.HandleFunc("PUT /v1/users/{id}/transition", h.RequireAuth(h.TeamReconcileAfter(h.PutUserTransition)))
 	mux.HandleFunc("GET /v1/team/transitions", h.RequireAuth(h.ListTeamTransitions))
+	// Fork: each person's WhatsApp number for the host notices (fork_member_whatsapp.go):
+	// their own from the profile; the owner (anyone) and admins (non-admin members) from Miembros.
+	mux.HandleFunc("GET /v1/users/me/whatsapp", h.RequireAuth(h.GetMyWhatsApp))
+	mux.HandleFunc("PUT /v1/users/me/whatsapp", h.RequireAuth(h.PutMyWhatsApp))
+	mux.HandleFunc("PUT /v1/users/{id}/whatsapp", h.RequireAuth(h.PutUserWhatsApp))
 	mux.HandleFunc("GET /v1/users/{id}/upcoming-bookings", h.RequireAuth(h.ListUserUpcomingBookings))
 
 	// Teams
@@ -587,6 +592,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	shortLinkRL := RateLimitBy(20, time.Minute, shortLinkClientKey)
 	mux.HandleFunc("GET /e/{code}", shortLinkRL(h.ShortRoomLink))
 	mux.HandleFunc("GET /c/{code}", shortLinkRL(h.ShortManageLink))
+	// Fork: /h enters the room as HOST, from a host notice (same budget and rules).
+	mux.HandleFunc("GET /h/{code}", shortLinkRL(h.ShortHostLink))
 
 	// Webhooks
 	// Fork: TeamWebhookGuard - only the owner selects whatsapp_message; filters list a

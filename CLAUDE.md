@@ -366,6 +366,35 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   on phones (offset below the top bar), bottom-right from `md`. In the event-type editor, Ctrl/Cmd+S
   on the WhatsApp tab saves the texts (`saveFromShortcut`), not the event type. The Webhooks page
   shows "No se pudo cargar" + Reintentar when `GET /v1/webhooks/settings` fails, never the defaults.
+- **Notices to the HOST** (owner, 2 Oct 2026; `webhook/fork_host.go`, `handler/fork_host_notices.go`):
+  events `booking.host_created` (`dispatchBookingConfirmation` on every creation path, and "Pasar a otra
+  persona" for the NEW host) and `booking.host_reminder_5m` (job kind `host_5m`, start - 5 min, sent to whoever
+  hosts WHEN it runs). **Never for an unpaid Stripe hold** (`enqueueHostNotice` and the job both skip
+  `payment_status = 'pending'`; the paid-later dispatch sends the one notice). A host event must be ALONE in
+  its webhook (`TeamWebhookGuard` 400: one FunnelChat flow = one recipient); the panel offers these events
+  to the owner only. Fields `host_phone` / `host_whatsapp` (destination) / `host_whatsapp_message` (owner
+  only, like `whatsapp_message`); `applyAudience` makes the PAYLOAD exclusive whatever is ticked (a host
+  event never carries attendee_phone/attendee_whatsapp/whatsapp_message/manage_url; a client event never a
+  host field). Nothing is queued for a host with no number or archived. Texts = moments `host_created` /
+  `host_reminder_5m` in the same `event_type_whatsapp_messages` (the event type's WhatsApp tab), rendered by
+  `RenderWhatsAppMoment`, which empties the other audience's values. Host markers: `{cliente}` ("María Pérez
+  (Perú 🇵🇪)"), `{pais_cliente}`, `{nombre_corto}` (first name + first surname), `{correo}`, `{telefono}`,
+  `{fecha_mentor}` + `{pais_mentor}` (HOST's zone: profile zone, else - while it says UTC - their number's
+  country's main zone, else UTC; city added when the country has several offsets), `{enlace_mentor}`. In a
+  host text `{fecha}`/`{dia}`/`{hora}` are ALSO the host's clock (`HostDateValues`), never the client's.
+  `WhatsAppMarkerMisuse` (mirrored word for word in `lib/host-notices.ts`) refuses `{enlace}`/`{cancelar}`/
+  `{motivo}` in a host text and `{enlace_mentor}` in a client one. «Ver ejemplo» uses the same host-zone
+  rule for the signed-in user (`HostZone` + their number; Lima only when nothing is known).
+  **Numbers**: `fork_member_phones` (EnsureTeamSchema, E.164, country code required - `NormalizePhone` + the
+  phone table): `GET|PUT /v1/users/me/whatsapp` (anyone, Perfil «Tu WhatsApp»), `PUT /v1/users/{id}/whatsapp`
+  (owner for anyone, admin for non-admin members - the appearance matrix), `GET /v1/phone-countries`
+  (phone-data.json for the picker, `lib/whatsapp-phone.ts`, `WhatsAppNumberField.svelte`; non-blocking
+  warning when the picked code seems typed twice). `GET /v1/users` shows a number only to who may change it.
+  **Host short links** `/h/{code}` (`fork_host_short_links`, keyed hash like `/e` `/c`, same rate limit and
+  redaction): a NEW code per message, valid only while that person still hosts the booking (a reassign closes
+  it), not archived, not cancelled, LiveKit on, inside end + grace; it mints a unique host room token whose
+  hash goes to `fork_livekit_host_tokens` (accepted by `teamHostLinkCurrent` only for the current host). No
+  base URL: the long host link (`SetHostRoomLinker`). A non-LiveKit web meeting gets its own link as `/e`.
 - **Event-type filter** (`internal/webhook/fork_event_types.go`): `event_type_ids` on POST/PATCH/GET
   `/v1/webhooks` (PATCH: null/omitted = unchanged); **empty = every type**, else only bookings of those
   types, for every event (one `NOT EXISTS`/`EXISTS` in `matchingWebhooks`; no booking id = no match).

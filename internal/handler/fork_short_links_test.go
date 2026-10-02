@@ -367,7 +367,7 @@ func TestShortManageLink_tokenExpiresWithTheCode(t *testing.T) {
 func bookAndSettle(t *testing.T, h *handler.Handler, database *sql.DB, slug string) string {
 	t.Helper()
 	id := bookInZone(t, h, slug, futureAt(10, 15, 0), "America/Lima", "")
-	waitReminderJobs(t, database, id, "confirmation side effects", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "confirmation side effects", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	return id
 }
 

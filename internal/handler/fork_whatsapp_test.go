@@ -195,7 +195,7 @@ func TestPutWebhookSettings_fixedZoneResyncsMorningReminders(t *testing.T) {
 	early = time.Date(early.In(madrid).Year(), early.In(madrid).Month(), early.In(madrid).Day(), 10, 0, 0, 0, madrid).UTC()
 	earlyID := bookInZone(t, h, slug, early, "Europe/Madrid", "")
 	for _, id := range []string{lateID, earlyID} {
-		waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+		waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	}
 
 	got := mustJSON(t, putSettings(t, h, key, `{"reminder_morning_hour":"07:00","reminder_morning_timezone":"America/Lima"}`), http.StatusOK, "save")
@@ -205,10 +205,10 @@ func TestPutWebhookSettings_fixedZoneResyncsMorningReminders(t *testing.T) {
 	if n, _ := got["resynced_bookings"].(float64); n < 2 {
 		t.Errorf("resynced_bookings = %v; want the 2 upcoming bookings", got["resynced_bookings"])
 	}
-	if j := reminderJobs(t, database, lateID); len(j) != 3 || j["morning"].RunAt != limaMorning(t, late) {
+	if j := reminderJobs(t, database, lateID); len(j) != 4 || j["morning"].RunAt != limaMorning(t, late) {
 		t.Errorf("Madrid 18:00: jobs %v; want the morning job at %s (07:00 Lima)", j, limaMorning(t, late))
 	}
-	if j := reminderJobs(t, database, earlyID); len(j) != 2 || j["morning"] != (reminderJob{}) {
+	if j := reminderJobs(t, database, earlyID); len(j) != 3 || j["morning"] != (reminderJob{}) {
 		t.Errorf("Madrid 10:00: jobs %v; want the morning job dropped (07:00 Lima is after the meeting)", j)
 	}
 
@@ -218,7 +218,7 @@ func TestPutWebhookSettings_fixedZoneResyncsMorningReminders(t *testing.T) {
 	cdmx = time.Date(cdmx.In(mexico).Year(), cdmx.In(mexico).Month(), cdmx.In(mexico).Day(), 10, 0, 0, 0, mexico).UTC()
 	cdmxID := bookInZone(t, h, slug, cdmx, "America/Mexico_City", "")
 	waitReminderJobs(t, database, cdmxID, "create after save", func(j map[string]reminderJob) bool {
-		return len(j) == 3 && j["morning"].RunAt == limaMorning(t, cdmx)
+		return len(j) == 4 && j["morning"].RunAt == limaMorning(t, cdmx)
 	})
 
 	// GET reflects it; back to each client's zone restores the early Madrid reminder at
@@ -231,7 +231,7 @@ func TestPutWebhookSettings_fixedZoneResyncsMorningReminders(t *testing.T) {
 	mustStatus(t, putSettings(t, h, key, `{"reminder_morning_timezone":""}`), http.StatusOK, "back to client zones")
 	e := early.In(madrid)
 	want := time.Date(e.Year(), e.Month(), e.Day(), 7, 0, 0, 0, madrid).UTC().Format(time.RFC3339)
-	if j := reminderJobs(t, database, earlyID); len(j) != 3 || j["morning"].RunAt != want {
+	if j := reminderJobs(t, database, earlyID); len(j) != 4 || j["morning"].RunAt != want {
 		t.Errorf("after going back to client zones: %v; want morning at %s (07:00 Madrid)", j, want)
 	}
 }
@@ -258,7 +258,7 @@ func TestCancelByToken_reasonReachesTheCancelledWhatsApp(t *testing.T) {
 	h, database, key, userID := setupWorkspaceWithDB(t)
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	id := bookInZone(t, h, slug, futureAt(10, 15, 0), "America/Lima", `,"language":"es"`)
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	whID := seedReminderWebhook(t, database, userID, "booking.cancelled", []string{"id", "whatsapp_message"})
 
 	tok := issueTestToken(t, database, id)
@@ -291,7 +291,7 @@ func TestJobWebhookReminder_whatsAppOnlyWebhookGetsAWorkingCancelLink(t *testing
 	h.SetPublicBaseURL("https://citas.example.com")
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	id := bookInZone(t, h, slug, futureAt(10, 15, 0), "America/Lima", `,"language":"es"`)
-	jobs := waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	jobs := waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	whID := seedReminderWebhook(t, database, userID, "booking.reminder_morning", []string{"whatsapp_message"})
 
 	if err := h.JobWebhookReminder(context.Background(), jobs["morning"].Payload); err != nil {
@@ -466,8 +466,8 @@ func TestListBookings_whatsAppNoticesAndPanelCancel(t *testing.T) {
 	id := bookInZone(t, h, slug, start, "America/Lima", "")
 	early := futureAt(11, 13, 30) // 08:30 Lima: no morning reminder (it would follow the 1 h one)
 	earlyID := bookInZone(t, h, slug, early, "America/Lima", "")
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
-	waitReminderJobs(t, database, earlyID, "create early", func(j map[string]reminderJob) bool { return len(j) == 2 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
+	waitReminderJobs(t, database, earlyID, "create early", func(j map[string]reminderJob) bool { return len(j) == 3 })
 	waitDeliveries(t, database, createdHook, 2)
 	mustExec(t, database, `UPDATE webhook_deliveries SET status = 'success', last_attempted_at = '2026-01-02T03:04:05Z' WHERE booking_id = ? AND event = 'booking.created'`, id)
 	mustExec(t, database, `UPDATE webhook_deliveries SET status = 'failed', attempt_count = 5, last_attempted_at = '2026-01-02T03:04:05Z' WHERE booking_id = ? AND event = 'booking.created'`, earlyID)

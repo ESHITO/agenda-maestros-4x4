@@ -228,7 +228,10 @@ export type WhatsAppMoment =
 	| 'reminder_1h'
 	| 'reminder_5m'
 	| 'cancelled'
-	| 'rescheduled';
+	| 'rescheduled'
+	// The two notices to the HOST (fork_host.go, lib/host-notices.ts).
+	| 'host_created'
+	| 'host_reminder_5m';
 
 /** GET/PUT /v1/event-types/{slug}/whatsapp-messages: saved texts ("" = default) + defaults. */
 export type WhatsAppMessages = Record<WhatsAppMoment, string> & {
@@ -414,6 +417,14 @@ export type TeamMember = {
 	accent_custom?: boolean;
 	/** Fork: this viewer may change their accent and photo (the server's matrix). */
 	can_edit_appearance?: boolean;
+	/** Fork: their WhatsApp number for the host notices (fork_member_whatsapp.go). The number
+	 *  and its country only when this viewer may change it or it is their own. */
+	whatsapp_phone?: string;
+	whatsapp_country?: string;
+	/** Fork: whether they have a number at all (every admin sees this). */
+	has_whatsapp?: boolean;
+	/** Fork: this viewer may set their number (PUT /v1/users/{id}/whatsapp). */
+	can_edit_whatsapp?: boolean;
 	email_login: boolean;
 	provider?: string;
 	avatar_url?: string;

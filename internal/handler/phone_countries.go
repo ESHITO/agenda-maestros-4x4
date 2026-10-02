@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/calnode/calnode/internal/webhook"
 )
 
 // Country picker data for "phone" intake questions (book.html and embed.js).
@@ -43,6 +45,12 @@ var phoneData = func() (d struct {
 	}
 	return d
 }()
+
+// phoneTable is the same file indexed for lookups (fork, webhook/fork_phone_table.go): the
+// country of a WhatsApp number or of a zone, a country's main zone. Handed to the webhook
+// service by wireWebhookSvc and used by the member WhatsApp API (fork_member_whatsapp.go).
+// Panics at init on a malformed file, like phoneData above.
+var phoneTable = webhook.MustParsePhoneTable(phoneDataRaw)
 
 // visitorCountry returns the visitor's ISO 3166-1 alpha-2 country from the CF-IPCountry
 // header Cloudflare adds when it sits in front (IP geolocation, the way Calendly guesses

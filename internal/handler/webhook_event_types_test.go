@@ -293,9 +293,9 @@ func TestWebhookEventTypes_bookingAndReminderDeliveries(t *testing.T) {
 	bkA := bookInZone(t, w.h, w.slugA, start, "America/Lima", "")
 	bkB := bookInZone(t, w.h, w.slugB, start.Add(2*time.Hour), "America/Lima", "")
 	// booking.created is enqueued before the reminders are planned, so once both bookings
-	// have their three reminder jobs, both confirmations have been through Enqueue.
-	jobsA := waitReminderJobs(t, w.db, bkA, "booking A", func(j map[string]reminderJob) bool { return len(j) == 3 })
-	jobsB := waitReminderJobs(t, w.db, bkB, "booking B", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	// have their four reminder jobs (the host_5m included), both confirmations have been through Enqueue.
+	jobsA := waitReminderJobs(t, w.db, bkA, "booking A", func(j map[string]reminderJob) bool { return len(j) == 4 })
+	jobsB := waitReminderJobs(t, w.db, bkB, "booking B", func(j map[string]reminderJob) bool { return len(j) == 4 })
 
 	for _, job := range []string{jobsA["1h"].Payload, jobsB["1h"].Payload} {
 		if err := w.h.JobWebhookReminder(context.Background(), job); err != nil {

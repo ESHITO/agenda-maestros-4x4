@@ -11,6 +11,8 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { currentUser } from '$lib/stores';
 	import { timezoneItems } from '$lib/prefs';
+	// Fork: the notices to the host (mentor / soporte), each its own webhook.
+	import { isHostEvent, mixesHostEvents } from '$lib/host-notices';
 	import { toast } from 'svelte-sonner';
 
 	let items: Webhook[] = $state([]);
@@ -91,7 +93,7 @@
 	// Event catalog (keys must match the backend's validWebhookEvents). The three
 	// reminders are separate events on purpose: FunnelChat can't branch on "event",
 	// so each WhatsApp message gets its own webhook → its own flow.
-	type EventDef = { key: string; label: string; description?: string };
+	type EventDef = { key: string; label: string; description?: string; host?: boolean };
 	const eventDefs: EventDef[] = $derived([
 		{ key: 'booking.created', label: 'Cita agendada', description: 'confirmación en cuanto se reserva' },
 		{ key: 'booking.cancelled', label: 'Cita cancelada' },
@@ -101,6 +103,9 @@
 			: `el mismo día a las ${morningHour}, hora del cliente; solo si la cita es más de 1 hora después` },
 		{ key: 'booking.reminder_1h', label: 'Recordatorio 1 hora antes' },
 		{ key: 'booking.reminder_5m', label: 'Recordatorio 5 minutos antes' },
+		// Fork: to the HOST (the mentor or support person attending), at their own WhatsApp.
+		{ key: 'booking.host_created', label: 'Aviso al anfitrión: nueva sesión', description: 'al mentor o soporte que atiende, en cuanto se agenda o se le pasa una sesión', host: true },
+		{ key: 'booking.host_reminder_5m', label: 'Aviso al anfitrión: faltan 5 minutos', description: 'al mentor o soporte, con su enlace para entrar', host: true },
 		{ key: 'recording.completed', label: 'Grabación lista' },
 		{ key: 'transcript.ready', label: 'Transcripción lista' },
 		{ key: 'notes.ready', label: 'Notas de la reunión listas' }
@@ -113,7 +118,15 @@
 		// Fork: the finished text, per event type and moment (event type → pestaña WhatsApp).
 		// It holds the client's name and, with {cancelar}, their cancel link.
 		{ group: 'WhatsApp', pii: true, fields: [
-			{ key: 'whatsapp_message', label: 'Mensaje de WhatsApp (texto listo, se edita en cada tipo de atención)', pii: true },
+			{ key: 'whatsapp_message', label: 'Mensaje de WhatsApp al cliente (texto listo, se edita en cada tipo de atención)', pii: true },
+		] },
+		// Fork: the notices to the host (webhook/fork_host.go). host_whatsapp is the recipient a
+		// FunnelChat flow sends to; only events booking.host_* fill them (and those events never
+		// carry the client's number, message or manage link, whatever is ticked).
+		{ group: 'Aviso al anfitrión (mentor o soporte)', pii: true, fields: [
+			{ key: 'host_whatsapp_message', label: 'Mensaje para el anfitrión (texto listo, se edita en cada tipo de atención)', pii: true },
+			{ key: 'host_whatsapp', label: 'WhatsApp del anfitrión (51987654321): el número al que se envía', pii: true },
+			{ key: 'host_phone', label: 'Teléfono del anfitrión (+51987654321)', pii: true },
 		] },
 		{ group: 'Reserva', fields: [
 			{ key: 'id', label: 'Referencia de la reserva' },
@@ -164,9 +177,17 @@
 	// with a 409: a second webhook would repeat the client's message). Others never see the
 	// field nor get it pre-ticked, or creating any webhook would fail.
 	const isOwner = $derived(!!$currentUser?.is_owner);
-	const visibleFieldGroups = $derived(isOwner ? fieldGroups : fieldGroups.filter((g) => g.group !== 'WhatsApp'));
+	// The same for host_whatsapp_message (the host's text is the owner's too).
+	const OWNER_ONLY_FIELDS = ['whatsapp_message', 'host_whatsapp_message'];
+	const visibleFieldGroups = $derived(
+		isOwner
+			? fieldGroups
+			: fieldGroups
+					.filter((g) => g.group !== 'WhatsApp')
+					.map((g) => ({ ...g, fields: g.fields.filter((f) => !OWNER_ONLY_FIELDS.includes(f.key)) }))
+	);
 	const defaultFieldKeys = () =>
-		$currentUser?.is_owner ? [...allFieldKeys] : allFieldKeys.filter((k) => k !== 'whatsapp_message');
+		$currentUser?.is_owner ? [...allFieldKeys] : allFieldKeys.filter((k) => !OWNER_ONLY_FIELDS.includes(k));
 
 	// Event types a webhook may be limited to (fork: GET /v1/webhooks/event-types). For the
 	// owner that is every type of the team, since the owner's webhooks get every booking.
@@ -244,6 +265,30 @@
 	let addingWA = $state<string | null>(null);
 	const sendsWhatsApp = (wh: Webhook) => (wh.fields ?? []).includes('whatsapp_message');
 	const carriesMessage = (wh: Webhook) => (wh.events ?? []).some((e) => WA_EVENTS.includes(e));
+	// Fork: a host-notice webhook (booking.host_*) sends host_whatsapp_message to host_whatsapp.
+	const isHostWebhook = (wh: Webhook) => (wh.events ?? []).some(isHostEvent);
+	const sendsHostMessage = (wh: Webhook) =>
+		(wh.fields ?? []).includes('host_whatsapp_message') && (wh.fields ?? []).includes('host_whatsapp');
+	async function addHostFields(wh: Webhook) {
+		addingWA = wh.id;
+		const add = ['host_whatsapp_message', 'host_whatsapp'].filter((f) => !(wh.fields ?? []).includes(f));
+		try {
+			await api.patch(`/v1/webhooks/${wh.id}`, { fields: [...(wh.fields ?? []), ...add] });
+			toast.success('Listo: este webhook envía el aviso (data.host_whatsapp_message) y el número del anfitrión (data.host_whatsapp).');
+			await load();
+		} catch (e: any) {
+			toast.error(e.message || 'No se pudo actualizar el webhook');
+		} finally {
+			addingWA = null;
+		}
+	}
+	const formHasHost = $derived(form.events.some(isHostEvent));
+	// Fork: the host notices are the owner's to set up - only the owner may select their text
+	// (host_whatsapp_message; TeamWebhookGuard answers 403 to anyone else), so a non-owner's
+	// host webhook could never carry a message. Others see those events only on a webhook
+	// that already has them, so they can untick them.
+	const shownEventDefs = $derived(eventDefs.filter((ev) => !ev.host || isOwner || form.events.includes(ev.key)));
+	const formMixes = $derived(mixesHostEvents(form.events));
 	async function addWhatsAppField(wh: Webhook) {
 		addingWA = wh.id;
 		try {
@@ -279,6 +324,10 @@
 		if (!form.url) { createError = 'La URL es obligatoria.'; return; }
 		if (!form.url.startsWith('https://')) { createError = 'La URL debe comenzar con https://'; return; }
 		if (form.events.length === 0) { createError = 'Selecciona al menos un evento.'; return; }
+		if (mixesHostEvents(form.events)) {
+			createError = 'Los avisos al anfitrión van en su propio webhook (uno por mensaje): FunnelChat no puede mandar a dos personas desde el mismo flujo. Desmarca los demás eventos.';
+			return;
+		}
 		if (form.typeMode === 'some' && form.eventTypeIds.length === 0) {
 			createError = 'Marca al menos un tipo de atención, o elige «Todos los tipos».';
 			return;
@@ -482,7 +531,12 @@
 		<div class="mb-4 space-y-2">
 			<p class="text-sm font-medium">Eventos a enviar</p>
 			<p class="text-xs text-muted-foreground">Para WhatsApp (FunnelChat), marca un solo evento por webhook: cada mensaje va a su propio flujo.</p>
-			{#each eventDefs as ev (ev.key)}
+			{#each shownEventDefs as ev, i (ev.key)}
+				{#if ev.host && !shownEventDefs[i - 1]?.host}
+					<p class="border-t pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						Avisos al mentor o soporte <span class="font-normal normal-case">— en un webhook aparte, uno por aviso</span>
+					</p>
+				{/if}
 				<label class="flex cursor-pointer items-start gap-2 text-sm">
 					<Checkbox
 						class="mt-0.5"
@@ -495,6 +549,22 @@
 					</span>
 				</label>
 			{/each}
+			{#if formMixes}
+				<p class="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+					Los avisos al anfitrión van en su propio webhook: FunnelChat no puede mandar a dos personas desde el mismo flujo. Deja marcado solo uno.
+				</p>
+			{:else if formHasHost && !isOwner}
+				<p class="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+					Los avisos al mentor o soporte los configura el propietario: solo él puede enviar su mensaje.
+					Este webhook no lleva ningún texto; desmarca este aviso si no lo usas.
+				</p>
+			{:else if formHasHost}
+				<p class="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+					Este aviso va a quien atiende la sesión, al WhatsApp de su perfil (o el que le pusiste en Miembros); si no tiene, no se envía.
+					En el flujo de FunnelChat usa <code class="font-mono">data.host_whatsapp</code> como número y
+					<code class="font-mono">data.host_whatsapp_message</code> como texto. Este webhook nunca lleva el número ni el mensaje del cliente.
+				</p>
+			{/if}
 		</div>
 
 		<div class="mb-4 space-y-2">
@@ -645,7 +715,15 @@
 					<dt class="text-muted-foreground">Campos</dt>
 					<dd>
 						{(wh.fields ?? []).length} campos
-						{#if sendsWhatsApp(wh)}
+						{#if isHostWebhook(wh)}
+							{#if sendsHostMessage(wh)}
+								<span class="block text-green-700">incluye aviso al anfitrión</span>
+							{:else if isOwner}
+								<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addHostFields(wh)}>
+									{addingWA === wh.id ? 'Añadiendo…' : 'Añadir aviso al anfitrión'}
+								</Button>
+							{/if}
+						{:else if sendsWhatsApp(wh)}
 							<span class="block text-green-700">incluye mensaje de WhatsApp</span>
 						{:else if carriesMessage(wh) && isOwner}
 							<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addWhatsAppField(wh)}>
@@ -694,7 +772,15 @@
 							<td class="min-w-36 px-4 py-3 text-xs">{typesLabel(wh)}</td>
 							<td class="px-4 py-3 text-xs text-muted-foreground">
 								<span class="whitespace-nowrap">{(wh.fields ?? []).length} campos</span>
-								{#if sendsWhatsApp(wh)}
+								{#if isHostWebhook(wh)}
+									{#if sendsHostMessage(wh)}
+										<span class="mt-1 block whitespace-nowrap text-green-700">incluye aviso al anfitrión</span>
+									{:else if isOwner}
+										<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addHostFields(wh)}>
+											{addingWA === wh.id ? 'Añadiendo…' : 'Añadir aviso al anfitrión'}
+										</Button>
+									{/if}
+								{:else if sendsWhatsApp(wh)}
 									<span class="mt-1 block whitespace-nowrap text-green-700">incluye mensaje de WhatsApp</span>
 								{:else if carriesMessage(wh) && isOwner}
 									<Button variant="outline" size="sm" class="mt-1 h-7 px-2 text-xs" disabled={addingWA === wh.id} onclick={() => addWhatsAppField(wh)}>

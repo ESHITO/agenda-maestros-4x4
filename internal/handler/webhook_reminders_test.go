@@ -22,7 +22,9 @@ type reminderJob struct {
 	Kind, StartAt, RunAt, Payload string
 }
 
-// reminderJobs returns the booking's pending webhook.reminder jobs keyed by kind.
+// reminderJobs returns the booking's pending webhook.reminder jobs keyed by kind - the
+// client's (morning, 1h, 5m) and the host's host_5m (fork_host_notices.go), which every
+// future booking gets too.
 func reminderJobs(t *testing.T, database *sql.DB, bookingID string) map[string]reminderJob {
 	t.Helper()
 	rows, err := database.Query(`
@@ -82,7 +84,7 @@ func TestCreateBooking_schedulesWebhookReminders(t *testing.T) {
 	start := futureAt(10, 15, 0)
 	id := bookInZone(t, h, slug, start, "America/Lima", "")
 
-	jobs := waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	jobs := waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	day := start.Format("2006-01-02")
 	for kind, want := range map[string]string{
 		"morning": day + "T13:00:00Z",
@@ -108,7 +110,7 @@ func TestRescheduleBooking_replacesWebhookReminders(t *testing.T) {
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	oldStart := futureAt(10, 15, 0)
 	id := bookInZone(t, h, slug, oldStart, "America/Lima", "")
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 
 	newStart := futureAt(12, 18, 0) // 13:00 Lima
 	rec := patchReschedule(t, h, id, newStart.Format(time.RFC3339), key)
@@ -116,7 +118,7 @@ func TestRescheduleBooking_replacesWebhookReminders(t *testing.T) {
 
 	want := newStart.Format(time.RFC3339)
 	jobs := waitReminderJobs(t, database, id, "reschedule", func(j map[string]reminderJob) bool {
-		if len(j) != 3 {
+		if len(j) != 4 {
 			return false
 		}
 		for _, job := range j {
@@ -144,7 +146,7 @@ func TestCancelBooking_deletesWebhookReminders(t *testing.T) {
 	h, database, key, _ := setupWorkspaceWithDB(t)
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	id := bookInZone(t, h, slug, futureAt(10, 15, 0), "America/Lima", "")
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 
 	req := authReq(http.MethodPost, "/v1/bookings/"+id+"/cancel", `{"reason":"test"}`, key)
 	req.SetPathValue("id", id)
@@ -202,7 +204,7 @@ func TestJobWebhookReminder_enqueuesDelivery(t *testing.T) {
 	start := futureAt(10, 15, 0)
 	id := bookInZone(t, h, slug, start, "America/Lima",
 		`,"language":"es","answers":[{"question_id":"q-wa","value":"+51 987-654-321"}]`)
-	jobs := waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	jobs := waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 
 	whID := seedReminderWebhook(t, database, userID, "booking.reminder_1h",
 		[]string{"id", "attendee_phone", "attendee_whatsapp", "start_local", "start_local_time", "manage_url"})
@@ -244,7 +246,7 @@ func TestJobWebhookReminder_skipsStaleJobs(t *testing.T) {
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	start := futureAt(10, 15, 0)
 	id := bookInZone(t, h, slug, start, "America/Lima", "")
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	whID := seedReminderWebhook(t, database, userID, "booking.reminder_5m", []string{"id"})
 	ctx := context.Background()
 
@@ -318,8 +320,8 @@ func TestBackfillWebhookReminders(t *testing.T) {
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	upcoming := bookInZone(t, h, slug, futureAt(10, 15, 0), "America/Lima", "")
 	cancelled := bookInZone(t, h, slug, futureAt(11, 15, 0), "America/Lima", "")
-	waitReminderJobs(t, database, upcoming, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
-	waitReminderJobs(t, database, cancelled, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, upcoming, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
+	waitReminderJobs(t, database, cancelled, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 
 	// Simulate "booked before the upgrade": no reminder jobs at all.
 	if _, err := database.Exec(`DELETE FROM jobs WHERE type = 'webhook.reminder'`); err != nil {
@@ -334,8 +336,8 @@ func TestBackfillWebhookReminders(t *testing.T) {
 		if _, err := h.BackfillWebhookReminders(ctx); err != nil {
 			t.Fatalf("backfill run %d: %v", run, err)
 		}
-		if got := reminderJobs(t, database, upcoming); len(got) != 3 {
-			t.Errorf("run %d: upcoming booking has %d reminder jobs; want 3 (no duplicates on re-run)", run, len(got))
+		if got := reminderJobs(t, database, upcoming); len(got) != 4 {
+			t.Errorf("run %d: upcoming booking has %d reminder jobs; want 4 - the client's three and the host's host_5m (no duplicates on re-run)", run, len(got))
 		}
 		if got := reminderJobs(t, database, cancelled); len(got) != 0 {
 			t.Errorf("run %d: cancelled booking got %d reminder jobs; want 0", run, len(got))
@@ -343,8 +345,8 @@ func TestBackfillWebhookReminders(t *testing.T) {
 	}
 	var total int
 	database.QueryRow(`SELECT COUNT(*) FROM jobs WHERE type = 'webhook.reminder'`).Scan(&total)
-	if total != 3 {
-		t.Errorf("total reminder jobs = %d; want 3", total)
+	if total != 4 {
+		t.Errorf("total reminder jobs = %d; want 4", total)
 	}
 }
 
@@ -355,7 +357,7 @@ func TestJobWebhookReminder_dropsLateReminders(t *testing.T) {
 	h, database, key, userID := setupWorkspaceWithDB(t)
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	id := bookInZone(t, h, slug, futureAt(10, 15, 0), "America/Lima", "")
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 
 	soon := time.Now().UTC().Add(3 * time.Minute).Truncate(time.Second)
 	if _, err := database.Exec(`UPDATE bookings SET start_at = ?, end_at = ? WHERE id = ?`,
@@ -388,7 +390,7 @@ func TestBackfillWebhookReminders_followsMorningHourChange(t *testing.T) {
 	slug, _ := seedEventTypeHTTP(t, h, key)
 	start := futureAt(10, 15, 0) // 10:00 in Lima (UTC-5, no DST)
 	id := bookInZone(t, h, slug, start, "America/Lima", "")
-	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 3 })
+	waitReminderJobs(t, database, id, "create", func(j map[string]reminderJob) bool { return len(j) == 4 })
 	day := start.Format("2006-01-02")
 	ctx := context.Background()
 
@@ -403,14 +405,14 @@ func TestBackfillWebhookReminders_followsMorningHourChange(t *testing.T) {
 		return reminderJobs(t, database, id)
 	}
 
-	if j := backfill("07:00"); len(j) != 3 || j["morning"].RunAt != day+"T12:00:00Z" {
+	if j := backfill("07:00"); len(j) != 4 || j["morning"].RunAt != day+"T12:00:00Z" {
 		t.Errorf("after 07:00: %v; want the pending morning job moved to 12:00Z (07:00 Lima)", j)
 	}
 	// 09:30 is less than an hour before a 10:00 meeting: no morning reminder under the rule.
-	if j := backfill("09:30"); len(j) != 2 || j["morning"] != (reminderJob{}) {
+	if j := backfill("09:30"); len(j) != 3 || j["morning"] != (reminderJob{}) {
 		t.Errorf("after 09:30: %v; want the morning job gone, 1h and 5m kept", j)
 	}
-	if j := backfill("08:00"); len(j) != 3 || j["morning"].RunAt != day+"T13:00:00Z" {
+	if j := backfill("08:00"); len(j) != 4 || j["morning"].RunAt != day+"T13:00:00Z" {
 		t.Errorf("after 08:00: %v; want the morning job back at 13:00Z", j)
 	}
 
@@ -468,6 +470,6 @@ func TestReassignBooking_replansMorningReminderInNewHostZone(t *testing.T) {
 
 	want := morningIn("America/Lima")
 	waitReminderJobs(t, database, "b1", "reassign", func(j map[string]reminderJob) bool {
-		return len(j) == 3 && j["morning"].RunAt == want
+		return len(j) == 4 && j["morning"].RunAt == want
 	})
 }

@@ -36,6 +36,9 @@
 	import * as Select from '$lib/components/ui/select';
 	import * as Avatar from '$lib/components/ui/avatar';
 	import AvatarCropDialog from '$lib/components/AvatarCropDialog.svelte';
+	// Fork: each person's WhatsApp for the host notices (fork_member_whatsapp.go).
+	import WhatsAppNumberField from '$lib/components/WhatsAppNumberField.svelte';
+	import { memberWhatsAppApi } from '$lib/whatsapp-phone';
 	import { toast } from 'svelte-sonner';
 
 	let members: TeamMember[] = $state([]);
@@ -788,6 +791,28 @@
 		});
 	}
 
+	// --- WhatsApp de cada persona (fork_member_whatsapp.go) ---
+	// The owner sets anyone's number (themselves included); an admin a non-admin member's or
+	// their own (can_edit_whatsapp, the server's matrix). Others only learn whether there is
+	// one (has_whatsapp), never the number.
+	async function saveMemberWhatsApp(m: TeamMember, phone: string | null) {
+		const res = await memberWhatsAppApi.putUser(m.id, phone);
+		patchMember(m.id, {
+			whatsapp_phone: res.phone ?? undefined,
+			whatsapp_country: res.country ?? undefined,
+			has_whatsapp: !!res.phone
+		});
+		return res;
+	}
+	// Who the notices are for: whoever attends sessions (an área) and the owner (T and S are
+	// the owner's links).
+	function attends(m: TeamMember): boolean {
+		return m.is_owner || m.area === 'mentoria' || m.area === 'soporte';
+	}
+	function missingWhatsApp(m: TeamMember): boolean {
+		return !m.archived && attends(m) && m.has_whatsapp === false;
+	}
+
 	function bookUrl(slug: string) {
 		return `${window.location.origin}/book/${slug}`;
 	}
@@ -1052,6 +1077,9 @@
 											<Badge variant="outline" class="text-xs">Atiende {AREA_LABELS[m.area]}</Badge>
 										{/if}
 										{#if m.archived}<Badge variant="outline" class="text-xs text-muted-foreground">Archivado</Badge>{/if}
+										{#if missingWhatsApp(m)}
+											<Badge variant="outline" class="border-amber-300 text-xs text-amber-800 dark:border-amber-800 dark:text-amber-300">Sin WhatsApp</Badge>
+										{/if}
 										{#each m.teams as tm}
 											<Badge variant="secondary" class="text-xs">{tm.name}</Badge>
 										{/each}
@@ -1098,6 +1126,23 @@
 										</Select.Content>
 									</Select.Root>
 								</div>
+							{/if}
+
+							{#if m.can_edit_whatsapp && !m.archived}
+								<div class="space-y-2 rounded-md border bg-background px-3 py-3">
+									<p class="text-xs font-medium text-muted-foreground">WhatsApp para los avisos de {m.id === me?.id ? 'tus' : 'sus'} sesiones</p>
+									<WhatsAppNumberField
+										id="wa-{m.id}"
+										self={m.id === me?.id}
+										personName={m.name}
+										phone={m.whatsapp_phone ?? null}
+										country={m.whatsapp_country ?? null}
+										zone={m.timezone}
+										save={(phone) => saveMemberWhatsApp(m, phone)}
+									/>
+								</div>
+							{:else if $currentUser?.is_admin && !m.archived && attends(m) && m.has_whatsapp}
+								<p class="text-xs text-muted-foreground">Tiene WhatsApp para los avisos (lo cambian esta persona o el propietario).</p>
 							{/if}
 
 							{#if m.can_edit_appearance}

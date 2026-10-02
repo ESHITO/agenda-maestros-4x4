@@ -71,6 +71,12 @@ const (
 	FieldStartLocalLong   = "start_local_long"     // "martes 9 de marzo de 2027, 09:00": no "mar" (martes/marzo) ambiguity
 	FieldStartLocalTZ     = "start_local_timezone" // the zone start_local* is really in (attendee's, else host's)
 	FieldWhatsAppMessage  = "whatsapp_message"     // the finished WhatsApp text for this moment (fork_whatsapp.go)
+
+	// Fork: host notices (fork_host.go). Filled ONLY on booking.host_* events, which in turn
+	// never carry attendee_phone, attendee_whatsapp, whatsapp_message or manage_url.
+	FieldHostPhone           = "host_phone"            // E.164, "+51987654321"
+	FieldHostWhatsApp        = "host_whatsapp"         // digits only, wa.me form, "51987654321"
+	FieldHostWhatsAppMessage = "host_whatsapp_message" // the finished WhatsApp text for the host
 )
 
 // AllFields is every selectable field, in payload order. Used to validate config
@@ -89,6 +95,7 @@ var AllFields = []string{
 	FieldManageURL,
 	FieldStartLocalLong, FieldStartLocalTZ,
 	FieldWhatsAppMessage,
+	FieldHostPhone, FieldHostWhatsApp, FieldHostWhatsAppMessage,
 }
 
 // defaultFields reproduces the original payload (no PII, no answers) so a webhook with no
@@ -164,6 +171,12 @@ type Service struct {
 	// (fork_short_links.go, SetShortLinkBaseURL). logger (fork) is for their best-effort path.
 	shortLinkBase func() string
 	logger        *slog.Logger
+	// phones (fork, fork_phone_table.go) is phone-data.json parsed: countries by dial code
+	// and zones. nil = no country names or flags in the host notices (tests), never a panic.
+	phones *PhoneTable
+	// hostRoomLinker (fork, fork_host.go) mints the HOST's long room link for a booking when
+	// a /h code cannot be made; the handler supplies it. nil = no fallback.
+	hostRoomLinker func(ctx context.Context, bookingID, hostID string) string
 }
 
 // New creates a Service. If encKeyHex is empty an ephemeral key is generated
@@ -357,6 +370,8 @@ type enrichedBooking struct {
 	startLocalLong, startLocalTZ               string
 	startLocalDay                              string // {dia}: "martes 30 de septiembre" (fork_whatsapp.go)
 	whatsappMessage                            string // data.whatsapp_message, rendered in Enqueue (fork_whatsapp.go)
+	// Host notices (fork_host.go): set only on booking.host_* events (applyAudience).
+	hostPhone, hostWhatsApp, hostWhatsAppMessage string
 }
 
 // enrich loads the data not carried in BookingPayload (host name/email, event-type
@@ -453,6 +468,10 @@ func buildData(bd enrichedBooking, fields []string) map[string]any {
 		FieldStartLocalLong:   bd.startLocalLong,
 		FieldStartLocalTZ:     bd.startLocalTZ,
 		FieldWhatsAppMessage:  bd.whatsappMessage,
+		// Fork host notices (fork_host.go): empty on every client event.
+		FieldHostPhone:           bd.hostPhone,
+		FieldHostWhatsApp:        bd.hostWhatsApp,
+		FieldHostWhatsAppMessage: bd.hostWhatsAppMessage,
 	}
 	out := make(map[string]any, len(fields))
 	for _, f := range fields {
@@ -569,11 +588,19 @@ func (s *Service) Enqueue(ctx context.Context, event string, p BookingPayload) e
 		return nil
 	}
 
+	// Fork: a host notice (fork_host.go) goes only to a host who has a WhatsApp number and
+	// is not archived; any other event returns p unchanged.
+	p, hc, skip := s.hostNotice(ctx, event, p)
+	if skip {
+		return nil
+	}
+
 	// Gather all available data once; each webhook gets its own field-filtered copy.
 	bd := s.enrich(ctx, p)
-	// Fork: the WhatsApp text for this moment, only when a receiving webhook selected it.
+	// Fork: the WhatsApp text for this moment (the client's, or the host's on a host
+	// notice), only when a receiving webhook selected it; then who the payload may address.
 	// Before the tx below: it reads, and the pool is a single connection.
-	s.enrichWhatsApp(ctx, event, &bd, matching)
+	s.enrichForkMessage(ctx, event, &bd, matching, hc)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 
 	// booking_id is a nullable FK; use NULL when empty so callers without a real

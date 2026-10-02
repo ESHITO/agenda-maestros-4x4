@@ -880,6 +880,12 @@ func reconcileTeamOrphans(ctx context.Context, tx *sql.Tx, stats *teamStats) err
 		`DELETE FROM fork_member_areas WHERE user_id NOT IN (SELECT id FROM users)`); err != nil {
 		return err
 	}
+	// Fork host notices: the WhatsApp numbers of deleted users (no foreign key to users;
+	// an archived person keeps theirs, webhook hostNotice skips them).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM fork_member_phones WHERE user_id NOT IN (SELECT id FROM users)`); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM fork_invite_roles WHERE created_by NOT IN (SELECT id FROM users)`); err != nil {
 		return err
