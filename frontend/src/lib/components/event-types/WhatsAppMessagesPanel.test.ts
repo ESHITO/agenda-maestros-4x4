@@ -1,14 +1,20 @@
 // Fork: the event type's WhatsApp tab with the host notices ("Avisos al mentor o soporte")
 // at phone width. The host section has its own chips (they insert into ITS boxes), a host
-// text using the client's link is flagged before saving, all eight texts go in one PUT, and
-// the server-rendered example shows both audiences.
+// text using the client's link is flagged before saving, all nine texts go in one PUT, and
+// the server-rendered example shows both audiences. The third host text, «Sesión cancelada»
+// (host_cancelled), takes {motivo} - which no other host text may use.
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { render, cleanup } from 'vitest-browser-svelte';
 import { page } from 'vitest/browser';
 
-const MOMENTS = ['created', 'reminder_morning', 'reminder_1h', 'reminder_5m', 'cancelled', 'rescheduled', 'host_created', 'host_reminder_5m'];
+const MOMENTS = ['created', 'reminder_morning', 'reminder_1h', 'reminder_5m', 'cancelled', 'rescheduled', 'host_created', 'host_reminder_5m', 'host_cancelled'];
 const blank = () => Object.fromEntries(MOMENTS.map((m) => [m, '']));
-const defaults = { ...blank(), host_created: '*Nueva sesión agendada: {tipo}*', host_reminder_5m: '*FALTAN 5 MINUTOS:* {enlace_mentor}' };
+const defaults = {
+	...blank(),
+	host_created: '*Nueva sesión agendada: {tipo}*',
+	host_reminder_5m: '*FALTAN 5 MINUTOS:* {enlace_mentor}',
+	host_cancelled: '🔴 *Sesión cancelada: {tipo}*\n*Motivo:* _{motivo}_'
+};
 
 const get = vi.fn(async (_path: string) => ({ ...blank(), defaults }));
 const put = vi.fn(async (_path: string, body: Record<string, string>) => ({ ...blank(), ...body, defaults }));
@@ -94,11 +100,81 @@ describe('WhatsAppMessagesPanel with the host notices, 375 px', () => {
 		expect(body.host_reminder_5m).toBe('{enlace_mentor}');
 	});
 
+	test('the third host text, «Sesión cancelada»: {motivo} goes in, the misuse check knows it', async () => {
+		const { container } = await render(Panel, { slug: 'mentoria-privada' });
+		await settle(() => expect(container.querySelector('#wa-host_cancelled')).not.toBeNull());
+		expect(container.textContent).toContain('3. Sesión cancelada');
+		expect(container.textContent).toContain('Cuando se cancela la sesión, con el motivo si lo escribieron.');
+		const cancelled = container.querySelector<HTMLTextAreaElement>('#wa-host_cancelled')!;
+		expect(cancelled.placeholder).toContain('Sesión cancelada');
+		expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(375);
+
+		// {motivo} is a chip in both sections now; the host one goes into the host box focused last.
+		const motivoChips = [...container.querySelectorAll<HTMLButtonElement>('button')].filter((b) => b.textContent?.trim() === '{motivo}');
+		expect(motivoChips).toHaveLength(2);
+		cancelled.dispatchEvent(new Event('focus'));
+		cancelled.focus();
+		motivoChips[1].click();
+		await settle(() => expect(cancelled.value).toBe('{motivo}'));
+		expect(container.querySelector<HTMLTextAreaElement>('#wa-cancelled')!.value).toBe('');
+		expect(container.textContent).not.toContain('{motivo} solo sirve en los mensajes de cancelación.');
+
+		// {motivo} in another host text, and {enlace_mentor} in the cancellation: flagged.
+		const hostCreated = container.querySelector<HTMLTextAreaElement>('#wa-host_created')!;
+		setValue(hostCreated, 'Motivo: {motivo}');
+		await settle(() => expect(container.textContent).toContain('{motivo} solo sirve en los mensajes de cancelación.'));
+		expect(button(container, 'Guardar mensajes')!.disabled).toBe(true);
+		setValue(hostCreated, '');
+		setValue(cancelled, '🔴 Mentoría cancelada\nEntra: {enlace_mentor}');
+		await settle(() => expect(container.textContent).toContain('{enlace_mentor} no sirve en el aviso de cancelación'));
+		expect(button(container, 'Guardar mensajes')!.disabled).toBe(true);
+
+		setValue(cancelled, '🔴 Mentoría cancelada\n*Motivo:* _{motivo}_\n{nombre} {telefono}\n{correo}');
+		await settle(() => expect(button(container, 'Guardar mensajes')!.disabled).toBe(false));
+		button(container, 'Guardar mensajes')!.click();
+		await settle(() => expect(put).toHaveBeenCalledTimes(1));
+		const body = put.mock.calls[0][1];
+		expect(Object.keys(body).sort()).toEqual([...MOMENTS].sort());
+		expect(body.host_cancelled).toBe('🔴 Mentoría cancelada\n*Motivo:* _{motivo}_\n{nombre} {telefono}\n{correo}');
+	});
+
+	test('a chip limited to some texts goes into its own text, never into a box that refuses it', async () => {
+		const { container } = await render(Panel, { slug: 'mentoria-privada' });
+		await settle(() => expect(container.querySelector('#wa-host_cancelled')).not.toBeNull());
+		const ta = (k: string) => container.querySelector<HTMLTextAreaElement>(`#wa-${k}`)!;
+		const chips = (k: string) => [...container.querySelectorAll<HTMLButtonElement>('button')].filter((b) => b.textContent?.trim() === k);
+
+		// Nothing focused yet (the host section's default box is «1. Nueva sesión agendada»):
+		// the host {motivo} goes into «Sesión cancelada», with no red error anywhere.
+		chips('{motivo}')[1].click();
+		await settle(() => expect(ta('host_cancelled').value).toBe('{motivo}'));
+		expect(ta('host_created').value).toBe('');
+		expect(container.textContent).not.toContain('solo sirve en los mensajes de cancelación');
+		expect(button(container, 'Guardar mensajes')!.disabled).toBe(false);
+
+		// With «Sesión cancelada» the host box in use, {enlace_mentor} (not for it) goes to the
+		// first text that takes it, at its end.
+		setValue(ta('host_created'), 'Hola');
+		ta('host_cancelled').dispatchEvent(new Event('focus'));
+		ta('host_cancelled').focus();
+		chips('{enlace_mentor}')[0].click();
+		await settle(() => expect(ta('host_created').value).toBe('Hola{enlace_mentor}'));
+		expect(ta('host_cancelled').value).toBe('{motivo}');
+		expect(container.textContent).not.toContain('{enlace_mentor} no sirve en el aviso de cancelación');
+
+		// The client {motivo} likewise lands in «Cancelación», not in «Confirmación».
+		chips('{motivo}')[0].click();
+		await settle(() => expect(ta('cancelled').value).toBe('{motivo}'));
+		expect(ta('created').value).toBe('');
+		expect(container.textContent).not.toContain('solo sirve en los mensajes de cancelación');
+	});
+
 	test('the example shows the client and the host messages', async () => {
 		const { container } = await render(Panel, { slug: 'mentoria-privada' });
 		await settle(() => expect(button(container, 'Ver ejemplo')).toBeDefined());
 		button(container, 'Ver ejemplo')!.click();
 		await settle(() => expect(container.textContent).toContain('texto de host_reminder_5m'));
+		expect(container.textContent).toContain('texto de host_cancelled');
 		expect(container.textContent).toContain('texto de created');
 		expect(container.textContent).toContain('Así lo recibiría quien atiende la sesión');
 		expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(375);

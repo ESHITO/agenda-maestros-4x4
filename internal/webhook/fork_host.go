@@ -6,14 +6,19 @@ package webhook
 // Owner request (2 Oct 2026): when a client books, the mentor or support person gets a
 // WhatsApp confirmation ("*Nueva Mentoría agendada*", the client's name, country, e-mail,
 // number and topic, and the date and time IN THE HOST'S OWN ZONE, with that country's
-// flag), and 5 minutes before the start another one with the link to enter.
+// flag), and 5 minutes before the start another one with the link to enter. Owner request
+// (5 Oct 2026): when a session is cancelled, the host is told too, with the reason.
 //
-// Two events, two webhooks, two FunnelChat flows (FunnelChat cannot branch on "event"):
+// Three events (FunnelChat cannot branch on "event"; the three share one recipient and the
+// same two keys, so they may share a webhook - TeamWebhookGuard refuses only host + client):
 //
 //	booking.host_created      every creation path (handler.dispatchBookingConfirmation)
 //	                          and "Pasar a otra persona" (handler.ReassignBooking, new host)
 //	booking.host_reminder_5m  the "webhook.reminder" job of kind host_5m, at start - 5 min,
 //	                          to whoever hosts the booking WHEN it runs
+//	booking.host_cancelled    every cancel (handler.cancelSideEffects: panel, /manage and
+//	                          its /c short link, MCP), to whoever hosted it at that moment,
+//	                          with {motivo}; never for an unpaid Stripe hold (no host_created)
 //
 // The FunnelChat flow sends data.host_whatsapp_message to data.host_whatsapp. The number is
 // the host's own (fork_member_phones: set in their profile, or by the owner/an admin from
@@ -143,7 +148,11 @@ func (s *Service) enrichHostWhatsApp(ctx context.Context, event string, bd *enri
 	if UsesMarker(tmpl, "tema") {
 		v.Tema = s.firstTextAnswer(ctx, bd.core.ID)
 	}
-	if UsesMarker(tmpl, "enlace_mentor") {
+	if moment == WhatsAppHostCancelled {
+		v.Motivo = bd.core.CancellationReason
+	} else if UsesMarker(tmpl, "enlace_mentor") {
+		// Never for a cancellation: there is nothing to enter, and no /h code or host room
+		// token should be minted for a cancelled session (RenderWhatsAppMoment drops it too).
 		v.EnlaceMentor = s.hostJoinLink(ctx, bd.core.ID, bd.core.HostID, room, locType, bd.core.LocationValue)
 	}
 	bd.hostWhatsAppMessage = RenderWhatsAppMoment(moment, tmpl, v)

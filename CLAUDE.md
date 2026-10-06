@@ -259,7 +259,8 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   row = the Go default (`defaultWhatsAppMessages`). Markers `{nombre} {mentor} {tipo} {tema} {fecha}
   {dia} {hora} {enlace} {cancelar} {motivo}` (case-insensitive, `{día}` too); `{tema}` = the answer
   to the event type's **first** `text` question (not the first answered one); `{fecha}` =
-  start_local_long, `{dia}`/`{hora}` in the client's zone; `{motivo}` only in `cancelled`. **A line
+  start_local_long, `{dia}`/`{hora}` in the client's zone; `{motivo}` only in `cancelled` (and the host's
+  `host_cancelled`, below; refused on save anywhere else). **A line
   with any known marker that resolves empty is dropped whole**; unknown markers stay as written;
   values are squeezed to one line and never re-scanned (a name typed as `{cancelar}` stays text).
   Rendered only when a receiving webhook explicitly selected the field (it is appended to
@@ -368,22 +369,36 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   shows "No se pudo cargar" + Reintentar when `GET /v1/webhooks/settings` fails, never the defaults.
 - **Notices to the HOST** (owner, 2 Oct 2026; `webhook/fork_host.go`, `handler/fork_host_notices.go`):
   events `booking.host_created` (`dispatchBookingConfirmation` on every creation path, and "Pasar a otra
-  persona" for the NEW host) and `booking.host_reminder_5m` (job kind `host_5m`, start - 5 min, sent to whoever
-  hosts WHEN it runs). **Never for an unpaid Stripe hold** (`enqueueHostNotice` and the job both skip
-  `payment_status = 'pending'`; the paid-later dispatch sends the one notice). A host event must be ALONE in
-  its webhook (`TeamWebhookGuard` 400: one FunnelChat flow = one recipient); the panel offers these events
-  to the owner only. Fields `host_phone` / `host_whatsapp` (destination) / `host_whatsapp_message` (owner
+  persona" for the NEW host), `booking.host_reminder_5m` (job kind `host_5m`, start - 5 min, sent to whoever
+  hosts WHEN it runs) and `booking.host_cancelled` (owner, 5 Oct 2026: queued ONCE per cancellation from
+  `cancelSideEffects` - panel, `/manage` and its `/c` link, MCP - to the host at cancel time, payload
+  `cancellation_reason`; queued just before the client's `booking.cancelled`, which tests use as the "side
+  effects ran" signal; both on a FRESH 15 s context after the e-mails, as in `dispatchBookingConfirmation` - slow
+  SMTP can spend cancelSideEffects' 30 s alone). **Never for an unpaid Stripe hold** (`enqueueHostNotice` and the job both skip
+  `payment_status = 'pending'`; the paid-later dispatch sends the one notice; `releaseUnpaidHold` and
+  `worker.Poll`'s backstop are bare UPDATEs and notify nobody). A webhook may not mix a host event with a client
+  one (`TeamWebhookGuard` 400: one FunnelChat flow = one recipient); the three host events may share one, and every message says so (the
+  400, the create error, the hint above the checkboxes: never "uno por mensaje" for the host ones). The
+  panel offers these events to the owner only (Webhooks label of the new one: «Aviso al mentor/soporte: sesión
+  cancelada»). Fields `host_phone` / `host_whatsapp` (destination) / `host_whatsapp_message` (owner
   only, like `whatsapp_message`); `applyAudience` makes the PAYLOAD exclusive whatever is ticked (a host
   event never carries attendee_phone/attendee_whatsapp/whatsapp_message/manage_url; a client event never a
   host field). Nothing is queued for a host with no number or archived. Texts = moments `host_created` /
-  `host_reminder_5m` in the same `event_type_whatsapp_messages` (the event type's WhatsApp tab), rendered by
-  `RenderWhatsAppMoment`, which empties the other audience's values. Host markers: `{cliente}` ("María Pérez
+  `host_reminder_5m` / `host_cancelled` in the same `event_type_whatsapp_messages` (the event type's WhatsApp
+  tab, section «Avisos al mentor o soporte», "3. Sesión cancelada"), rendered by `RenderWhatsAppMoment`, which
+  empties the other audience's values, resolves `{motivo}` only in `cancelled`/`host_cancelled`
+  (`IsCancellationMoment`; the preview uses its sample reason in both) and never `{enlace_mentor}` in
+  `host_cancelled` (no /h code or host token is minted for a cancellation). Host markers: `{cliente}` ("María Pérez
   (Perú 🇵🇪)"), `{pais_cliente}`, `{nombre_corto}` (first name + first surname), `{correo}`, `{telefono}`,
   `{fecha_mentor}` + `{pais_mentor}` (HOST's zone: profile zone, else - while it says UTC - their number's
   country's main zone, else UTC; city added when the country has several offsets), `{enlace_mentor}`. In a
   host text `{fecha}`/`{dia}`/`{hora}` are ALSO the host's clock (`HostDateValues`), never the client's.
-  `WhatsAppMarkerMisuse` (mirrored word for word in `lib/host-notices.ts`) refuses `{enlace}`/`{cancelar}`/
-  `{motivo}` in a host text and `{enlace_mentor}` in a client one. «Ver ejemplo» uses the same host-zone
+  `WhatsAppMarkerMisuse` (mirrored word for word in `lib/host-notices.ts`) refuses `{enlace}`/`{cancelar}` in a
+  host text, `{enlace_mentor}` in a client one and in `host_cancelled`, and `{motivo}` outside the two
+  cancellation texts (a chip with `moments` inserts into the first of them when the box focused last is another one: the host
+  `{motivo}` goes to «Sesión cancelada», `{enlace_mentor}` to «Nueva sesión agendada»). In `host_cancelled` the
+  `{enlace}`/`{cancelar}` refusal never points to `{enlace_mentor}` (refused there too). Perfil «Tu WhatsApp» and
+  the remove dialog list the three notices. The Reservas cancel dialog says the person who attends is told too (when they have WhatsApp). «Ver ejemplo» uses the same host-zone
   rule for the signed-in user (`HostZone` + their number; Lima only when nothing is known).
   **Numbers**: `fork_member_phones` (EnsureTeamSchema, E.164, country code required - `NormalizePhone` + the
   phone table): `GET|PUT /v1/users/me/whatsapp` (anyone, Perfil «Tu WhatsApp»), `PUT /v1/users/{id}/whatsapp`

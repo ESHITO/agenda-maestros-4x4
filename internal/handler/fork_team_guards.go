@@ -235,7 +235,7 @@ func (h *Handler) TeamReconcileAfterCaller(next http.HandlerFunc) http.HandlerFu
 }
 
 // hostEventsMixMessage is the 400 for a webhook whose events mix host notices with others.
-const hostEventsMixMessage = "Los avisos al anfitrión van en su propio webhook (uno por mensaje): FunnelChat no puede mandar a dos personas desde el mismo flujo."
+const hostEventsMixMessage = "Los avisos al anfitrión van en su propio webhook: FunnelChat no puede mandar a dos personas desde el mismo flujo. Desmarca los eventos del cliente; los avisos al mentor o soporte pueden ir juntos."
 
 // mixesHostEvents reports whether events holds a host notice (booking.host_*) next to any
 // other event.

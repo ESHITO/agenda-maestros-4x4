@@ -20,8 +20,9 @@ var validWebhookEvents = []string{
 	// Fork: scheduled reminders (webhook_reminders.go), one event per moment because
 	// FunnelChat cannot branch on "event".
 	webhook.EventReminderMorning, webhook.EventReminder1h, webhook.EventReminder5m,
-	// Fork: the host notices (webhook/fork_host.go), one webhook each.
-	webhook.EventHostCreated, webhook.EventHostReminder5m,
+	// Fork: the host notices (webhook/fork_host.go). They may share a webhook with each
+	// other (one recipient), never with a client event (TeamWebhookGuard).
+	webhook.EventHostCreated, webhook.EventHostReminder5m, webhook.EventHostCancelled,
 }
 
 func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,5 @@
 // Fork (Agenda Maestros 4x4): each person's WhatsApp number, for the notices to the host
-// ("nueva sesión agendada" and "faltan 5 minutos", internal/webhook/fork_host.go).
+// ("nueva sesión agendada", "faltan 5 minutos" and "sesión cancelada", internal/webhook/fork_host.go).
 //
 // The number is stored by the server in E.164 (fork_member_phones) through
 //   GET/PUT /v1/users/me/whatsapp   (anyone signed in: Perfil → «Tu WhatsApp»)

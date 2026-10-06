@@ -1,6 +1,6 @@
 <!--
   Fork (Agenda Maestros 4x4): one person's WhatsApp number, for the notices to the host
-  ("nueva sesión agendada", "faltan 5 minutos"). Used by Perfil («Tu WhatsApp», PUT
+  ("nueva sesión agendada", "faltan 5 minutos", "sesión cancelada"). Used by Perfil («Tu WhatsApp», PUT
   /v1/users/me/whatsapp) and by Miembros (PUT /v1/users/{id}/whatsapp: the owner for anyone,
   an admin for non-admin members). Saved on its own, never with another form.
 
@@ -201,8 +201,8 @@
 	bind:open={removeOpen}
 	title={self ? '¿Quitar tu WhatsApp?' : `¿Quitar el WhatsApp de ${personName || 'esta persona'}?`}
 	description={self
-		? 'Dejarás de recibir los avisos de tus sesiones (nueva sesión y «faltan 5 minutos»).'
-		: 'Dejará de recibir los avisos de sus sesiones (nueva sesión y «faltan 5 minutos»).'}
+		? 'Dejarás de recibir los avisos de tus sesiones (nueva sesión, «faltan 5 minutos» y sesión cancelada).'
+		: 'Dejará de recibir los avisos de sus sesiones (nueva sesión, «faltan 5 minutos» y sesión cancelada).'}
 	confirmText="Quitar"
 	cancelText="Cancelar"
 	destructive

@@ -97,6 +97,17 @@ describe('WhatsAppNumberField at 375 px', () => {
 		await settle(() => expect(save).toHaveBeenCalledWith('+51912345678'));
 	});
 
+	test('removing the number lists every notice it stops, the cancellation included', async () => {
+		const save = vi.fn(async (p: string | null) => answer(p));
+		const { container } = await render(WhatsAppNumberField, {
+			id: 't4', phone: '+51987654321', country: 'PE', zone: 'America/Lima', self: true, save
+		});
+		await settle(() => expect(container.textContent).toContain('+51 987 654 321'));
+		[...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Quitar')!.click();
+		await settle(() => expect(document.body.textContent).toContain('¿Quitar tu WhatsApp?'));
+		expect(document.body.textContent).toContain('(nueva sesión, «faltan 5 minutos» y sesión cancelada)');
+	});
+
 	test('with no number, Perfil opens the form on the profile country', async () => {
 		const save = vi.fn(async (p: string | null) => answer(p));
 		const { container } = await render(WhatsAppNumberField, {

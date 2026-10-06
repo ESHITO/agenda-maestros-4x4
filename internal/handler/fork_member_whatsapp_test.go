@@ -205,10 +205,20 @@ func TestTeamWebhookGuard_hostNotices(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Los avisos al anfitrión van en su propio webhook") {
 		t.Errorf("mixed events: %d %s", rec.Code, rec.Body.String())
 	}
+	// The refusal must not tell the owner to split the host notices too: they may share one.
+	if body := rec.Body.String(); strings.Contains(body, "uno por mensaje") || !strings.Contains(body, "Desmarca los eventos del cliente") {
+		t.Errorf("mixed events message: %s", body)
+	}
 	mustStatus(t, call(http.MethodPost, ownerKey, "", `{"url":"https://x.example.com","events":["booking.host_created"],"fields":["host_whatsapp","host_whatsapp_message"]}`),
 		http.StatusNoContent, "owner, host notice alone")
 	mustStatus(t, call(http.MethodPost, ownerKey, "", `{"url":"https://x.example.com","events":["booking.host_created","booking.host_reminder_5m"]}`),
 		http.StatusNoContent, "both host notices together (one recipient)")
+	mustStatus(t, call(http.MethodPost, ownerKey, "", `{"url":"https://x.example.com","events":["booking.host_created","booking.host_reminder_5m","booking.host_cancelled"]}`),
+		http.StatusNoContent, "the three host notices together (one recipient)")
+	rec = call(http.MethodPost, ownerKey, "", `{"url":"https://x.example.com","events":["booking.cancelled","booking.host_cancelled"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("client + host cancellation in one webhook: %d", rec.Code)
+	}
 	rec = call(http.MethodPost, member, "", `{"url":"https://x.example.com","events":["booking.host_created"],"fields":["host_whatsapp_message"]}`)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("member selecting host_whatsapp_message: %d", rec.Code)
@@ -223,8 +233,69 @@ func TestTeamWebhookGuard_hostNotices(t *testing.T) {
 		t.Errorf("PATCH mixing: %d", rec.Code)
 	}
 	mustStatus(t, call(http.MethodPatch, ownerKey, whID, `{"fields":["host_whatsapp","host_whatsapp_message"]}`), http.StatusNoContent, "PATCH fields only")
-	if passed != 4 {
-		t.Errorf("the handler ran %d times; want 4", passed)
+	if passed != 5 {
+		t.Errorf("the handler ran %d times; want 5", passed)
+	}
+}
+
+// The host's cancellation text (host_cancelled) in the texts API: GET/PUT carry it with its
+// default, {motivo} is allowed there (and in the client's cancellation) and nowhere else,
+// {enlace_mentor} is refused there, and the preview renders it with the sample reason.
+func TestWhatsAppMessagesAPI_hostCancelled(t *testing.T) {
+	h, database, key, _ := setupWorkspaceWithDB(t)
+	h.SetPublicBaseURL("https://citas.example.com")
+	slug, etID := seedEventTypeHTTP(t, h, key)
+	mustExec(t, database, `UPDATE event_types SET location_type = 'livekit', location_value = '' WHERE id = ?`, etID)
+	path := "/v1/event-types/" + slug + "/whatsapp-messages"
+	put := func(body string) *httptest.ResponseRecorder {
+		return slugCall(h, h.PutWhatsAppMessages, http.MethodPut, path, slug, body, key)
+	}
+
+	got := mustJSON(t, slugCall(h, h.GetWhatsAppMessages, http.MethodGet, path, slug, "", key), http.StatusOK, "get")
+	defaults, _ := got["defaults"].(map[string]any)
+	if v, ok := got["host_cancelled"]; !ok || v != "" {
+		t.Errorf("fresh host_cancelled = %v (present %v)", v, ok)
+	}
+	if d, _ := defaults["host_cancelled"].(string); !strings.HasPrefix(d, "🔴 *Sesión cancelada: {tipo}*\n*Motivo:* _{motivo}_\n") ||
+		!strings.Contains(d, "{fecha_mentor}") || strings.Contains(d, "{enlace_mentor}") {
+		t.Errorf("defaults.host_cancelled = %q", d)
+	}
+
+	for body, want := range map[string]string{
+		`{"host_created":"Motivo: {motivo}"}`:      "«Aviso al anfitrión: nueva sesión»: {motivo} solo sirve en los mensajes de cancelación.",
+		`{"created":"Motivo: {motivo}"}`:           "«Confirmación»: {motivo} solo sirve en los mensajes de cancelación.",
+		`{"host_cancelled":"{enlace_mentor}"}`:     "«Aviso al anfitrión: sesión cancelada»: {enlace_mentor} no sirve en el aviso de cancelación: esa sesión ya no se hará.",
+		`{"host_cancelled":"Cliente: {cancelar}"}`: "«Aviso al anfitrión: sesión cancelada»: {enlace} y {cancelar} son del cliente; en el aviso de cancelación no hace falta ningún enlace.",
+	} {
+		rec := put(body)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("PUT %s: %d %s; want 400 %q", body, rec.Code, rec.Body.String(), want)
+		}
+	}
+	got = mustJSON(t, put(`{"host_cancelled":"🔴 Mentoría cancelada\n*Motivo:* _{motivo}_\n{nombre} {telefono}\n{correo}","cancelled":"Motivo: {motivo}"}`),
+		http.StatusOK, "motivo in both cancellation texts")
+	if got["host_cancelled"] != "🔴 Mentoría cancelada\n*Motivo:* _{motivo}_\n{nombre} {telefono}\n{correo}" {
+		t.Errorf("host_cancelled = %v", got["host_cancelled"])
+	}
+
+	p := mustJSON(t, slugCall(h, h.PreviewWhatsAppMessages, http.MethodPost, path+"/preview", slug, `{"host_cancelled":""}`, key), http.StatusOK, "preview")
+	c, _ := p["host_cancelled"].(string)
+	for _, want := range []string{"🔴 *Sesión cancelada: Test Meeting*", "*Motivo:* _Me surgió un imprevisto en el trabajo_", "*Nombre:* María Pérez\n",
+		"*Número:* +51987654321", "*Correo:* maria@ejemplo.com", ", 10:00 a. m.\nHora de Perú 🇵🇪"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("preview host_cancelled lacks %q:\n%s", want, c)
+		}
+	}
+	if strings.Contains(c, "/h/") {
+		t.Errorf("preview host_cancelled carries a host link: %q", c)
+	}
+	// The saved text (sent as omitted) renders too, with the reason.
+	p = mustJSON(t, slugCall(h, h.PreviewWhatsAppMessages, http.MethodPost, path+"/preview", slug, `{}`, key), http.StatusOK, "preview saved")
+	if c, _ := p["host_cancelled"].(string); c != "🔴 Mentoría cancelada\n*Motivo:* _Me surgió un imprevisto en el trabajo_\nMaría Pérez +51987654321\nmaria@ejemplo.com" {
+		t.Errorf("preview saved host_cancelled = %q", c)
+	}
+	if s, _ := p["created"].(string); strings.Contains(s, "imprevisto") {
+		t.Errorf("the sample reason reached a non-cancellation text: %q", s)
 	}
 }
 

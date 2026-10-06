@@ -37,6 +37,7 @@ const (
 	// Host moments (fork_host.go): the notices to the person who attends the booking.
 	WhatsAppHostCreated    = "host_created"
 	WhatsAppHostReminder5m = "host_reminder_5m"
+	WhatsAppHostCancelled  = "host_cancelled"
 )
 
 // WhatsAppClientMoments are the moments whose text goes to the CLIENT (whatsapp_message).
@@ -46,15 +47,15 @@ var WhatsAppClientMoments = []string{
 }
 
 // WhatsAppHostMoments are the moments whose text goes to the HOST (host_whatsapp_message).
-var WhatsAppHostMoments = []string{WhatsAppHostCreated, WhatsAppHostReminder5m}
+var WhatsAppHostMoments = []string{WhatsAppHostCreated, WhatsAppHostReminder5m, WhatsAppHostCancelled}
 
 // WhatsAppMoments lists every moment, in the order the panel shows them: the client's six,
-// then the host's two. GET/PUT/preview, the inherited texts and the validation walk it.
+// then the host's three. GET/PUT/preview, the inherited texts and the validation walk it.
 var WhatsAppMoments = append(append([]string{}, WhatsAppClientMoments...), WhatsAppHostMoments...)
 
 // IsHostMoment reports whether m is one of WhatsAppHostMoments.
 func IsHostMoment(m string) bool {
-	return m == WhatsAppHostCreated || m == WhatsAppHostReminder5m
+	return m == WhatsAppHostCreated || m == WhatsAppHostReminder5m || m == WhatsAppHostCancelled
 }
 
 // hostWhatsAppMomentByEvent maps the host notices to their moment. Separate from
@@ -63,6 +64,7 @@ func IsHostMoment(m string) bool {
 var hostWhatsAppMomentByEvent = map[string]string{
 	EventHostCreated:    WhatsAppHostCreated,
 	EventHostReminder5m: WhatsAppHostReminder5m,
+	EventHostCancelled:  WhatsAppHostCancelled,
 }
 
 // HostWhatsAppMomentForEvent is the host moment whose text a delivery of event carries, or
@@ -153,6 +155,18 @@ var defaultWhatsAppMessages = map[string]string{
 		"*Correo:* {correo}\n" +
 		"\n" +
 		"\"{tema}\"",
+	// After the owner's sketch (5 Oct 2026): which session it was (the type and, in the
+	// host's own zone, when), the reason when one was written (an empty one drops its line,
+	// like any empty marker) and how to reach the client. No {enlace_mentor}: nothing to enter.
+	WhatsAppHostCancelled: "🔴 *Sesión cancelada: {tipo}*\n" +
+		"*Motivo:* _{motivo}_\n" +
+		"\n" +
+		"*Nombre:* {nombre}\n" +
+		"*Número:* {telefono}\n" +
+		"*Correo:* {correo}\n" +
+		"\n" +
+		"📅 {fecha_mentor}\n" +
+		"Hora de {pais_mentor}",
 }
 
 // DefaultWhatsAppMessage is the built-in text for moment ("" for an unknown moment).
@@ -199,7 +213,7 @@ type WhatsAppValues struct {
 	Hora     string // {hora}: "10:00 a. m." (12-hour clock, internal/i18n/fork_clock.go)
 	Enlace   string // {enlace}: location_value, the ATTENDEE's join link (a /e short link in a delivery)
 	Cancelar string // {cancelar}: manage_url, the cancel/reschedule link (a /c short link in a delivery)
-	Motivo   string // {motivo}: the cancellation reason (cancelled only)
+	Motivo   string // {motivo}: the cancellation reason (cancelled and host_cancelled only)
 
 	// Host moments only (fork_host.go; RenderWhatsAppMoment empties them in a client text).
 	Cliente      string // {cliente}: "María Pérez (Perú 🇵🇪)", or just the name when the country is unknown
@@ -321,41 +335,61 @@ func RenderWhatsApp(tmpl string, v WhatsAppValues) string {
 // RenderWhatsAppMoment is RenderWhatsApp (unchanged) with the moment's audience enforced on
 // the VALUES, so no text can cross over whatever it says:
 //
-//   - a host moment never resolves {enlace}, {cancelar} or {motivo} - the client's links;
+//   - a host moment never resolves {enlace} or {cancelar} - the client's links;
 //   - a client moment never resolves any host value ({cliente}, {pais_cliente},
-//     {nombre_corto}, {correo}, {telefono}, {fecha_mentor}, {pais_mentor}, {enlace_mentor}).
+//     {nombre_corto}, {correo}, {telefono}, {fecha_mentor}, {pais_mentor}, {enlace_mentor});
+//   - {motivo} resolves only in the two cancellation texts (cancelled, host_cancelled);
+//   - {enlace_mentor} never in host_cancelled: that session will not happen.
 //
 // Those markers are known, so RenderWhatsApp's rule drops their whole line: a client text
 // that writes {enlace_mentor} loses that line and never carries the host's link.
 // Every delivery and the editor's preview render through here.
 func RenderWhatsAppMoment(moment, tmpl string, v WhatsAppValues) string {
 	if IsHostMoment(moment) {
-		v.Enlace, v.Cancelar, v.Motivo = "", "", ""
+		v.Enlace, v.Cancelar = "", ""
 	} else {
 		v.Cliente, v.PaisCliente, v.NombreCorto, v.Correo, v.Telefono = "", "", "", "", ""
 		v.FechaMentor, v.PaisMentor, v.EnlaceMentor = "", "", ""
 	}
+	if !IsCancellationMoment(moment) {
+		v.Motivo = ""
+	}
+	if moment == WhatsAppHostCancelled {
+		v.EnlaceMentor = ""
+	}
 	return RenderWhatsApp(tmpl, v)
 }
 
+// IsCancellationMoment reports whether moment is one of the two cancellation texts - the
+// client's (cancelled) and the host's (host_cancelled) - the only ones {motivo} fills.
+func IsCancellationMoment(moment string) bool {
+	return moment == WhatsAppCancelled || moment == WhatsAppHostCancelled
+}
+
 // WhatsAppMarkerMisuse returns why tmpl cannot be saved as the text of moment (Spanish, for
-// a 400), or "": a client text may not use {enlace_mentor} (the host's link), and a host
-// text may not use the client's {enlace}, {cancelar} or {motivo}. RenderWhatsAppMoment
-// would drop those lines anyway; this says so when the owner saves, instead of a line that
-// silently disappears. The handler asks it only for texts that CHANGE.
+// a 400), or "": a client text may not use {enlace_mentor} (the host's link), a host text
+// may not use the client's {enlace} or {cancelar}, {motivo} belongs only to the two
+// cancellation texts (cancelled, host_cancelled), and the host's cancellation may not use
+// {enlace_mentor} (there is no session left to enter). RenderWhatsAppMoment would drop
+// those lines anyway; this says so when the owner saves, instead of a line that silently
+// disappears. The handler asks it only for texts that CHANGE.
 func WhatsAppMarkerMisuse(moment, tmpl string) string {
+	// Word for word in frontend/src/lib/host-notices.ts markerMisuse.
 	if IsHostMoment(moment) {
-		// Word for word in frontend/src/lib/host-notices.ts markerMisuse.
 		if UsesMarker(tmpl, "enlace") || UsesMarker(tmpl, "cancelar") {
+			if moment == WhatsAppHostCancelled { // {enlace_mentor} is refused there too
+				return "{enlace} y {cancelar} son del cliente; en el aviso de cancelación no hace falta ningún enlace."
+			}
 			return "En los avisos al anfitrión usa {enlace_mentor}; {enlace} y {cancelar} son del cliente."
 		}
-		if UsesMarker(tmpl, "motivo") {
-			return "{motivo} es solo del mensaje de cancelación al cliente."
-		}
-		return ""
-	}
-	if UsesMarker(tmpl, "enlace_mentor") {
+	} else if UsesMarker(tmpl, "enlace_mentor") {
 		return "{enlace_mentor} solo sirve en los avisos al anfitrión."
+	}
+	if !IsCancellationMoment(moment) && UsesMarker(tmpl, "motivo") {
+		return "{motivo} solo sirve en los mensajes de cancelación."
+	}
+	if moment == WhatsAppHostCancelled && UsesMarker(tmpl, "enlace_mentor") {
+		return "{enlace_mentor} no sirve en el aviso de cancelación: esa sesión ya no se hará."
 	}
 	return ""
 }

@@ -4,7 +4,7 @@
   The agenda composes the message and sends it as data.whatsapp_message (to the client) or
   data.host_whatsapp_message (to the HOST - the mentor or support person attending, the
   "Avisos al mentor o soporte" section, internal/webhook/fork_host.go); FunnelChat only
-  forwards it. All eight texts are saved together with PUT
+  forwards it. All nine texts are saved together with PUT
   /v1/event-types/{slug}/whatsapp-messages (an empty box = the built-in default, shown as the
   placeholder). "Ver ejemplo" asks the SERVER to render them (POST .../preview): the markers
   are never filled in here, so the example is exactly what would be sent, dropped lines
@@ -34,13 +34,14 @@
 	];
 	const HOST: MomentDef[] = [
 		{ key: 'host_created', label: 'Nueva sesión agendada', when: 'En cuanto el cliente agenda, o cuando le pasan la sesión a otra persona.' },
-		{ key: 'host_reminder_5m', label: 'Faltan 5 minutos', when: 'Cinco minutos antes de empezar, con su enlace para entrar.' }
+		{ key: 'host_reminder_5m', label: 'Faltan 5 minutos', when: 'Cinco minutos antes de empezar, con su enlace para entrar.' },
+		{ key: 'host_cancelled', label: 'Sesión cancelada', when: 'Cuando se cancela la sesión, con el motivo si lo escribieron.' }
 	];
 	const MOMENTS: MomentDef[] = [...CLIENT, ...HOST];
 
 	const emptyTexts = (): Record<WhatsAppMoment, string> => ({
 		created: '', reminder_morning: '', reminder_1h: '', reminder_5m: '', cancelled: '', rescheduled: '',
-		host_created: '', host_reminder_5m: ''
+		host_created: '', host_reminder_5m: '', host_cancelled: ''
 	});
 
 	let texts = $state<Record<WhatsAppMoment, string>>(emptyTexts());
@@ -67,7 +68,7 @@
 	// prop with a fallback throws.
 	let areas = $state<Record<WhatsAppMoment, HTMLTextAreaElement | null>>({
 		created: null, reminder_morning: null, reminder_1h: null, reminder_5m: null, cancelled: null, rescheduled: null,
-		host_created: null, host_reminder_5m: null
+		host_created: null, host_reminder_5m: null, host_cancelled: null
 	});
 	let lastClient = $state<WhatsAppMoment>('created');
 	let lastHost = $state<WhatsAppMoment>('host_created');
@@ -132,13 +133,20 @@
 		}
 	}
 
-	async function insertMarker(marker: string, host: boolean) {
-		const key = host ? lastHost : lastClient;
+	// A chip with `moments` (e.g. the host {motivo}, only for «Sesión cancelada») goes into
+	// its own text when the last focused box is not one of them - at the end, since the
+	// cursor is elsewhere - instead of putting a marker that box refuses.
+	async function insertMarker(mk: MarkerDef, host: boolean) {
+		const marker = mk.key;
+		const last = host ? lastHost : lastClient;
+		const redirected = !!mk.moments && mk.moments.length > 0 && !mk.moments.includes(last);
+		const key = (redirected ? mk.moments![0] : last) as WhatsAppMoment;
 		const el = areas[key];
 		const value = texts[key];
-		const startPos = el?.selectionStart ?? value.length;
-		const endPos = el?.selectionEnd ?? value.length;
+		const startPos = redirected ? value.length : (el?.selectionStart ?? value.length);
+		const endPos = redirected ? value.length : (el?.selectionEnd ?? value.length);
 		texts[key] = value.slice(0, startPos) + marker + value.slice(endPos);
+		if (redirected) focused(key);
 		await tick();
 		if (el) {
 			el.focus();
@@ -163,7 +171,7 @@
 					<button
 						type="button"
 						class="shrink-0 rounded-md border bg-background px-2 py-0.5 font-mono text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-						onclick={() => insertMarker(mk.key, host)}
+						onclick={() => insertMarker(mk, host)}
 						aria-label={`Añadir ${mk.key}: ${mk.help}`}
 					>{mk.key}</button>
 					<span class="min-w-0 text-muted-foreground">{mk.help}</span>
@@ -263,8 +271,9 @@
 						con su país y su bandera: no tiene que convertir nada.
 					</p>
 					<p class="text-sm text-muted-foreground">
-						Cada aviso necesita su propio webhook en la página Webhooks, con el evento «Aviso al anfitrión: …» y
-						los datos «Mensaje para el anfitrión» y «WhatsApp del anfitrión». En FunnelChat, el número es
+						Cada aviso necesita un webhook en la página Webhooks con su evento («Aviso al anfitrión: …» o
+						«Aviso al mentor/soporte: sesión cancelada») y los datos «Mensaje para el anfitrión» y «WhatsApp del
+						anfitrión»; los tres avisos pueden ir en el mismo webhook. En FunnelChat, el número es
 						<code class="rounded bg-muted px-1 font-mono text-xs">data.host_whatsapp</code> y el texto
 						<code class="rounded bg-muted px-1 font-mono text-xs">data.host_whatsapp_message</code>.
 					</p>

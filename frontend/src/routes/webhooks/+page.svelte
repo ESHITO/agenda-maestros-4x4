@@ -106,6 +106,7 @@
 		// Fork: to the HOST (the mentor or support person attending), at their own WhatsApp.
 		{ key: 'booking.host_created', label: 'Aviso al anfitrión: nueva sesión', description: 'al mentor o soporte que atiende, en cuanto se agenda o se le pasa una sesión', host: true },
 		{ key: 'booking.host_reminder_5m', label: 'Aviso al anfitrión: faltan 5 minutos', description: 'al mentor o soporte, con su enlace para entrar', host: true },
+		{ key: 'booking.host_cancelled', label: 'Aviso al mentor/soporte: sesión cancelada', description: 'a quien atendía la sesión, cuando se cancela, con el motivo si lo escribieron', host: true },
 		{ key: 'recording.completed', label: 'Grabación lista' },
 		{ key: 'transcript.ready', label: 'Transcripción lista' },
 		{ key: 'notes.ready', label: 'Notas de la reunión listas' }
@@ -325,7 +326,7 @@
 		if (!form.url.startsWith('https://')) { createError = 'La URL debe comenzar con https://'; return; }
 		if (form.events.length === 0) { createError = 'Selecciona al menos un evento.'; return; }
 		if (mixesHostEvents(form.events)) {
-			createError = 'Los avisos al anfitrión van en su propio webhook (uno por mensaje): FunnelChat no puede mandar a dos personas desde el mismo flujo. Desmarca los demás eventos.';
+			createError = 'Los avisos al anfitrión van en su propio webhook: FunnelChat no puede mandar a dos personas desde el mismo flujo. Desmarca los eventos del cliente.';
 			return;
 		}
 		if (form.typeMode === 'some' && form.eventTypeIds.length === 0) {
@@ -530,11 +531,11 @@
 
 		<div class="mb-4 space-y-2">
 			<p class="text-sm font-medium">Eventos a enviar</p>
-			<p class="text-xs text-muted-foreground">Para WhatsApp (FunnelChat), marca un solo evento por webhook: cada mensaje va a su propio flujo.</p>
+			<p class="text-xs text-muted-foreground">Para WhatsApp (FunnelChat), marca un solo evento del cliente por webhook: cada mensaje va a su propio flujo.{#if isOwner} Los avisos al mentor o soporte pueden ir juntos en otro webhook.{/if}</p>
 			{#each shownEventDefs as ev, i (ev.key)}
 				{#if ev.host && !shownEventDefs[i - 1]?.host}
 					<p class="border-t pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						Avisos al mentor o soporte <span class="font-normal normal-case">— en un webhook aparte, uno por aviso</span>
+						Avisos al mentor o soporte <span class="font-normal normal-case">— en un webhook aparte de los del cliente</span>
 					</p>
 				{/if}
 				<label class="flex cursor-pointer items-start gap-2 text-sm">
@@ -551,7 +552,7 @@
 			{/each}
 			{#if formMixes}
 				<p class="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
-					Los avisos al anfitrión van en su propio webhook: FunnelChat no puede mandar a dos personas desde el mismo flujo. Deja marcado solo uno.
+					Los avisos al anfitrión van en su propio webhook: FunnelChat no puede mandar a dos personas desde el mismo flujo. Desmarca los eventos del cliente.
 				</p>
 			{:else if formHasHost && !isOwner}
 				<p class="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">

@@ -1149,14 +1149,14 @@
 <ConfirmDialog
 	bind:open={confirmOpen}
 	title={pendingCancelName ? `¿Cancelar la reunión con ${pendingCancelName}?` : '¿Cancelar esta reunión?'}
-	description="Se avisará al cliente y el horario quedará libre. Los recordatorios de WhatsApp pendientes se detienen. Esta acción no se puede deshacer."
+	description="Se avisará al cliente y también a quien atiende la sesión, si tiene WhatsApp, y el horario quedará libre. Los recordatorios de WhatsApp pendientes se detienen. Esta acción no se puede deshacer."
 	confirmText="Cancelar reunión"
 	cancelText="Mantener reunión"
 	destructive
 	onConfirm={cancel}
 >
 	<div class="space-y-1.5">
-		<Label for="cancel-reason">Motivo <span class="font-normal text-muted-foreground">(opcional — el cliente lo verá en el aviso de cancelación)</span></Label>
+		<Label for="cancel-reason">Motivo <span class="font-normal text-muted-foreground">(opcional — el cliente y quien atiende lo verán en el aviso de cancelación)</span></Label>
 		<Textarea id="cancel-reason" bind:value={cancelReason} rows={3} maxlength={300} placeholder="Por ejemplo: el mentor tuvo un imprevisto" class="text-base sm:text-sm" />
 	</div>
 </ConfirmDialog>

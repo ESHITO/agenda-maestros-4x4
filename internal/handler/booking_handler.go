@@ -1690,7 +1690,7 @@ func (h *Handler) CancelBooking(w http.ResponseWriter, r *http.Request) {
 // written. Shared by the admin (CancelBooking) and manage-link (CancelByToken)
 // cancel paths so both fan out across all hosts (Group bookings).
 func (h *Handler) cancelSideEffects(b booking.Booking) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cancelSideEffectsTimeout)
 	defer cancel()
 	// Fork: drop the pending reminder webhooks first, before anything below can return
 	// early (JobWebhookReminder would skip a cancelled booking anyway).
@@ -1769,14 +1769,31 @@ func (h *Handler) cancelSideEffects(b booking.Booking) {
 			h.logger.Error("booking cancellation email (attendee)", "error", err, "booking_id", b.ID)
 		}
 	}
+	// Fork: the writes below get a budget of their own, as in dispatchBookingConfirmation.
+	// The Zoom delete, the refund, the calendar deletes and above all the e-mails can use up
+	// all 30 s of ctx (defaultSMTPTimeout is 30 s, and a failed send waits 5 s and retries);
+	// a spent ctx would cost the cancellation its host notice and its booking.cancelled.
+	tctx, tcancel := context.WithTimeout(context.Background(), cancelNoticesTimeout)
+	defer tcancel()
 	// Re-read payment state — refundBookingPayment above may have flipped it to 'refunded'.
 	var payStatus, payCur string
 	var payAmt int
-	_ = h.db.QueryRowContext(ctx,
+	_ = h.db.QueryRowContext(tctx,
 		`SELECT payment_status, amount_paid_cents, amount_paid_currency FROM bookings WHERE id = ?`, b.ID).
 		Scan(&payStatus, &payAmt, &payCur)
+	// Fork: the WhatsApp notice to the person who was attending (fork_host_notices.go), once
+	// per cancellation - every cancel path calls this function once, after its UPDATE won.
+	// b.HostID is the host at cancel time; an unpaid hold (payment_status 'pending' when
+	// cancelled) is skipped there. Otherwise the payment fields as re-read above (a refund
+	// shows). Queued just before the client's booking.cancelled, so that one's delivery
+	// tells a test this one's fate is settled.
+	hb := b
+	if payStatus != "" && b.PaymentStatus != "pending" {
+		hb.PaymentStatus, hb.AmountPaidCents, hb.AmountPaidCurrency = payStatus, payAmt, payCur
+	}
+	h.enqueueHostNotice(tctx, webhook.EventHostCancelled, &hb)
 	if h.webhookSvc != nil {
-		if err := h.webhookSvc.Enqueue(ctx, "booking.cancelled", webhook.BookingPayload{
+		if err := h.webhookSvc.Enqueue(tctx, "booking.cancelled", webhook.BookingPayload{
 			ID:                 b.ID,
 			EventTypeSlug:      d.EventTypeSlug,
 			HostID:             b.HostID,
@@ -1790,7 +1807,7 @@ func (h *Handler) cancelSideEffects(b booking.Booking) {
 			AmountPaidCents:    payAmt,
 			AmountPaidCurrency: payCur,
 			// Fork: only when the cancelled WhatsApp text uses {cancelar} (webhook_reminders.go).
-			ManageURL: h.whatsAppManageURL(ctx, "booking.cancelled", b.HostID, b.ID),
+			ManageURL: h.whatsAppManageURL(tctx, "booking.cancelled", b.HostID, b.ID),
 		}); err != nil {
 			h.logger.Error("enqueue booking.cancelled webhook", "error", err, "booking_id", b.ID)
 		}

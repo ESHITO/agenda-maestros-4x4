@@ -116,7 +116,8 @@
 		<h2 id="wa-title" class="text-sm font-semibold">Tu WhatsApp</h2>
 		<p class="mt-1 mb-4 text-sm text-muted-foreground">
 			Cuando un cliente agende una sesión contigo te llega un aviso a este WhatsApp con sus datos,
-			y otro 5 minutos antes de empezar con el enlace para entrar.
+			otro 5 minutos antes de empezar con el enlace para entrar, y otro si se cancela la sesión
+			(con el motivo, si lo escribieron).
 		</p>
 		{#if waError}
 			<div class="flex flex-col gap-2 rounded-md bg-destructive/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" role="alert">

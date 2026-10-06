@@ -229,9 +229,10 @@ export type WhatsAppMoment =
 	| 'reminder_5m'
 	| 'cancelled'
 	| 'rescheduled'
-	// The two notices to the HOST (fork_host.go, lib/host-notices.ts).
+	// The three notices to the HOST (fork_host.go, lib/host-notices.ts).
 	| 'host_created'
-	| 'host_reminder_5m';
+	| 'host_reminder_5m'
+	| 'host_cancelled';
 
 /** GET/PUT /v1/event-types/{slug}/whatsapp-messages: saved texts ("" = default) + defaults. */
 export type WhatsAppMessages = Record<WhatsAppMoment, string> & {

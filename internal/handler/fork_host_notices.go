@@ -5,8 +5,10 @@ package handler
 //
 //   - enqueueHostNotice: booking.host_created, called on one line from
 //     dispatchBookingConfirmation (every creation path) and from ReassignBooking (the new
-//     host). booking.host_reminder_5m is the "webhook.reminder" job of kind host_5m
-//     (webhook_reminders.go).
+//     host); booking.host_cancelled, called on one line from cancelSideEffects (every cancel:
+//     panel, /manage and its /c short link, MCP - the unpaid-hold releases of
+//     stripe_booking.go and worker.Poll never go through it). booking.host_reminder_5m is
+//     the "webhook.reminder" job of kind host_5m (webhook_reminders.go).
 //   - The host's room link: GET /h/{code} (fork_short_links.go) and, when no code can be
 //     made, the long link the webhook package asks hostRoomLink for. Both mint a UNIQUE
 //     host room token for the booking's CURRENT end and record its hash, with the host it
@@ -27,15 +29,28 @@ import (
 	"github.com/calnode/calnode/internal/webhook"
 )
 
-// enqueueHostNotice queues event (a host notice) for b's CURRENT host. No manage link, ever.
-// Best effort: a failure is logged, the booking is already committed.
+// cancelSideEffects' two budgets: cancelSideEffectsTimeout for the calendar, Zoom, refund
+// and e-mails (upstream's 30 s), and a fresh cancelNoticesTimeout for the host notice and
+// booking.cancelled after them, so slow SMTP cannot spend the WhatsApp notices' context
+// (the same split as dispatchBookingConfirmation). Variables only so a test can shorten
+// the first (SetCancelSideEffectsTimeoutForTest).
+var (
+	cancelSideEffectsTimeout = 30 * time.Second
+	cancelNoticesTimeout     = 15 * time.Second
+)
+
+// enqueueHostNotice queues event (a host notice) for b's CURRENT host - for a cancellation,
+// whoever hosted it when it was cancelled - with its cancellation reason ({motivo} of
+// host_cancelled; "" otherwise). No manage link, ever. Best effort: a failure is logged,
+// the booking is already committed.
 //
 // Never for an unpaid Stripe hold (payment_status 'pending'): it is not an appointment yet -
 // if the checkout expires, releaseUnpaidHold frees the slot, and the host would have been
 // handed the client's data for a session that never happened. Once Stripe confirms,
 // confirmPaidBooking runs dispatchBookingConfirmation, which sends the one notice to whoever
 // hosts the session then ("Pasar a otra persona" on a hold included). The host_5m job keeps
-// the same rule (JobWebhookReminder).
+// the same rule (JobWebhookReminder), and so does host_cancelled: a hold cancelled before it
+// was paid never had a host_created, so its host is not told it went away.
 func (h *Handler) enqueueHostNotice(ctx context.Context, event string, b *booking.Booking) {
 	if h.webhookSvc == nil || b == nil || b.PaymentStatus == "pending" {
 		return
@@ -47,6 +62,7 @@ func (h *Handler) enqueueHostNotice(ctx context.Context, event string, b *bookin
 		StartAt:            b.StartAt.UTC().Format(time.RFC3339),
 		EndAt:              b.EndAt.UTC().Format(time.RFC3339),
 		Status:             b.Status,
+		CancellationReason: b.CancellationReason,
 		LocationValue:      b.LocationValue,
 		CreatedAt:          b.CreatedAt.UTC().Format(time.RFC3339),
 		PaymentStatus:      paymentStatusForWebhook(b.PaymentStatus),

@@ -35,6 +35,7 @@ var whatsAppMomentLabels = map[string]string{
 	webhook.WhatsAppRescheduled:     "Reprogramación",
 	webhook.WhatsAppHostCreated:     "Aviso al anfitrión: nueva sesión",
 	webhook.WhatsAppHostReminder5m:  "Aviso al anfitrión: faltan 5 minutos",
+	webhook.WhatsAppHostCancelled:   "Aviso al anfitrión: sesión cancelada",
 }
 
 // whatsAppMessagesBody is the PUT and preview body. A nil field is "not sent": PUT leaves
@@ -49,6 +50,7 @@ type whatsAppMessagesBody struct {
 	// Host notices (webhook/fork_host.go).
 	HostCreated    *string `json:"host_created"`
 	HostReminder5m *string `json:"host_reminder_5m"`
+	HostCancelled  *string `json:"host_cancelled"`
 }
 
 // sent returns the moments present in the body, moment → text.
@@ -63,6 +65,7 @@ func (b whatsAppMessagesBody) sent() map[string]string {
 		webhook.WhatsAppRescheduled:     b.Rescheduled,
 		webhook.WhatsAppHostCreated:     b.HostCreated,
 		webhook.WhatsAppHostReminder5m:  b.HostReminder5m,
+		webhook.WhatsAppHostCancelled:   b.HostCancelled,
 	} {
 		if p != nil {
 			out[moment] = *p
@@ -71,7 +74,7 @@ func (b whatsAppMessagesBody) sent() map[string]string {
 	return out
 }
 
-// whatsAppMessagesMaxBody: eight texts (the client's six, the host's two) of
+// whatsAppMessagesMaxBody: nine texts (the client's six, the host's three) of
 // MaxWhatsAppMessageLen characters, up to four bytes each, plus JSON escaping.
 const whatsAppMessagesMaxBody = 160 << 10
 
@@ -173,7 +176,8 @@ func (h *Handler) PutWhatsAppMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // whatsAppMarkerMisuse refuses a marker outside its audience (webhook.WhatsAppMarkerMisuse:
-// {enlace_mentor} in a client text; {enlace}, {cancelar} or {motivo} in a host text) - only
+// {enlace_mentor} in a client text or in host_cancelled; {enlace} or {cancelar} in a host
+// text; {motivo} outside the two cancellation texts) - only
 // in the texts this PUT CHANGES against what is stored (validate on change, not on
 // mention: the editor sends every box). "" = fine.
 func (h *Handler) whatsAppMarkerMisuse(r *http.Request, etID string, msgs map[string]string) (string, error) {
@@ -389,8 +393,8 @@ func (h *Handler) PreviewWhatsAppMessages(w http.ResponseWriter, r *http.Request
 		if webhook.IsHostMoment(moment) {
 			hostDates.Apply(&v)
 		}
-		if moment == webhook.WhatsAppCancelled {
-			v.Motivo = sampleWhatsAppReason
+		if webhook.IsCancellationMoment(moment) {
+			v.Motivo = sampleWhatsAppReason // the client's cancellation and the host's
 		}
 		out[moment] = webhook.RenderWhatsAppMoment(moment, tmpl, v)
 	}

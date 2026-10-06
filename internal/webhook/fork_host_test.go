@@ -17,8 +17,8 @@ import (
 
 func TestHostEventsAndMoments(t *testing.T) {
 	for event, want := range map[string]bool{
-		webhook.EventHostCreated: true, webhook.EventHostReminder5m: true,
-		"booking.created": false, webhook.EventReminder5m: false, "": false,
+		webhook.EventHostCreated: true, webhook.EventHostReminder5m: true, webhook.EventHostCancelled: true,
+		"booking.created": false, "booking.cancelled": false, webhook.EventReminder5m: false, "": false,
 	} {
 		if got := webhook.IsHostEvent(event); got != want {
 			t.Errorf("IsHostEvent(%q) = %v", event, got)
@@ -26,15 +26,20 @@ func TestHostEventsAndMoments(t *testing.T) {
 	}
 	if webhook.HostWhatsAppMomentForEvent(webhook.EventHostCreated) != webhook.WhatsAppHostCreated ||
 		webhook.HostWhatsAppMomentForEvent(webhook.EventHostReminder5m) != webhook.WhatsAppHostReminder5m ||
-		webhook.HostWhatsAppMomentForEvent("booking.created") != "" {
+		webhook.HostWhatsAppMomentForEvent(webhook.EventHostCancelled) != webhook.WhatsAppHostCancelled ||
+		webhook.HostWhatsAppMomentForEvent("booking.created") != "" ||
+		webhook.HostWhatsAppMomentForEvent("booking.cancelled") != "" {
 		t.Error("HostWhatsAppMomentForEvent maps the wrong moments")
 	}
 	// The client's mapping never answers for a host event (no client text, no manage link).
-	if webhook.WhatsAppMomentForEvent(webhook.EventHostCreated) != "" || webhook.WhatsAppMomentForEvent(webhook.EventHostReminder5m) != "" {
+	if webhook.WhatsAppMomentForEvent(webhook.EventHostCreated) != "" || webhook.WhatsAppMomentForEvent(webhook.EventHostReminder5m) != "" ||
+		webhook.WhatsAppMomentForEvent(webhook.EventHostCancelled) != "" {
 		t.Error("WhatsAppMomentForEvent answered for a host event")
 	}
-	if len(webhook.WhatsAppMoments) != 8 || !webhook.ValidWhatsAppMoment(webhook.WhatsAppHostCreated) ||
-		!webhook.IsHostMoment(webhook.WhatsAppHostReminder5m) || webhook.IsHostMoment(webhook.WhatsAppReminder5m) {
+	if len(webhook.WhatsAppMoments) != 9 || !webhook.ValidWhatsAppMoment(webhook.WhatsAppHostCreated) ||
+		!webhook.ValidWhatsAppMoment(webhook.WhatsAppHostCancelled) || !webhook.IsHostMoment(webhook.WhatsAppHostCancelled) ||
+		!webhook.IsHostMoment(webhook.WhatsAppHostReminder5m) || webhook.IsHostMoment(webhook.WhatsAppReminder5m) ||
+		webhook.IsHostMoment(webhook.WhatsAppCancelled) {
 		t.Errorf("moments = %v", webhook.WhatsAppMoments)
 	}
 	for _, m := range webhook.WhatsAppHostMoments {
@@ -324,15 +329,25 @@ func TestRenderWhatsAppMoment_audience(t *testing.T) {
 	}
 	tmpl := "Hola {nombre}\nEntra: {enlace}\nCancela: {cancelar}\nMotivo: {motivo}\nCliente: {cliente}\nCorreo: {correo}\n" +
 		"Tel: {teléfono}\nCorto: {nombre_corto}\nFecha: {fecha_mentor} ({país_mentor})\nHost: {enlace_mentor}\nPaís: {pais_cliente}"
+	// {motivo} resolves only in the two cancellation texts.
 	client := webhook.RenderWhatsAppMoment(webhook.WhatsAppCreated, tmpl, v)
-	if client != "Hola María\nEntra: https://e\nCancela: https://c\nMotivo: viaje" {
+	if client != "Hola María\nEntra: https://e\nCancela: https://c" {
 		t.Errorf("client moment = %q", client)
+	}
+	if got := webhook.RenderWhatsAppMoment(webhook.WhatsAppCancelled, tmpl, v); got != "Hola María\nEntra: https://e\nCancela: https://c\nMotivo: viaje" {
+		t.Errorf("client cancellation = %q", got)
 	}
 	host := webhook.RenderWhatsAppMoment(webhook.WhatsAppHostCreated, tmpl, v)
 	want := "Hola María\nCliente: María (Perú 🇵🇪)\nCorreo: m@x.com\nTel: +51987654321\nCorto: María P\n" +
 		"Fecha: viernes 2 de octubre, 3:30 p. m. (Perú 🇵🇪)\nHost: https://h\nPaís: Perú 🇵🇪"
 	if host != want {
 		t.Errorf("host moment = %q; want %q", host, want)
+	}
+	// The host's cancellation: the reason yes, the client's links no, and no way in either.
+	want = "Hola María\nMotivo: viaje\nCliente: María (Perú 🇵🇪)\nCorreo: m@x.com\nTel: +51987654321\nCorto: María P\n" +
+		"Fecha: viernes 2 de octubre, 3:30 p. m. (Perú 🇵🇪)\nPaís: Perú 🇵🇪"
+	if got := webhook.RenderWhatsAppMoment(webhook.WhatsAppHostCancelled, tmpl, v); got != want {
+		t.Errorf("host cancellation = %q; want %q", got, want)
 	}
 }
 
@@ -350,17 +365,164 @@ func TestWhatsAppMarkerMisuse(t *testing.T) {
 		{webhook.WhatsAppHostReminder5m, "{motivo}", true},
 		{webhook.WhatsAppHostReminder5m, "{correo} {telefono}", false},
 		{webhook.WhatsAppHostCreated, "El {dia} a las {hora} ({fecha})", false}, // the host's clock in a host text
+		// {motivo}: only the two cancellation texts.
+		{webhook.WhatsAppCancelled, "Motivo: {motivo}", false},
+		{webhook.WhatsAppHostCancelled, "*Motivo:* _{ Motivo }_", false},
+		{webhook.WhatsAppCreated, "Motivo: {motivo}", true},
+		{webhook.WhatsAppRescheduled, "{motivo}", true},
+		{webhook.WhatsAppHostCreated, "{motivo}", true},
+		// The host's cancellation: no way in, no client links.
+		{webhook.WhatsAppHostCancelled, "Entra: {enlace_mentor}", true},
+		{webhook.WhatsAppHostCancelled, "{cancelar}", true},
+		{webhook.WhatsAppHostCancelled, "{nombre} {telefono} {correo} {fecha_mentor} {pais_mentor} {tipo}", false},
 	} {
 		if got := webhook.WhatsAppMarkerMisuse(c.moment, c.tmpl) != ""; got != c.bad {
 			t.Errorf("WhatsAppMarkerMisuse(%s, %q) bad = %v; want %v", c.moment, c.tmpl, got, c.bad)
 		}
 	}
 	// The message names the marker actually found (word for word in host-notices.ts).
-	if got := webhook.WhatsAppMarkerMisuse(webhook.WhatsAppHostCreated, "Motivo: {motivo}"); got != "{motivo} es solo del mensaje de cancelación al cliente." {
+	if got := webhook.WhatsAppMarkerMisuse(webhook.WhatsAppHostCreated, "Motivo: {motivo}"); got != "{motivo} solo sirve en los mensajes de cancelación." {
 		t.Errorf("motivo: %q", got)
+	}
+	if got := webhook.WhatsAppMarkerMisuse(webhook.WhatsAppReminder1h, "Motivo: {motivo}"); got != "{motivo} solo sirve en los mensajes de cancelación." {
+		t.Errorf("motivo in a client reminder: %q", got)
+	}
+	if got := webhook.WhatsAppMarkerMisuse(webhook.WhatsAppHostCancelled, "{enlace_mentor}"); got != "{enlace_mentor} no sirve en el aviso de cancelación: esa sesión ya no se hará." {
+		t.Errorf("enlace_mentor in host_cancelled: %q", got)
 	}
 	if got := webhook.WhatsAppMarkerMisuse(webhook.WhatsAppHostCreated, "{motivo} {cancelar}"); got != "En los avisos al anfitrión usa {enlace_mentor}; {enlace} y {cancelar} son del cliente." {
 		t.Errorf("cancelar + motivo: %q", got)
+	}
+	// In host_cancelled the client links' refusal must not point to {enlace_mentor}, which
+	// that same text refuses (following the advice would fail the next save).
+	for _, tmpl := range []string{"Entra: {enlace}", "Cliente: {cancelar}", "{enlace} {enlace_mentor}"} {
+		if got := webhook.WhatsAppMarkerMisuse(webhook.WhatsAppHostCancelled, tmpl); got != "{enlace} y {cancelar} son del cliente; en el aviso de cancelación no hace falta ningún enlace." {
+			t.Errorf("client link in host_cancelled (%q): %q", tmpl, got)
+		}
+	}
+}
+
+// booking.host_cancelled (fork_host.go): the default text with the reason, and without one
+// (its line goes); the payload addresses the HOST only, whatever is ticked, while the client's
+// booking.cancelled keeps its own fields and never a host one.
+func TestEnqueue_hostCancelled_textAndAudience(t *testing.T) {
+	e := hostEnv(t, "Ventas")
+	ctx := context.Background()
+	hostHook := waHook(t, e, []string{webhook.EventHostCancelled}, webhook.AllFields)
+	clientHook := waHook(t, e, []string{"booking.cancelled"}, webhook.AllFields)
+	p := hostPayload()
+	p.Status, p.CancellationReason = "cancelled", "Me surgió un viaje"
+	if err := e.svc.Enqueue(ctx, webhook.EventHostCancelled, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Enqueue(ctx, "booking.cancelled", p); err != nil {
+		t.Fatal(err)
+	}
+	host := lastData(t, e, hostHook)
+	want := "🔴 *Sesión cancelada: Soporte 1 a 1*\n" +
+		"*Motivo:* _Me surgió un viaje_\n" +
+		"\n" +
+		"*Nombre:* María Pérez\n" +
+		"*Número:* +51987654321\n" +
+		"*Correo:* maria@example.com\n" +
+		"\n" +
+		"📅 martes 29 de septiembre, 5:00 p. m.\n" + // 15:00 UTC in the host's Madrid, not Lima's 10:00
+		"Hora de España 🇪🇸 (Madrid)"
+	if got := host["host_whatsapp_message"]; got != want {
+		t.Errorf("host_cancelled =\n%v\n--- want ---\n%s", got, want)
+	}
+	for _, k := range []string{"attendee_phone", "attendee_whatsapp", "whatsapp_message", "manage_url"} {
+		if v, ok := host[k]; ok {
+			t.Errorf("host_cancelled carries %s = %v", k, v)
+		}
+	}
+	if host["host_whatsapp"] != "34612345678" || host["host_phone"] != "+34612345678" ||
+		host["cancellation_reason"] != "Me surgió un viaje" || host["status"] != "cancelled" {
+		t.Errorf("host_cancelled data = %v", host)
+	}
+	client := lastData(t, e, clientHook)
+	for _, k := range []string{"host_phone", "host_whatsapp", "host_whatsapp_message"} {
+		if v, ok := client[k]; ok {
+			t.Errorf("booking.cancelled carries %s = %v", k, v)
+		}
+	}
+	if msg, _ := client["whatsapp_message"].(string); client["attendee_whatsapp"] != "51987654321" || !strings.Contains(msg, "Motivo: _Me surgió un viaje_") {
+		t.Errorf("booking.cancelled lost its own fields: %v", client)
+	}
+
+	// No reason: the Motivo line goes, the rest stays.
+	p.CancellationReason = ""
+	if err := e.svc.Enqueue(ctx, webhook.EventHostCancelled, p); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := lastData(t, e, hostHook)["host_whatsapp_message"].(string)
+	if strings.Contains(msg, "Motivo") || !strings.HasPrefix(msg, "🔴 *Sesión cancelada: Soporte 1 a 1*\n\n*Nombre:* María Pérez\n") {
+		t.Errorf("host_cancelled without a reason = %q", msg)
+	}
+	if n := deliveriesFor(t, e, hostHook); n != 2 {
+		t.Errorf("host_cancelled deliveries = %d; want 2", n)
+	}
+}
+
+// A host_cancelled text that writes {enlace_mentor} (saved straight, past the panel's check)
+// mints no /h code and no host link: the line goes, the session will not happen.
+func TestEnqueue_hostCancelled_neverMintsAHostLink(t *testing.T) {
+	e := hostEnv(t, "Ventas")
+	ctx := context.Background()
+	if _, err := e.db.Exec(`UPDATE bookings SET location_type = 'livekit', livekit_room = 'booking-bk-wa' WHERE id = 'bk-wa'`); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.SetShortLinkBaseURL(func() string { return "https://citas.example.com" })
+	asked := 0
+	e.svc.SetHostRoomLinker(func(context.Context, string, string) string {
+		asked++
+		return "https://citas.example.com/room/x?t=host"
+	})
+	if err := e.svc.SetWhatsAppMessages(ctx, "et-wa", map[string]string{
+		webhook.WhatsAppHostCancelled: "Cancelada: {tipo}\nEntra: {enlace_mentor}\nMotivo: {motivo}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id := waHook(t, e, []string{webhook.EventHostCancelled}, []string{webhook.FieldHostWhatsAppMessage})
+	p := hostPayload()
+	p.Status, p.CancellationReason = "cancelled", "Imprevisto"
+	if err := e.svc.Enqueue(ctx, webhook.EventHostCancelled, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastData(t, e, id)["host_whatsapp_message"]; got != "Cancelada: Soporte 1 a 1\nMotivo: Imprevisto" {
+		t.Errorf("host_cancelled = %q", got)
+	}
+	var rows int
+	e.db.QueryRow(`SELECT COUNT(*) FROM fork_host_short_links`).Scan(&rows)
+	if rows != 0 || asked != 0 {
+		t.Errorf("/h codes = %d, long-link asks = %d; want none for a cancellation", rows, asked)
+	}
+}
+
+// No number, or an archived host: no host_cancelled either.
+func TestEnqueue_hostCancelled_skipsWithoutNumberOrArchived(t *testing.T) {
+	e := hostEnv(t, "Ventas")
+	ctx := context.Background()
+	id := waHook(t, e, []string{webhook.EventHostCancelled}, []string{webhook.FieldHostWhatsApp, webhook.FieldHostWhatsAppMessage})
+	p := hostPayload()
+	p.Status = "cancelled"
+	if _, err := e.db.Exec(`UPDATE users SET archived_at = '2026-09-01T00:00:00Z' WHERE id = ?`, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Enqueue(ctx, webhook.EventHostCancelled, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE users SET archived_at = NULL WHERE id = ?`, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`DELETE FROM fork_member_phones`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Enqueue(ctx, webhook.EventHostCancelled, p); err != nil {
+		t.Fatal(err)
+	}
+	if n := deliveriesFor(t, e, id); n != 0 {
+		t.Errorf("deliveries = %d; want 0", n)
 	}
 }
 

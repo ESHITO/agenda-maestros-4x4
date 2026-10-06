@@ -31,11 +31,12 @@ const (
 const (
 	EventHostCreated    = "booking.host_created"     // on creation (every path) and when the session passes to another person
 	EventHostReminder5m = "booking.host_reminder_5m" // start - 5 min, to the CURRENT host
+	EventHostCancelled  = "booking.host_cancelled"   // on every cancel (handler.cancelSideEffects), to the host at that moment
 )
 
 // IsHostEvent reports whether event is one of the host notices.
 func IsHostEvent(event string) bool {
-	return event == EventHostCreated || event == EventHostReminder5m
+	return event == EventHostCreated || event == EventHostReminder5m || event == EventHostCancelled
 }
 
 // fallbackLocaleCode is the start_local* locale when the booking stores none this build
