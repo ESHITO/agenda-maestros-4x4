@@ -404,6 +404,11 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("GET /v1/team/settings", h.RequireAuth(h.GetTeamSettings))
 	// Fork: the team's free time for the Panel (owner, admins, área soporte) - fork_team_availability.go.
 	mux.HandleFunc("GET /v1/team/availability", h.RequireAuth(h.GetTeamAvailability))
+	// Fork: the team calendar (Mes / 15 días / Semana) and the hours to cover - fork_team_calendar.go,
+	// fork_team_coverage.go. Same audience; only the owner changes the target.
+	mux.HandleFunc("GET /v1/team/calendar", h.RequireAuth(h.GetTeamCalendar))
+	mux.HandleFunc("GET /v1/team/coverage-target", h.RequireAuth(h.GetTeamCoverageTarget))
+	mux.HandleFunc("PUT /v1/team/coverage-target", h.RequireAuth(h.PutTeamCoverageTarget))
 	// Fork: the transition time between sessions - per person in Soporte, reconciled into
 	// their copy of S after a 2xx (fork_member_transition.go).
 	mux.HandleFunc("GET /v1/users/me/transition", h.RequireAuth(h.GetMyTransition))

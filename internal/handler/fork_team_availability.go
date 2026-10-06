@@ -89,22 +89,75 @@ type teamAvailabilityJSON struct {
 	People      []teamAvailPersonJSON `json:"people"`
 }
 
-// teamAvailCache holds recent answers, keyed by range + tz + área (IsYou is set per viewer
-// on the way out, so one entry serves everybody). It lives on the Handler (the zero value
-// is ready), so two Handlers - every test builds its own over its own database - never
-// share an answer.
+// teamAvailCache holds recent answers of both team endpoints - the 7-day list (avail) and
+// the calendar (cal, fork_team_calendar.go) - keyed by range + tz + área (IsYou and the
+// other per-viewer fields are set on the way out, so one entry serves everybody). It
+// lives on the Handler (the zero value is ready), so two Handlers - every test builds its
+// own over its own database - never share an answer. ONE generation covers both maps.
 type teamAvailCache struct {
 	mu sync.Mutex
-	m  map[string]teamAvailCacheEntry
 	// gen moves on every change that may alter somebody's free time
 	// (fork_free_time_changes.go); an entry stored under an older generation is a miss.
-	gen atomic.Uint64
+	gen   atomic.Uint64
+	avail teamGenMap[teamAvailabilityJSON]
+	cal   teamGenMap[teamCalendarJSON]
+	// fl shares one calendar computation among identical requests in flight (the owner
+	// and three support people with the same month open launch one set of provider
+	// calls, not four).
+	fl teamFlight[teamCalendarJSON]
 }
 
-type teamAvailCacheEntry struct {
+// teamCalCacheMax bounds the calendar map (a month answer weighs tens of KB): the oldest
+// entry leaves first.
+const teamCalCacheMax = 16
+
+type teamGenEntry[T any] struct {
 	at  time.Time
 	gen uint64
-	out teamAvailabilityJSON
+	out T
+}
+
+// teamGenMap is one cache map; its methods run under teamAvailCache.mu.
+type teamGenMap[T any] struct {
+	m map[string]teamGenEntry[T]
+}
+
+func (g *teamGenMap[T]) get(key string, now time.Time, gen uint64) (T, bool) {
+	e, ok := g.m[key]
+	if !ok || e.gen != gen || now.Sub(e.at) >= teamAvailabilityTTL {
+		var zero T
+		return zero, false
+	}
+	return e.out, true
+}
+
+// put stores out under gen, the generation read BEFORE out was computed: a change that
+// landed while it was being computed has moved the generation on (cur), so the entry is
+// born stale instead of hiding that change for a whole TTL. max > 0 caps the entries.
+func (g *teamGenMap[T]) put(key string, now time.Time, gen, cur uint64, out T, max int) {
+	if g.m == nil {
+		g.m = map[string]teamGenEntry[T]{}
+	}
+	for k, e := range g.m { // a handful of entries: purge the stale ones here
+		if e.gen != cur || now.Sub(e.at) >= teamAvailabilityTTL {
+			delete(g.m, k)
+		}
+	}
+	if gen != cur {
+		return
+	}
+	if _, exists := g.m[key]; !exists && max > 0 {
+		for len(g.m) >= max {
+			oldest := ""
+			for k, e := range g.m {
+				if oldest == "" || e.at.Before(g.m[oldest].at) {
+					oldest = k
+				}
+			}
+			delete(g.m, oldest)
+		}
+	}
+	g.m[key] = teamGenEntry[T]{at: now, gen: gen, out: out}
 }
 
 func teamAvailCacheKey(from, to, tz, area string) string {
@@ -115,32 +168,86 @@ func (c *teamAvailCache) get(key string, now time.Time) (teamAvailabilityJSON, b
 	gen := c.gen.Load()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.m[key]
-	if !ok || e.gen != gen || now.Sub(e.at) >= teamAvailabilityTTL {
-		return teamAvailabilityJSON{}, false
-	}
-	return e.out, true
+	return c.avail.get(key, now, gen)
 }
 
-// put stores out under gen, the generation read BEFORE out was computed: a change that
-// landed while it was being computed has moved the generation on, so the entry is born
-// stale instead of hiding that change for a whole TTL.
 func (c *teamAvailCache) put(key string, now time.Time, gen uint64, out teamAvailabilityJSON) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.m == nil {
-		c.m = map[string]teamAvailCacheEntry{}
-	}
-	cur := c.gen.Load()
-	for k, e := range c.m { // a handful of entries: purge the stale ones here
-		if e.gen != cur || now.Sub(e.at) >= teamAvailabilityTTL {
-			delete(c.m, k)
+	c.avail.put(key, now, gen, c.gen.Load(), out, 0)
+}
+
+func (c *teamAvailCache) getCal(key string, now time.Time) (teamCalendarJSON, bool) {
+	gen := c.gen.Load()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cal.get(key, now, gen)
+}
+
+func (c *teamAvailCache) putCal(key string, now time.Time, gen uint64, out teamCalendarJSON) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cal.put(key, now, gen, c.gen.Load(), out, teamCalCacheMax)
+}
+
+// teamFlight is a minimal singleflight (no new module dependency): while one request
+// computes a key, identical requests wait for its result instead of computing again. The
+// computation runs on the FIRST request's context; if that request goes away the result is
+// marked abandoned, the key is freed, and a waiter still interested computes it again. A
+// waiter that goes away leaves on its own ctx.Done().
+type teamFlight[T any] struct {
+	mu sync.Mutex
+	m  map[string]*teamFlightCall[T]
+}
+
+type teamFlightCall[T any] struct {
+	done      chan struct{}
+	out       T
+	err       error
+	abandoned bool
+}
+
+// do runs fn once per key among concurrent callers. shared reports that the result came
+// from another caller's computation.
+func (f *teamFlight[T]) do(ctx context.Context, key string, fn func() (T, error)) (out T, shared bool, err error) {
+	for {
+		f.mu.Lock()
+		if c, ok := f.m[key]; ok {
+			f.mu.Unlock()
+			select {
+			case <-c.done:
+				if c.abandoned {
+					if ctx.Err() != nil {
+						return out, false, ctx.Err()
+					}
+					continue // the first caller left: compute it ourselves
+				}
+				return c.out, true, c.err
+			case <-ctx.Done():
+				return out, false, ctx.Err()
+			}
 		}
+		c := &teamFlightCall[T]{done: make(chan struct{})}
+		if f.m == nil {
+			f.m = map[string]*teamFlightCall[T]{}
+		}
+		f.m[key] = c
+		f.mu.Unlock()
+		finished := false
+		func() {
+			defer func() {
+				// A panic or a departed first caller: waiters must not take this result.
+				c.abandoned = !finished || ctx.Err() != nil
+				f.mu.Lock()
+				delete(f.m, key)
+				f.mu.Unlock()
+				close(c.done)
+			}()
+			c.out, c.err = fn()
+			finished = true
+		}()
+		return c.out, false, c.err
 	}
-	if gen != cur {
-		return
-	}
-	c.m[key] = teamAvailCacheEntry{at: now, gen: gen, out: out}
 }
 
 // teamMayViewAvailability: the owner and the área-soporte people (owner decision: not the
@@ -158,6 +265,13 @@ func (h *Handler) teamMayViewAvailability(ctx context.Context, user AuthUser) (b
 // parseTeamAvailabilityRange validates from/to (days in loc, both optional) and the 7-day
 // cap. The message is the Spanish 400 ("" = fine).
 func parseTeamAvailabilityRange(fromStr, toStr string, now time.Time, loc *time.Location) (string, string, string) {
+	return parseTeamRange(fromStr, toStr, now, loc, teamAvailabilityMaxDays)
+}
+
+// parseTeamRange validates from/to (days in loc, both optional) against a cap of maxDays
+// days. from defaults to today in loc and to to from+6 (a week, whatever the cap). The
+// message is the Spanish 400 ("" = fine).
+func parseTeamRange(fromStr, toStr string, now time.Time, loc *time.Location, maxDays int) (string, string, string) {
 	y, m, d := now.In(loc).Date()
 	from := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 	if fromStr != "" {
@@ -167,7 +281,7 @@ func parseTeamAvailabilityRange(fromStr, toStr string, now time.Time, loc *time.
 		}
 		from = t
 	}
-	to := from.AddDate(0, 0, teamAvailabilityMaxDays-1)
+	to := from.AddDate(0, 0, min(maxDays, 7)-1)
 	if toStr != "" {
 		t, err := time.Parse("2006-01-02", toStr)
 		if err != nil {
@@ -178,8 +292,8 @@ func parseTeamAvailabilityRange(fromStr, toStr string, now time.Time, loc *time.
 	if to.Before(from) {
 		return "", "", "La fecha «to» no puede ser anterior a «from»."
 	}
-	if to.Sub(from) > (teamAvailabilityMaxDays-1)*24*time.Hour {
-		return "", "", fmt.Sprintf("El rango máximo es de %d días.", teamAvailabilityMaxDays)
+	if to.Sub(from) > time.Duration(maxDays-1)*24*time.Hour {
+		return "", "", fmt.Sprintf("El rango máximo es de %d días.", maxDays)
 	}
 	return from.Format("2006-01-02"), to.Format("2006-01-02"), ""
 }
@@ -258,9 +372,59 @@ func (h *Handler) GetTeamAvailability(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, out)
 }
 
-// teamAvailEntry is one person's link to compute.
+// teamAvailEntry is one person's link to compute: etID is that link's event type (the
+// template itself for its owner, else the person's copy).
 type teamAvailEntry struct {
-	userID, area, slug string
+	userID, area, slug, etID string
+}
+
+// teamEntries lists the people of área ("all" = both): for each área whose template is
+// set, the template's owner with the template (unless archived) and the host of every
+// ACTIVE copy of it. Archived users are filtered later (teamAvailUsers).
+func (h *Handler) teamEntries(ctx context.Context, idx *teamIndex, area string) ([]teamAvailEntry, error) {
+	var entries []teamAvailEntry
+	for _, a := range []string{areaMentoria, areaSoporte} {
+		if area != "all" && area != a {
+			continue
+		}
+		t, err := loadTeamType(ctx, h.db, idx.st.templateFor(a))
+		if err != nil {
+			return nil, err
+		}
+		if t == nil {
+			continue
+		}
+		if !t.archived {
+			entries = append(entries, teamAvailEntry{userID: t.userID, area: a, slug: t.slug, etID: t.id})
+		}
+		for _, li := range idx.copiesOf(t.id) {
+			if li.active {
+				entries = append(entries, teamAvailEntry{userID: li.userID, area: a, slug: li.copySlug, etID: li.copyID})
+			}
+		}
+	}
+	return entries, nil
+}
+
+// teamClassify turns one person's computeSlots outcome into the answer's terms: drop = the
+// public page would 404 (not a link to hand out); kind = "" (fine - possibly no slots, when
+// the range lies past the link's booking window), "calendar" (their external calendar did
+// not answer, not in time, or Degraded: booking is fail-closed then) or "internal". late
+// means this person's limit (or the answer's budget) ran out while it was computing.
+func teamClassify(err error, late bool, res slotsResult) (kind string, drop bool) {
+	switch {
+	case errors.Is(err, errEventTypeNotFound):
+		return "", true
+	case errors.Is(err, errBadDateRange):
+		return "", false
+	case err != nil && late:
+		return "calendar", false
+	case err != nil:
+		return "internal", false
+	case res.Degraded:
+		return "calendar", false
+	}
+	return "", false
 }
 
 // teamAvailability builds the answer (without IsYou or GeneratedAt).
@@ -270,26 +434,9 @@ func (h *Handler) teamAvailability(ctx context.Context, from, to, tzName, area s
 	if err != nil {
 		return out, err
 	}
-	var entries []teamAvailEntry
-	for _, a := range []string{areaMentoria, areaSoporte} {
-		if area != "all" && area != a {
-			continue
-		}
-		t, err := loadTeamType(ctx, h.db, idx.st.templateFor(a))
-		if err != nil {
-			return out, err
-		}
-		if t == nil {
-			continue
-		}
-		if !t.archived {
-			entries = append(entries, teamAvailEntry{userID: t.userID, area: a, slug: t.slug})
-		}
-		for _, li := range idx.copiesOf(t.id) {
-			if li.active {
-				entries = append(entries, teamAvailEntry{userID: li.userID, area: a, slug: li.copySlug})
-			}
-		}
+	entries, err := h.teamEntries(ctx, idx, area)
+	if err != nil {
+		return out, err
 	}
 	users, err := h.teamAvailUsers(ctx, entries)
 	if err != nil {
@@ -322,21 +469,15 @@ func (h *Handler) teamAvailability(ctx context.Context, from, to, tzName, area s
 		res, err := h.computeSlots(pctx, e.slug, tzName, from, to, slotsWanted{})
 		late := pctx.Err() != nil && ctx.Err() == nil // this person's limit (or the budget) ran out
 		cancelPerson()
-		switch {
-		case errors.Is(err, errEventTypeNotFound):
+		kind, drop := teamClassify(err, late, res)
+		if drop {
 			continue // the public page would 404: not a link to hand out
-		case errors.Is(err, errBadDateRange):
-			// The range lies past this link's booking window: nothing to offer.
-		case err != nil && late:
-			h.logger.WarnContext(ctx, "team availability: person timed out", "error", err, "user", e.userID, "slug", e.slug)
-			p.Error, p.ErrorKind = true, "calendar"
-		case err != nil:
-			h.logger.ErrorContext(ctx, "team availability: person", "error", err, "user", e.userID, "slug", e.slug)
-			p.Error, p.ErrorKind = true, "internal"
-		case res.Degraded:
-			p.Error, p.ErrorKind = true, "calendar"
-		default:
-			for _, s := range res.Slots {
+		}
+		h.logTeamPersonError(ctx, "team availability", err, kind, e)
+		if kind != "" {
+			p.Error, p.ErrorKind = true, kind
+		} else {
+			for _, s := range res.Slots { // none when the range lies past the booking window
 				p.Slots = append(p.Slots, teamAvailSlotJSON{Start: s.Start, End: s.End})
 			}
 		}
@@ -352,8 +493,23 @@ func (h *Handler) teamAvailability(ctx context.Context, from, to, tzName, area s
 	return out, nil
 }
 
+// logTeamPersonError logs one person's failed computation the way the classification
+// reads it (a timeout is a warning, an internal failure an error).
+func (h *Handler) logTeamPersonError(ctx context.Context, what string, err error, kind string, e teamAvailEntry) {
+	if err == nil {
+		return
+	}
+	switch kind {
+	case "calendar":
+		h.logger.WarnContext(ctx, what+": person timed out", "error", err, "user", e.userID, "slug", e.slug)
+	case "internal":
+		h.logger.ErrorContext(ctx, what+": person", "error", err, "user", e.userID, "slug", e.slug)
+	}
+}
+
 type teamAvailUser struct {
 	name, avatar, accent string
+	isOwner              bool
 }
 
 // teamAvailUsers loads the active users among entries (one query, drained before return).
@@ -373,7 +529,7 @@ func (h *Handler) teamAvailUsers(ctx context.Context, entries []teamAvailEntry) 
 		}
 	}
 	rows, err := h.db.QueryContext(ctx, `
-		SELECT id, name, COALESCE(avatar_url, ''), COALESCE(booking_accent, '')
+		SELECT id, name, COALESCE(avatar_url, ''), COALESCE(booking_accent, ''), is_owner
 		FROM users WHERE archived_at IS NULL AND id IN (`+strings.Join(ph, ",")+`)`, args...) // #nosec G202 -- ph holds only literal "?" placeholders; values are bound
 	if err != nil {
 		return nil, err
@@ -382,7 +538,7 @@ func (h *Handler) teamAvailUsers(ctx context.Context, entries []teamAvailEntry) 
 	for rows.Next() {
 		var id string
 		var u teamAvailUser
-		if err := rows.Scan(&id, &u.name, &u.avatar, &u.accent); err != nil {
+		if err := rows.Scan(&id, &u.name, &u.avatar, &u.accent, &u.isOwner); err != nil {
 			return nil, err
 		}
 		out[id] = u

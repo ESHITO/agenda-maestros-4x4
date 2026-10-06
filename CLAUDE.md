@@ -477,7 +477,7 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   the template, for its owner) and remaps answers in one tx; fresh LiveKit host link, `fork_livekit_host_links`).
   Attendance = our token mints (`fork_livekit_mints`) refined by LiveKit webhook sessions
   (`fork_livekit_sessions`), computed per list page (`fork_attendance.go`).
-- **Team calendar** (`fork_team_availability.go`, Panel → `TeamAvailability.svelte`): `GET /v1/team/availability?from&to&tz&area=all|mentoria|soporte[&fresh=1]`
+- **Team calendar, 7-day API** (`fork_team_availability.go`; its panel `TeamAvailability.svelte` was retired 6 Oct 2026 for the month view below - the endpoint and its Go tests stay): `GET /v1/team/availability?from&to&tz&area=all|mentoria|soporte[&fresh=1]`
   for the owner and área-soporte people only (owner decision: not mentors, not an admin without área soporte; others 403); ≤ 7 days (400), days in `tz` like `/slots`. People = each
   template's owner with T/S + the host of every ACTIVE copy (active user), each computed SEQUENTIALLY with the same
   `computeSlots(..., slotsWanted{})` as the public page (never re-implement slots here); a link the public page 404s is
@@ -487,18 +487,70 @@ on the upstream `webhook_deliveries`. **No new trigger may name another table** 
   answers are cached 60 s per range+tz+área **on the Handler** (`h.teamAvail`, never a package global: tests build a
   Handler each), `is_you` set per viewer; `fresh=1` skips it. The panel groups by the RFC3339 wall clock the server
   wrote (no Intl day shifts), prints "9:00 a. m." itself, counts distinct people per day, reuses answers only 60 s,
-  and at 375 px keeps 2-3 chips per hour row (área as an M/S dot on the avatar) - `TeamAvailability.test.ts`.
+  and at 375 px keeps 2-3 chips per hour row (área as an M/S dot on the avatar) - rules the month panel kept.
   **The cache is also dropped on every successful write** (`h.FreeTimeChanges(mux)` in `server.go`,
   `fork_free_time_changes.go`: a generation bumped by any 2xx/3xx POST/PUT/PATCH/DELETE outside `/v1/livekit/`,
   `/v1/auth/`, `/oauth/`, plus the calendar OAuth callback GET). Still invisible to it: edits made directly in
   Google/Microsoft and writes from the separate `calnode mcp` process (they wait for the 60 s expiry).
+- **Team calendar, month view** (owner, 6 Oct 2026: Mes / 15 días / Semana, Mes by default; `fork_team_calendar.go`,
+  `fork_team_coverage.go`): `GET /v1/team/calendar?from&to&tz&area[&free=0][&fresh=1]`, same audience/people/classification
+  as above, ≤ 31 days and `to` ≤ today + 366 (Spanish 400s). Per person and VIEWER day: `hours` (working hours as
+  `[ini, fin]` minutes since the viewer's midnight, from `loadHostSchedule` + `slots.ResolveDayWindows` +
+  `slots.MergeIntervals` - exported in `slots/fork_export.go` -, windows shorter than one session dropped), `free`
+  (minutes of `computeSlots(..., max(from, today), to, slotsWanted{})` starts) and `busy` (ALL the person's non-cancelled
+  sessions on every row of theirs, opaque `b1`… keys, type name or «Otra reunión», área; **never a booking id** -
+  `GET /v1/bookings/{id}` is public - nor client data). Past days: `busy` only. `coverage[área].days[d]` = the target
+  minus everybody's hours (`uncovered`) and the part only the owner covers (`owner_only`). Colours: chosen accent, owner
+  on the default = `#4fd7ff`, else a fixed palette in name order over the whole team - **no red, orange/amber, green or
+  teal in it** (those are the coverage marks; a session is stripes in the person's colour). `free=0` = DB only (paint first).
+  `error_kind`: `internal` ONLY when the hours could not be read (row out of coverage); any free-starts failure of a row
+  whose hours were read is `calendar`/`timeout` (`teamCalFreeErrorKind`). **A failed DB read is a 500, never a smaller
+  clean answer**: `teamBookableEventType` tells "not bookable" (dropped) from "could not read" (loadBookableEventType
+  maps every failure to not-found), and `loadCoverageTarget` reads with `forkSettingStrict` (no row / invalid value =
+  default; read error = error - `forkSettings` swallows errors, fine for env fallbacks, wrong here).
+  Provider calls on 3 workers, a user's rows always on ONE worker in sequence (token refresh), 6 s per person, 22 s from
+  the request's arrival; identical requests share one computation (`teamFlight`, generation in its key); cached on
+  `h.teamAvail.cal` (16 entries, same generation). Target: `GET|PUT /v1/team/coverage-target` (PUT owner only),
+  `fork_settings.team_coverage_target` = `{"v":1,"tz","days":[{dow,start,end}]}`, 30-min steps, `24:00` allowed, `[]` =
+  no target, default Mon-Sat 08:00-20:00 Lima. `viewerMidnight` uses `ZoneBounds`: Go may normalize a skipped midnight
+  (Santiago) to 23:00 of the day before.
+  **Panel** (Panel → `TeamCalendar.svelte` + `TeamDayTimeline.svelte` + `CoverageTargetDialog.svelte`, pure helpers in
+  `lib/team-calendar.ts`, tests `team-calendar.test.ts` + `TeamCalendar.test.ts` at 375 px): opens on **Mes every time**
+  (never remembered); 15 días = the quincena (1-15 / 16-end), Semana = Monday-Sunday, grids Monday first; `to` cut at
+  today + 366. Always asks `area=all` and filters in the browser (área buttons, plus person chips: tap some to see only
+  them). Load = `free=0` first (painted at once), then the complete answer; "Actualizar" on the range shown skips the
+  quick step and keeps the screen. Refresh: `fresh=1` on resume (`onResume`) and on "Actualizar"; the 60 s timer sends
+  NO `fresh` (the server cache already drops on writes) but also **skips the browser's own 60 s cache** (stamped when the
+  answer arrives, it would still hit and the view would refresh every ~2 min). Encodings never colour alone
+  (`personDot` / `personDotStyle` in `team-calendar.ts`): free = solid person colour, works-but-nothing-free = faint,
+  free time unknown (quick answer, or a row with `error`) = **outline only, "Sin revisar su calendario" - never drawn as
+  "sin cupos"** (lanes: dashed outline), fully booked = stripes ("Ocupado"), has sessions = a ring around the dot; Sin
+  cubrir = taller red DIAGONAL hatch + text, solo el propietario = amber DOTS (a different shape: red/amber is a
+  colour-blind pair) + text from `sm`, cubierto = green. Under "Todos" coverage figures are per área ("Sin cubrir: M 3 h ·
+  S 12 h", `uncoveredText` / `ownerOnlyText`), never a sum; `DayCoverage.uncoveredMin` is merged clock time. Month cell:
+  dots per person on phones, names from `sm`, the session count (striped mark + number; the word "sesión/sesiones" from `md`, "N libres" from `lg`), coverage
+  bar at the bottom; week = one compact lane block per day on ONE shared hour window, **every row of the filter on every
+  day in the same order** (empty lane when off), a 24 px gutter (área letter for coverage lanes, dot + initials for
+  people; the week's tick row is offset 39 px to match) and coverage set apart above a dashed rule; day detail below = coverage text per área, lanes, "Horarios
+  libres" hour rows with chips, per-person lines (`personDayState` explains only the notice and furthest-day cases,
+  else "Sin cupos libres"; with no free starts and no check running - the complete answer failed - "No se pudo revisar
+  su calendario; pulsa Actualizar.", never "Revisando…" forever). Sessions are de-duplicated by `key`; counts are people,
+  not rows, in whole words (`dayCountsText`: never "ses." or a bare "5 libres" in week rows; phones drop "trabajan" when
+  the free count is there). A TAP on a day (or "Hoy" on the period shown) scrolls the detail's heading into
+  view and focuses it when it is not already fully on screen - by position, any width (`scroll-mt-16` clears the
+  top bar); never on load or navigation. Week rows wrap: on phones the "Sin cubrir" text takes its own line.
+  Days cut by the one-year limit get a line under the month/15-day grid. "Hoy" is disabled only while
+  today is shown AND picked. Days after `reqTo` (today + 366) are grey non-buttons (`gridDays(from, to, until)`). The
+  legend explains the M/S letters under "Todos". The owner edits the target ("Cambiar", `target.can_edit`); others read
+  its summary. After a save the quick answer (`free=0&fresh=1`) is laid over the screen first (`mergeQuickAnswer`:
+  target, coverage, hours, sessions; the free starts shown stay) until the complete one arrives.
 - **Nothing needs a reload** (owner: "the mentor had to refresh after every change"). The availability editor is
   optimistic and never locks: `lib/save-queue.ts` serializes each block's PATCHes and coalesces to the latest value;
   start >= end moves the other end by 1 h instead of refusing; "Guardado ✓" / error + "Reintentar". Public surfaces
   refetch the shown month on resume (visible again / focus, if the last fetch is > 15 s old) and every 60 s while
   visible (`BookingLogic.autoRefresh`, mirrored in `embed.js`), never while the form or confirm step is open, keeping
   the picked day. Admin pages re-load on resume through `lib/refresh.ts` (`onResume`); the Panel's team calendar
-  refetches with `fresh=1` on resume and every 60 s.
+  refetches with `fresh=1` on resume and without it every 60 s.
 - **Transition between sessions** (owner, 30 Sep 2026; `fork_member_transition.go`, `lib/transition.ts`). Transition =
   `buffer_after_minutes`, "Empezar una sesión cada" = `slot_interval_minutes`, grouped in the editor's "Duración y
   transición" block (live example starts from 9:00, "Una sesión por hora" = interval 60; warnings only, never a block).

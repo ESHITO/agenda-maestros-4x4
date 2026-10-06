@@ -107,6 +107,64 @@ export type TeamAvailability = {
 	people: TeamAvailabilityPerson[];
 };
 
+/** Fork: GET /v1/team/calendar - minutes since the VIEWER's midnight (in `tz`); an end
+ *  may be 1440 (until midnight). */
+export type TeamCalSpan = [number, number];
+/** A session of the person. `key` is opaque and per answer ("b1"): never a booking id. The
+ *  same key shows on every row of the person (the owner has two) and on both days of a
+ *  session that crosses midnight. area '' = a meeting outside the team ("Otra reunión"). */
+export type TeamCalBusy = { key: string; start: number; end: number; type: string; area: Area };
+/** One viewer day of one person. Past days carry `busy` only. */
+export type TeamCalDay = { hours?: TeamCalSpan[]; free?: number[]; busy?: TeamCalBusy[] };
+export type TeamCalPerson = {
+	/** `${area}:${user_id}` - the owner has one row per área. */
+	key: string;
+	user_id: string;
+	name: string;
+	area: Exclude<Area, ''>;
+	avatar_url: string;
+	/** Always set: their accent, the owner's turquoise, or a palette colour. */
+	color: string;
+	color_custom: boolean;
+	is_owner: boolean;
+	is_you: boolean;
+	link: { slug: string; url: string };
+	duration_min: number;
+	/** RFC3339 written on the viewer's clock: nothing can be booked before it. */
+	notice_until?: string;
+	/** RFC3339 on the viewer's clock: nothing can be booked after it. */
+	bookable_until?: string;
+	/** calendar / timeout: free starts unknown (hours and sessions still there);
+	 *  internal: a rule the engine cannot read (no hours either). */
+	error?: boolean;
+	error_kind?: 'calendar' | 'timeout' | 'internal';
+	days: Record<string, TeamCalDay>;
+};
+export type TeamCalCoverageDay = { target: TeamCalSpan[]; uncovered?: TeamCalSpan[]; owner_only?: TeamCalSpan[] };
+/** Fork: the hours the team wants covered (GET|PUT /v1/team/coverage-target). dow = 0
+ *  (domingo) … 6 (sábado); "HH:MM" on 30-minute steps, end may be "24:00". */
+export type TeamCoverageTargetDay = { dow: number; start: string; end: string };
+export type TeamCoverageTarget = {
+	v: number;
+	tz: string;
+	days: TeamCoverageTargetDay[];
+	is_default: boolean;
+	can_edit: boolean;
+};
+export type TeamCalendar = {
+	tz: string;
+	from: string;
+	to: string;
+	today: string;
+	generated_at: string;
+	/** false = the quick DB-only answer (free=0): free starts not computed yet. */
+	free_included: boolean;
+	target: TeamCoverageTarget;
+	people: TeamCalPerson[];
+	/** Only áreas whose template is set; days from today on. */
+	coverage: Partial<Record<Exclude<Area, ''>, { days: Record<string, TeamCalCoverageDay> }>>;
+};
+
 /** Fork: a personal booking link (GET /v1/users, /v1/users/me). */
 export type PersonalLink = { slug: string; url: string; active: boolean };
 
@@ -663,6 +721,20 @@ export const teamApi = {
 		api.get<TeamAvailability>(
 			`/v1/team/availability?from=${q.from}&to=${q.to}&tz=${encodeURIComponent(q.tz)}&area=${q.area ?? 'all'}${q.fresh ? '&fresh=1' : ''}`
 		),
+
+	/** GET /v1/team/calendar (owner, área soporte): at most 31 days, days in tz. free=false
+	 *  asks the quick DB-only answer (no free starts); fresh skips the server's cache. */
+	calendar: (q: { from: string; to: string; tz: string; free?: boolean; fresh?: boolean }) =>
+		api.get<TeamCalendar>(
+			`/v1/team/calendar?from=${q.from}&to=${q.to}&tz=${encodeURIComponent(q.tz)}&area=all${q.free === false ? '&free=0' : ''}${q.fresh ? '&fresh=1' : ''}`
+		),
+
+	/** GET /v1/team/coverage-target (owner, área soporte). */
+	coverageTarget: () => api.get<TeamCoverageTarget>('/v1/team/coverage-target'),
+
+	/** PUT /v1/team/coverage-target (owner). days: [] = no target. */
+	putCoverageTarget: (body: { tz: string; days: TeamCoverageTargetDay[] }) =>
+		api.put<TeamCoverageTarget>('/v1/team/coverage-target', body),
 
 	/** GET /v1/users/me/transition: the caller's time between sessions (Soporte). */
 	myTransition: () => api.get<MemberTransition>('/v1/users/me/transition'),

@@ -4,7 +4,7 @@
 	import { base } from '$app/paths';
 	import { api, type CalendarStatus, type AvailabilityRule, type EventType } from '$lib/api';
 	import { authStatus, currentUser } from '$lib/stores';
-	import TeamAvailability from '$lib/components/TeamAvailability.svelte';
+	import TeamCalendar from '$lib/components/TeamCalendar.svelte';
 
 	let calendarConnected = $state(false);
 	let calendarConfigured = $state(true);
@@ -242,5 +242,5 @@
 {/if}
 
 {#if !loading && showTeam}
-	<TeamAvailability />
+	<TeamCalendar />
 {/if}

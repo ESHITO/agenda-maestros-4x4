@@ -30,8 +30,8 @@ func TestTeamAvailCache_generation(t *testing.T) {
 	if _, ok := c.get("k", now); ok {
 		t.Error("answer computed across a write was cached")
 	}
-	if len(c.m) != 0 {
-		t.Errorf("stale entries kept: %d", len(c.m))
+	if len(c.avail.m) != 0 {
+		t.Errorf("stale entries kept: %d", len(c.avail.m))
 	}
 
 	c.put("k", now, c.gen.Load(), out)

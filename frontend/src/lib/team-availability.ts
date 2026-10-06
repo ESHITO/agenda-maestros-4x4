@@ -1,5 +1,7 @@
-// Fork (Agenda Maestros 4x4): pure helpers for the Panel's "Disponibilidad del equipo"
-// (TeamAvailability.svelte, GET /v1/team/availability).
+// Fork (Agenda Maestros 4x4): pure helpers first written for the Panel's 7-day
+// "Disponibilidad del equipo" (GET /v1/team/availability). That panel was replaced by the
+// month calendar (TeamCalendar.svelte, team-calendar.ts), which reuses the day, zone and
+// 12-hour helpers here; the RFC3339 slot helpers still describe the 7-day endpoint.
 //
 // The server writes every slot as RFC3339 in the zone the viewer picked
 // ("2026-10-02T09:00:00-05:00"), so the wall-clock day and time are read straight from the

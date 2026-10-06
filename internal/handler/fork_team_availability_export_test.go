@@ -9,3 +9,11 @@ func SetTeamAvailabilityLimitsForTest(person, total time.Duration) func() {
 	teamAvailPersonTimeout, teamAvailTotalBudget = person, total
 	return func() { teamAvailPersonTimeout, teamAvailTotalBudget = oldPerson, oldTotal }
 }
+
+// SetTeamCalendarLimitsForTest shortens the team calendar's per-person timeout and total
+// budget (fork_team_calendar.go) and returns the function that restores them.
+func SetTeamCalendarLimitsForTest(person, total time.Duration) func() {
+	oldPerson, oldTotal := teamCalPersonTimeout, teamCalTotalBudget
+	teamCalPersonTimeout, teamCalTotalBudget = person, total
+	return func() { teamCalPersonTimeout, teamCalTotalBudget = oldPerson, oldTotal }
+}
